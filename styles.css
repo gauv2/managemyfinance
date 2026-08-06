@@ -353,7 +353,7 @@
 /* ---------- Ledger ---------- */
 
 .fp-ledger-controls {
-	margin-bottom: 14px;
+	margin-bottom: 10px;
 }
 .fp-search {
 	width: 100%;
@@ -364,8 +364,30 @@
 	background: var(--background-primary);
 	color: var(--text-normal);
 }
+.fp-ledger-filters {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+}
+.fp-filter-select,
+.fp-filter-date {
+	padding: 6px 10px;
+	border-radius: var(--fp-radius-sm);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+.fp-filter-date-sep {
+	color: var(--text-muted);
+}
 .fp-ledger-table-wrap {
 	overflow-x: auto;
+}
+.fp-ledger-row {
+	cursor: pointer;
 }
 .fp-cell-date {
 	white-space: nowrap;
@@ -580,6 +602,34 @@
 
 /* ---------- Import wizard ---------- */
 
+.fp-dropzone {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 28px 16px;
+	border: 2px dashed var(--background-modifier-border);
+	border-radius: var(--fp-radius-lg);
+	margin-bottom: 14px;
+	transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.fp-dropzone.is-dragover {
+	border-color: var(--interactive-accent);
+	background: var(--fp-neutral-bg);
+}
+.fp-dropzone-icon {
+	color: var(--fp-neutral);
+	font-size: 22px;
+}
+.fp-dropzone-text {
+	font-weight: 700;
+	color: var(--text-normal);
+}
+.fp-dropzone-subtext {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
 .fp-file-list {
 	display: flex;
 	flex-direction: column;
@@ -662,4 +712,243 @@
 	color: var(--fp-neutral);
 	font-weight: 700;
 	font-size: var(--font-ui-small);
+}
+
+/* ==========================================================================
+   Charts — categorical palette validated for CVD-safe adjacent contrast
+   (see the dataviz skill). Light/dark steps swap via Obsidian's .theme-dark.
+   ========================================================================== */
+
+.fp-workspace {
+	--fp-chart-income: #008300;
+	--fp-chart-expenses: #e34948;
+	--fp-chart-net: #2a78d6;
+	--fp-chart-grid: #e1e0d9;
+	--fp-chart-baseline: #c3c2b7;
+	--fp-chart-axis-text: #898781;
+}
+.theme-dark .fp-workspace {
+	--fp-chart-expenses: #e66767;
+	--fp-chart-net: #3987e5;
+	--fp-chart-grid: #2c2c2a;
+	--fp-chart-baseline: #383835;
+}
+
+.fp-chart {
+	margin-bottom: 6px;
+}
+.fp-chart-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+	margin-bottom: 8px;
+}
+.fp-chart-legend-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	font-weight: 600;
+}
+.fp-chart-swatch {
+	--fp-swatch-color: var(--fp-neutral);
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--fp-swatch-color);
+	flex-shrink: 0;
+}
+
+.fp-chart-svg-wrap {
+	position: relative;
+}
+.fp-chart-svg {
+	width: 100%;
+	height: auto;
+	display: block;
+	overflow: visible;
+}
+.fp-chart-grid {
+	stroke: var(--fp-chart-grid);
+	stroke-width: 1;
+}
+.fp-chart-baseline {
+	stroke: var(--fp-chart-baseline);
+	stroke-width: 1;
+}
+.fp-chart-axis-label {
+	font-size: 10px;
+	fill: var(--fp-chart-axis-text);
+}
+.fp-chart-line {
+	fill: none;
+	stroke: var(--fp-line-color);
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.fp-chart-dot {
+	fill: var(--fp-line-color);
+	stroke: var(--background-primary-alt, var(--background-secondary));
+	stroke-width: 2;
+}
+.fp-chart-end-label {
+	font-size: 11px;
+	font-weight: 700;
+	fill: var(--text-normal);
+}
+.fp-chart-hit {
+	fill: transparent;
+	cursor: crosshair;
+}
+.fp-chart-crosshair {
+	stroke: var(--fp-chart-axis-text);
+	stroke-width: 1;
+	stroke-dasharray: 3 3;
+	pointer-events: none;
+}
+.fp-chart-tooltip {
+	position: absolute;
+	top: 0;
+	pointer-events: none;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-sm);
+	box-shadow: var(--fp-shadow);
+	padding: 8px 10px;
+	font-size: var(--font-ui-smaller);
+	min-width: 140px;
+	z-index: 5;
+}
+.fp-chart-tooltip-title {
+	font-weight: 700;
+	margin-bottom: 4px;
+	color: var(--text-normal);
+}
+.fp-chart-tooltip-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text-muted);
+	padding: 1px 0;
+}
+.fp-chart-tooltip-value {
+	margin-left: auto;
+	font-weight: 700;
+	color: var(--text-normal);
+}
+
+/* ---------- Horizontal bar chart (category totals) ---------- */
+
+.fp-barchart {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-barchart-row {
+	display: grid;
+	grid-template-columns: 170px 1fr 80px;
+	align-items: center;
+	gap: 12px;
+}
+.fp-barchart-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-barchart-icon {
+	flex-shrink: 0;
+	color: var(--text-muted);
+}
+.fp-barchart-track {
+	height: 10px;
+	background: var(--background-modifier-border);
+	border-radius: 999px;
+	overflow: hidden;
+}
+.fp-barchart-fill {
+	--fp-bar-color: var(--fp-neutral);
+	height: 100%;
+	background: var(--fp-bar-color);
+	border-radius: 999px;
+}
+.fp-barchart-value {
+	text-align: right;
+	font-size: var(--font-ui-small);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-normal);
+}
+
+/* ---------- Transaction detail modal ---------- */
+
+.fp-detail-modal {
+	padding: 4px;
+}
+.fp-detail-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 14px;
+	padding-bottom: 14px;
+	margin-bottom: 14px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.fp-detail-desc {
+	font-size: var(--font-ui-large);
+	font-weight: 700;
+	color: var(--text-normal);
+}
+.fp-detail-amount {
+	font-size: 1.3em;
+	flex-shrink: 0;
+}
+.fp-detail-body {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.fp-detail-body h4 {
+	margin: 14px 0 6px;
+	font-size: var(--font-ui-small);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+}
+.fp-detail-row {
+	display: grid;
+	grid-template-columns: 140px 1fr;
+	gap: 12px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--background-modifier-border-focus, var(--background-modifier-border));
+}
+.fp-detail-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+}
+.fp-detail-value {
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.fp-detail-raw {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	border-radius: var(--fp-radius-sm);
+	padding: 10px 12px;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 160px;
+	overflow-y: auto;
 }

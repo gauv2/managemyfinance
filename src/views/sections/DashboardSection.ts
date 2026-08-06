@@ -1,6 +1,7 @@
 import { categoryTotals, fiProjection, netWorth, summarizeByYear } from "../../kpi";
 import type FinancePlugin from "../../main";
-import { badge, categoryChip, emptyState, statTile } from "../../ui/dom";
+import { barChart, lineChart } from "../../ui/charts";
+import { badge, emptyState, statTile } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
 
 function formatEUR(n: number): string {
@@ -66,6 +67,15 @@ export function renderDashboard(container: HTMLElement, plugin: FinancePlugin): 
 
 	const historyCard = container.createDiv({ cls: "fp-card" });
 	historyCard.createEl("h3", { text: "Historical performance" });
+	lineChart(
+		historyCard,
+		years.map((y) => y.year),
+		[
+			{ label: "Income", color: "var(--fp-chart-income)", values: years.map((y) => y.income) },
+			{ label: "Expenses", color: "var(--fp-chart-expenses)", values: years.map((y) => y.expenses) },
+			{ label: "Net", color: "var(--fp-chart-net)", values: years.map((y) => y.net) },
+		]
+	);
 	const table = historyCard.createEl("table", { cls: "fp-table" });
 	const thead = table.createEl("thead").createEl("tr");
 	["Year", "Income", "Expenses", "Net", "Savings rate"].forEach((h) => thead.createEl("th", { text: h }));
@@ -85,14 +95,17 @@ export function renderDashboard(container: HTMLElement, plugin: FinancePlugin): 
 		const catCard = container.createDiv({ cls: "fp-card" });
 		catCard.createEl("h3", { text: `Spending by category — ${currentYear?.year}` });
 		const categoryById = new Map(store.categories.map((c) => [c.id, c]));
-		const rows = Array.from(totals.entries()).sort((a, b) => b[1] - a[1]);
-		const list = catCard.createDiv({ cls: "fp-review-list" });
-		rows.forEach(([catId, amount]) => {
-			const cat = categoryById.get(catId);
-			const row = list.createDiv({ cls: "fp-review-row" });
-			if (cat) categoryChip(row, cat.name, cat.color, cat.icon);
-			else badge(row, "Uncategorized", "warn");
-			row.createSpan({ text: formatEUR(amount) });
-		});
+		const rows = Array.from(totals.entries())
+			.sort((a, b) => b[1] - a[1])
+			.map(([catId, amount]) => {
+				const cat = categoryById.get(catId);
+				return {
+					label: cat?.name ?? "Uncategorized",
+					value: amount,
+					color: cat?.color ?? "#6b7280",
+					iconName: cat?.icon ?? "help-circle",
+				};
+			});
+		barChart(catCard, rows);
 	}
 }

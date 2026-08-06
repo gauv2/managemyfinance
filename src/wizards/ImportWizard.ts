@@ -22,6 +22,14 @@ export function openImportWizard(plugin: FinancePlugin): void {
 
 	const inboxPath = normalizePath(`${plugin.settings.dataFolder}/data/inbox`);
 
+	function loadCsvText(name: string, text: string): void {
+		selectedFile = name;
+		const rows = parseCSV(text);
+		headers = rows[0] ?? [];
+		dataRows = rows.slice(1);
+		format = detectFormat(headers);
+	}
+
 	const steps: WizardStep[] = [
 		{
 			id: "source",
@@ -31,8 +39,29 @@ export function openImportWizard(plugin: FinancePlugin): void {
 				c.createEl("h3", { text: "Pick a file to import" });
 				c.createEl("p", {
 					cls: "fp-step-desc",
-					text: `Drop your bank or broker export into "${inboxPath}", then choose it below.`,
+					text: `Drag a CSV export here, or drop it into "${inboxPath}" and choose it below.`,
 				});
+
+				const dropzone = c.createDiv({ cls: "fp-dropzone" });
+				icon(dropzone, "upload", "fp-dropzone-icon");
+				dropzone.createDiv({ cls: "fp-dropzone-text", text: "Drop a CSV file here" });
+				dropzone.createDiv({ cls: "fp-dropzone-subtext", text: selectedFile ? `Selected: ${selectedFile}` : "or pick one from the inbox below" });
+
+				dropzone.addEventListener("dragover", (ev) => {
+					ev.preventDefault();
+					dropzone.addClass("is-dragover");
+				});
+				dropzone.addEventListener("dragleave", () => dropzone.removeClass("is-dragover"));
+				dropzone.addEventListener("drop", async (ev) => {
+					ev.preventDefault();
+					dropzone.removeClass("is-dragover");
+					const file = ev.dataTransfer?.files?.[0];
+					if (!file) return;
+					const text = await file.text();
+					loadCsvText(file.name, text);
+					refresh();
+				});
+
 				const list = c.createDiv({ cls: "fp-file-list" });
 				const adapter = plugin.app.vault.adapter;
 				const exists = await adapter.exists(inboxPath);
@@ -42,27 +71,26 @@ export function openImportWizard(plugin: FinancePlugin): void {
 				if (csvFiles.length === 0) {
 					emptyState(list, {
 						iconName: "inbox",
-						title: "No files waiting",
-						description: `Export a CSV from your bank or broker and drop it into ${inboxPath}, then reopen this wizard.`,
+						title: "No files waiting in the inbox",
+						description: "Drag a file onto the drop zone above, or export a CSV and drop it into the inbox folder, then reopen this wizard.",
 					});
 					return;
 				}
 
 				csvFiles.forEach((f) => {
-					const row = list.createDiv({ cls: "fp-file-row" });
+					const row = list.createDiv({ cls: "fp-file-row" + (f === selectedFile ? " is-selected" : "") });
 					icon(row, "file-text");
 					row.createSpan({ text: f.split("/").pop() ?? f });
 					row.addEventListener("click", async () => {
-						selectedFile = f;
-						const text = await adapter.read(f);
-						const rows = parseCSV(text);
-						headers = rows[0] ?? [];
-						dataRows = rows.slice(1);
-						format = detectFormat(headers);
-						list.querySelectorAll(".fp-file-row").forEach((el) => el.removeClass("is-selected"));
-						row.addClass("is-selected");
+						loadCsvText(f, await adapter.read(f));
+						refresh();
 					});
 				});
+
+				function refresh() {
+					c.empty();
+					steps[0].render(c);
+				}
 			},
 			canGoNext: () => !!selectedFile,
 		},

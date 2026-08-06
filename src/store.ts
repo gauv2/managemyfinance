@@ -171,6 +171,10 @@ export class FinanceStore {
 		return { added, skipped };
 	}
 
+	private serializeTx(tx: Transaction): (string | number | undefined)[] {
+		return TX_COLUMNS.map((c) => (tx as unknown as Record<string, unknown>)[c as string] as string | number | undefined);
+	}
+
 	private async appendToLedger(source: string, year: string, txs: Transaction[]): Promise<void> {
 		const folder = this.path("data", "ledger", source);
 		await this.ensureFolder(folder);
@@ -183,9 +187,25 @@ export class FinanceStore {
 		}
 		if (rows.length === 0) rows.push(TX_COLUMNS as string[]);
 
-		for (const tx of txs) {
-			rows.push(TX_COLUMNS.map((c) => (tx as unknown as Record<string, unknown>)[c as string] as string | undefined ?? ""));
-		}
+		for (const tx of txs) rows.push(this.serializeTx(tx) as string[]);
 		await adapter.write(file, toCSV(rows));
+	}
+
+	/** Applies an in-place edit (e.g. re-categorizing) and rewrites the transaction's ledger file to match. */
+	async updateTransaction(id: string, patch: Partial<Transaction>): Promise<void> {
+		const tx = this.transactions.find((t) => t.id === id);
+		if (!tx) return;
+		Object.assign(tx, patch);
+
+		const year = tx.date.slice(0, 4) || "unknown";
+		const folder = this.path("data", "ledger", tx.source);
+		await this.ensureFolder(folder);
+		const file = normalizePath(`${folder}/${year}.csv`);
+
+		const rows: (string | number | undefined)[][] = [TX_COLUMNS];
+		for (const t of this.transactions) {
+			if (t.source === tx.source && (t.date || "").slice(0, 4) === year) rows.push(this.serializeTx(t));
+		}
+		await this.app.vault.adapter.write(file, toCSV(rows));
 	}
 }
