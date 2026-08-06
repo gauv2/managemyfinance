@@ -1,5 +1,6 @@
 import { stableHash } from "../hash";
 import type { Transaction } from "../types";
+import { parseFlexibleDate } from "../utils/dates";
 
 function col(headers: string[], ...names: string[]): number {
 	const normHeaders = headers.map((h) => h.trim().toLowerCase());
@@ -47,7 +48,7 @@ export function parseTradeRepublicRows(headers: string[], rows: string[][], acco
 	for (const r of rows) {
 		if (r.every((c) => c.trim() === "")) continue;
 
-		const date = (r[iDate] ?? "").trim();
+		const date = parseFlexibleDate(r[iDate] ?? "");
 		const action = iAction !== -1 ? (r[iAction] ?? "").trim() : "";
 		const type = iType !== -1 ? (r[iType] ?? "").trim() : "";
 		const description = (iDesc !== -1 ? (r[iDesc] ?? "").trim() : "") || action;

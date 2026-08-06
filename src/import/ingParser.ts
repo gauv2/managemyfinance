@@ -1,5 +1,6 @@
 import { stableHash } from "../hash";
 import type { Transaction } from "../types";
+import { parseFlexibleDate } from "../utils/dates";
 
 function col(headers: string[], ...names: string[]): number {
 	const normHeaders = headers.map((h) => h.trim().toLowerCase());
@@ -8,20 +9,6 @@ function col(headers: string[], ...names: string[]): number {
 		if (idx !== -1) return idx;
 	}
 	return -1;
-}
-
-function parseIngDate(raw: string): string {
-	const s = raw.trim();
-	if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
-	const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-	if (m) {
-		const [, mo, d, yRaw] = m;
-		const y = yRaw.length === 2 ? (Number(yRaw) > 70 ? "19" : "20") + yRaw : yRaw;
-		return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
-	}
-	const parsed = new Date(s);
-	if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-	return s;
 }
 
 function parseAmount(raw: string): number {
@@ -50,7 +37,7 @@ export function parseIngRows(headers: string[], rows: string[][], accountId: str
 	for (const r of rows) {
 		if (r.every((c) => c.trim() === "")) continue;
 
-		const date = parseIngDate(r[iDate] ?? "");
+		const date = parseFlexibleDate(r[iDate] ?? "");
 		const description = (r[iDesc] ?? "").trim();
 		const counterparty = iCounterparty !== -1 ? (r[iCounterparty] ?? "").trim() : "";
 		const debitCredit = (r[iDebitCredit] ?? "").trim().toLowerCase();

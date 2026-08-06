@@ -1,14 +1,14 @@
 import type { Account, Category } from "./types";
 
 export const VIEW_TYPE_FINANCE = "finance-workspace-view";
-export const VIEW_TYPE_SETUP = "finance-setup-view";
 
 export const DEFAULT_DATA_FOLDER = "Finance";
 
 export const ACCOUNT_TYPE_META: Record<AccountType, { label: string; icon: string }> = {
-	checking: { label: "Checking", icon: "landmark" },
-	savings: { label: "Savings", icon: "piggy-bank" },
-	broker: { label: "Broker / Investments", icon: "trending-up" },
+	debit: { label: "Debit", icon: "landmark" },
+	credit: { label: "Credit", icon: "credit-card" },
+	investing: { label: "Investing", icon: "trending-up" },
+	saving: { label: "Saving", icon: "piggy-bank" },
 	cash: { label: "Cash", icon: "banknote" },
 };
 

@@ -33,37 +33,6 @@ export function categoryChip(parent: HTMLElement, name: string, color: string, i
 	return chip;
 }
 
-/**
- * Reveals `text` into `el` one character at a time with a blinking block cursor at the end,
- * matching the Setup view's hero intro lines. Returns a cancel function — callers must invoke it
- * when navigating away mid-animation so no orphaned timer keeps firing.
- */
-export function typewriter(el: HTMLElement, text: string, speedMs = 16): () => void {
-	el.empty();
-	const textSpan = el.createSpan();
-	const cursor = el.createSpan({ cls: "fp-setup-cursor" });
-	let i = 0;
-	let cancelled = false;
-	let timer: number | undefined;
-
-	const tick = () => {
-		if (cancelled) return;
-		i++;
-		textSpan.setText(text.slice(0, i));
-		if (i < text.length) {
-			timer = window.setTimeout(tick, speedMs);
-		} else {
-			cursor.remove();
-		}
-	};
-	tick();
-
-	return () => {
-		cancelled = true;
-		if (timer !== undefined) window.clearTimeout(timer);
-	};
-}
-
 export function emptyState(
 	parent: HTMLElement,
 	opts: { iconName: string; title: string; description: string; actionLabel?: string; onAction?: () => void }

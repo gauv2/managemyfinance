@@ -7,14 +7,12 @@ export interface FinanceSettings {
 	dataFolder: string;
 	fiMultiplier: number;
 	expectedReturn: number;
-	onboarded: boolean;
 }
 
 export const DEFAULT_SETTINGS: FinanceSettings = {
 	dataFolder: "Finance",
 	fiMultiplier: 25,
 	expectedReturn: 0.07,
-	onboarded: false,
 };
 
 const TX_COLUMNS: (keyof Transaction)[] = [
