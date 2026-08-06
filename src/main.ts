@@ -49,10 +49,13 @@ export default class FinancePlugin extends Plugin {
 	}
 
 	async activateView(): Promise<void> {
-		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_FINANCE);
-		if (existing.length > 0) {
-			await this.app.workspace.revealLeaf(existing[0]);
-			return;
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FINANCE)) {
+			if (leaf.getRoot() === this.app.workspace.rootSplit) {
+				await this.app.workspace.revealLeaf(leaf);
+				return;
+			}
+			// Leftover from an older layout (e.g. a sidebar) — drop it so we open fresh in the main area.
+			leaf.detach();
 		}
 		const leaf = this.app.workspace.getLeaf("tab");
 		await leaf.setViewState({ type: VIEW_TYPE_FINANCE, active: true });
