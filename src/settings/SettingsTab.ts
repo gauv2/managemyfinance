@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type FinancePlugin from "../main";
+import { openSetupView } from "../views/SetupView";
 import { openImportWizard } from "../wizards/ImportWizard";
-import { openOnboardingWizard } from "../wizards/OnboardingWizard";
 
 export class FinanceSettingTab extends PluginSettingTab {
 	constructor(app: App, private plugin: FinancePlugin) {
@@ -13,8 +13,8 @@ export class FinanceSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass("fp-workspace");
 
-		new Setting(containerEl).setName("Setup wizard").setDesc("Re-run the guided setup for accounts and categories.").addButton((b) =>
-			b.setButtonText("Run setup wizard").onClick(() => openOnboardingWizard(this.plugin))
+		new Setting(containerEl).setName("Setup").setDesc("Re-run the guided setup for accounts and categories.").addButton((b) =>
+			b.setButtonText("Run setup").onClick(() => openSetupView(this.plugin))
 		);
 
 		new Setting(containerEl).setName("Import transactions").setDesc("Bring in a bank or broker CSV export.").addButton((b) =>

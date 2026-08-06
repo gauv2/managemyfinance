@@ -1,8 +1,8 @@
 import { categoryTotals, fiProjection, netWorth, summarizeByYear } from "../../kpi";
 import type FinancePlugin from "../../main";
 import { badge, categoryChip, emptyState, statTile } from "../../ui/dom";
+import { openSetupView } from "../SetupView";
 import { openImportWizard } from "../../wizards/ImportWizard";
-import { openOnboardingWizard } from "../../wizards/OnboardingWizard";
 
 function formatEUR(n: number): string {
 	return new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n);
@@ -16,9 +16,9 @@ export function renderDashboard(container: HTMLElement, plugin: FinancePlugin): 
 		emptyState(container, {
 			iconName: "wallet",
 			title: "Let's set up your accounts",
-			description: "Run the setup wizard to add accounts and pick your category palette.",
-			actionLabel: "Run setup wizard",
-			onAction: () => openOnboardingWizard(plugin),
+			description: "Run setup to add accounts and pick your category palette.",
+			actionLabel: "Run setup",
+			onAction: () => openSetupView(plugin),
 		});
 		return;
 	}

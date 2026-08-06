@@ -1,10 +1,10 @@
 import { Plugin, WorkspaceLeaf } from "obsidian";
-import { VIEW_TYPE_FINANCE } from "./constants";
+import { VIEW_TYPE_FINANCE, VIEW_TYPE_SETUP } from "./constants";
 import { FinanceSettingTab } from "./settings/SettingsTab";
 import { DEFAULT_SETTINGS, FinanceSettings, FinanceStore } from "./store";
 import { FinanceView } from "./views/FinanceView";
+import { openSetupView, SetupView } from "./views/SetupView";
 import { openImportWizard } from "./wizards/ImportWizard";
-import { openOnboardingWizard } from "./wizards/OnboardingWizard";
 
 export default class FinancePlugin extends Plugin {
 	settings: FinanceSettings = DEFAULT_SETTINGS;
@@ -16,6 +16,7 @@ export default class FinancePlugin extends Plugin {
 		await this.store.load();
 
 		this.registerView(VIEW_TYPE_FINANCE, (leaf: WorkspaceLeaf) => new FinanceView(leaf, this));
+		this.registerView(VIEW_TYPE_SETUP, (leaf: WorkspaceLeaf) => new SetupView(leaf, this));
 		this.addSettingTab(new FinanceSettingTab(this.app, this));
 
 		this.addRibbonIcon("wallet", "Open Finance", () => {
@@ -33,7 +34,7 @@ export default class FinancePlugin extends Plugin {
 		this.addCommand({
 			id: "run-setup-wizard",
 			name: "Run setup wizard",
-			callback: () => openOnboardingWizard(this),
+			callback: () => openSetupView(this),
 		});
 
 		this.addCommand({
@@ -43,7 +44,7 @@ export default class FinancePlugin extends Plugin {
 		});
 
 		if (!this.settings.onboarded) {
-			this.app.workspace.onLayoutReady(() => openOnboardingWizard(this));
+			this.app.workspace.onLayoutReady(() => void openSetupView(this));
 		}
 	}
 
