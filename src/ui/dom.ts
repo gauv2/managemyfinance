@@ -33,6 +33,14 @@ export function categoryChip(parent: HTMLElement, name: string, color: string, i
 	return chip;
 }
 
+/** Small "01 Label" corner-tag heading, echoing taskgenius.md's numbered section badges. */
+export function sectionTag(parent: HTMLElement, number: string, label: string): HTMLElement {
+	const wrap = parent.createDiv({ cls: "fp-tg-section-tag" });
+	wrap.createSpan({ cls: "fp-tg-section-num", text: number });
+	wrap.createSpan({ cls: "fp-tg-section-label", text: label });
+	return wrap;
+}
+
 export function emptyState(
 	parent: HTMLElement,
 	opts: { iconName: string; title: string; description: string; actionLabel?: string; onAction?: () => void }

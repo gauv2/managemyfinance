@@ -663,3 +663,310 @@
 	font-weight: 700;
 	font-size: var(--font-ui-small);
 }
+
+/* ==========================================================================
+   Onboarding brand theme — a deliberately fixed dark "blueprint" look
+   (not theme-adaptive) inspired by taskgenius.md: near-black navy, hairline
+   grid lines, sharp corners, a pastel-blue accent, numbered corner-tag badges.
+   Scoped entirely under .fp-onboarding so nothing else picks it up.
+   ========================================================================== */
+
+.fp-onboarding {
+	--tg-bg: #081021;
+	--tg-border: rgba(64, 106, 191, 0.3);
+	--tg-grid-line: rgba(64, 106, 191, 0.16);
+	--tg-muted: #8b9dc1;
+	--tg-heading: #e9eef9;
+	--tg-accent: #b3dfff;
+	--tg-accent-text: #14181f;
+	--tg-font: Inter, var(--font-interface);
+
+	background-color: var(--tg-bg);
+	background-image: linear-gradient(to right, var(--tg-grid-line) 1px, transparent 1px),
+		linear-gradient(var(--tg-grid-line) 1px, transparent 1px),
+		linear-gradient(rgba(80, 140, 255, 0.18), transparent 220px);
+	background-size: 16px 16px, 16px 16px, 100% 100%;
+	background-repeat: repeat, repeat, no-repeat;
+	background-position: 0 0, 0 0, top center;
+	border: 1px solid var(--tg-border);
+	border-radius: 4px;
+	padding: 0;
+	gap: 0;
+	color: var(--tg-heading);
+	font-family: var(--tg-font);
+	box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+	overflow: hidden;
+}
+
+.fp-onboarding .fp-wizard-header {
+	padding: 22px 26px 16px;
+}
+.fp-onboarding .fp-wizard-header-icon {
+	border-radius: 4px;
+	background: var(--tg-accent);
+	color: var(--tg-accent-text);
+}
+.fp-onboarding .fp-wizard-title {
+	font-family: var(--tg-font);
+	color: var(--tg-heading);
+	font-weight: 700;
+}
+.fp-onboarding .fp-wizard-subtitle {
+	color: var(--tg-muted);
+}
+.fp-onboarding .fp-wizard-body {
+	padding: 18px 26px;
+	min-height: 240px;
+}
+.fp-onboarding .fp-wizard-footer {
+	padding: 16px 26px;
+	border-top: 1px solid var(--tg-border);
+}
+
+/* Diagonal hatch divider strips — the "zimbra-background" texture from the reference site. */
+.fp-tg-divider {
+	height: 10px;
+	flex-shrink: 0;
+	background-image: repeating-linear-gradient(
+		315deg,
+		var(--tg-grid-line) 0px,
+		var(--tg-grid-line) 1px,
+		transparent 0px,
+		transparent 50%
+	);
+	background-size: 10px 10px;
+	border-top: 1px solid var(--tg-border);
+	border-bottom: 1px solid var(--tg-border);
+}
+
+/* Numbered tag stepper, replacing the circle-and-line indicator for this variant. */
+.fp-tg-steps {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 14px 26px;
+}
+.fp-tg-badge {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 5px 11px;
+	border: 1px solid var(--tg-border);
+	background: rgba(8, 16, 33, 0.4);
+	font-size: var(--font-ui-smaller);
+	color: var(--tg-muted);
+	transition: border-color 0.15s ease, color 0.15s ease;
+}
+.fp-tg-badge-num {
+	font-weight: 700;
+	font-family: var(--tg-font);
+	color: var(--tg-muted);
+}
+.fp-tg-badge.is-active {
+	border-color: var(--tg-accent);
+	color: var(--tg-heading);
+}
+.fp-tg-badge.is-active .fp-tg-badge-num {
+	color: var(--tg-accent);
+}
+.fp-tg-badge.is-done {
+	opacity: 0.65;
+}
+.fp-tg-badge.is-done .fp-tg-badge-num {
+	color: var(--tg-accent);
+}
+
+/* Section tag heading — "01 Welcome" style, used atop each non-welcome step. */
+.fp-tg-section-tag {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	padding: 4px 10px;
+	border: 1px solid var(--tg-border);
+	background: rgba(8, 16, 33, 0.4);
+	margin-bottom: 14px;
+}
+.fp-tg-section-num {
+	font-weight: 700;
+	font-family: var(--tg-font);
+	color: var(--tg-accent);
+	font-size: var(--font-ui-smaller);
+}
+.fp-tg-section-label {
+	color: var(--tg-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+}
+
+/* Welcome step: kicker, big heading, muted copy, meta line, two-column checklist. */
+.fp-tg-kicker {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--tg-accent);
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	margin-bottom: 12px;
+}
+.fp-tg-heading {
+	font-family: var(--tg-font);
+	font-size: 1.6em;
+	font-weight: 700;
+	color: var(--tg-heading);
+	margin: 0 0 10px;
+	line-height: 1.2;
+}
+.fp-tg-step-title {
+	font-family: var(--tg-font);
+	font-size: 1.2em;
+	font-weight: 700;
+	color: var(--tg-heading);
+	margin: 0 0 8px;
+}
+.fp-tg-text {
+	color: var(--tg-muted);
+	font-size: var(--font-ui-medium);
+	line-height: 1.55;
+	margin: 0 0 14px;
+	max-width: 480px;
+}
+.fp-tg-meta {
+	color: var(--tg-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: 20px;
+	opacity: 0.85;
+}
+.fp-tg-checklist {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 10px 20px;
+}
+.fp-tg-check-item {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	color: var(--tg-heading);
+	font-size: var(--font-ui-small);
+}
+.fp-tg-check-icon {
+	width: 18px;
+	height: 18px;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--tg-accent);
+	color: var(--tg-accent);
+}
+.fp-tg-check-icon svg {
+	width: 11px;
+	height: 11px;
+}
+
+/* Done step icon tile. */
+.fp-tg-done-icon {
+	width: 52px;
+	height: 52px;
+	border: 1px solid var(--tg-accent);
+	color: var(--tg-accent);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 22px;
+	margin-bottom: 14px;
+}
+
+/* Plain dark field row, used instead of Obsidian's own Setting component so it matches the brand look. */
+.fp-tg-field-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 6px;
+}
+.fp-tg-field-label {
+	color: var(--tg-muted);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	flex-shrink: 0;
+}
+.fp-tg-input {
+	flex: 1;
+	background: rgba(255, 255, 255, 0.02);
+	border: 1px solid var(--tg-border);
+	color: var(--tg-heading);
+	padding: 7px 10px;
+	font-size: var(--font-ui-small);
+	border-radius: 0;
+}
+.fp-tg-input:focus {
+	border-color: var(--tg-accent);
+	outline: none;
+}
+
+/* Buttons, restyled sharp-cornered to match the reference's "Get Started" / ghost pair. */
+.fp-onboarding .fp-btn {
+	border-radius: 0;
+	font-family: var(--tg-font);
+}
+.fp-onboarding .fp-btn-primary {
+	background: var(--tg-accent);
+	color: var(--tg-accent-text);
+	box-shadow: none;
+}
+.fp-onboarding .fp-btn-primary:hover {
+	background: #cfe9ff;
+}
+.fp-onboarding .fp-btn-ghost {
+	color: var(--tg-muted);
+	border: 1px solid var(--tg-border);
+}
+.fp-onboarding .fp-btn-ghost:hover {
+	color: var(--tg-heading);
+	background: rgba(179, 223, 255, 0.06);
+	border-color: var(--tg-accent);
+}
+.fp-onboarding .fp-btn-chip {
+	border: 1px solid var(--tg-border);
+	background: transparent;
+	color: var(--tg-muted);
+	border-radius: 0;
+}
+.fp-onboarding .fp-btn-chip:hover {
+	border-color: var(--tg-accent);
+	color: var(--tg-heading);
+	background: rgba(179, 223, 255, 0.06);
+}
+
+/* Account & category cards, restyled sharp/hairline to match. */
+.fp-onboarding .fp-account-row {
+	border: 1px solid var(--tg-border);
+	background: rgba(255, 255, 255, 0.015);
+	border-radius: 0;
+}
+.fp-onboarding .fp-account-row:hover {
+	background: rgba(179, 223, 255, 0.05);
+}
+.fp-onboarding .fp-account-row input[type="text"] {
+	color: var(--tg-heading);
+}
+.fp-onboarding .fp-account-row select {
+	background: transparent;
+	color: var(--tg-muted);
+	border: 1px solid var(--tg-border);
+}
+.fp-onboarding .fp-account-row-icon {
+	color: var(--tg-accent);
+}
+.fp-onboarding .fp-category-grid {
+	gap: 6px;
+}
+.fp-onboarding .fp-category-item {
+	border: 1px solid var(--tg-border);
+	background: rgba(255, 255, 255, 0.015);
+	border-radius: 0;
+}
+.fp-onboarding .fp-category-item.is-archived {
+	opacity: 0.35;
+}

@@ -24,18 +24,24 @@ export class WizardModal extends Modal {
 	private wizTitle: string;
 	private wizSubtitle: string;
 	private wizIcon: string;
+	private variant: "default" | "brand";
 
-	constructor(app: App, opts: { title: string; subtitle: string; icon: string; steps: WizardStep[] }) {
+	constructor(
+		app: App,
+		opts: { title: string; subtitle: string; icon: string; steps: WizardStep[]; variant?: "default" | "brand" }
+	) {
 		super(app);
 		this.steps = opts.steps;
 		this.wizTitle = opts.title;
 		this.wizSubtitle = opts.subtitle;
 		this.wizIcon = opts.icon;
+		this.variant = opts.variant ?? "default";
 	}
 
 	onOpen(): void {
 		this.modalEl.addClass("fp-wizard-modal");
 		this.contentEl.addClass("fp-wizard");
+		if (this.variant === "brand") this.contentEl.addClass("fp-onboarding");
 
 		const head = this.contentEl.createDiv({ cls: "fp-wizard-header" });
 		icon(head.createDiv({ cls: "fp-wizard-header-icon" }), this.wizIcon);
@@ -43,7 +49,10 @@ export class WizardModal extends Modal {
 		headText.createDiv({ cls: "fp-wizard-title", text: this.wizTitle });
 		headText.createDiv({ cls: "fp-wizard-subtitle", text: this.wizSubtitle });
 
-		this.stepsEl = this.contentEl.createDiv({ cls: "fp-wizard-steps" });
+		if (this.variant === "brand") this.contentEl.createDiv({ cls: "fp-tg-divider" });
+		this.stepsEl = this.contentEl.createDiv({ cls: "fp-wizard-steps" + (this.variant === "brand" ? " fp-tg-steps" : "") });
+		if (this.variant === "brand") this.contentEl.createDiv({ cls: "fp-tg-divider" });
+
 		this.bodyEl = this.contentEl.createDiv({ cls: "fp-wizard-body" });
 		this.footerEl = this.contentEl.createDiv({ cls: "fp-wizard-footer" });
 
@@ -56,6 +65,19 @@ export class WizardModal extends Modal {
 
 	private renderStepsIndicator(): void {
 		this.stepsEl.empty();
+
+		if (this.variant === "brand") {
+			this.steps.forEach((step, i) => {
+				const cls = ["fp-tg-badge"];
+				if (i === this.stepIndex) cls.push("is-active");
+				if (i < this.stepIndex) cls.push("is-done");
+				const badge = this.stepsEl.createDiv({ cls: cls.join(" ") });
+				badge.createSpan({ cls: "fp-tg-badge-num", text: String(i + 1).padStart(2, "0") });
+				badge.createSpan({ cls: "fp-tg-badge-label", text: step.title });
+			});
+			return;
+		}
+
 		this.steps.forEach((step, i) => {
 			const cls = ["fp-wizard-step"];
 			if (i === this.stepIndex) cls.push("is-active");
