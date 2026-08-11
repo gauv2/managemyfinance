@@ -15,9 +15,27 @@ A personal finance dashboard, ledger, budgeting, and import pipeline for [Obsidi
 - **Privacy mode** — blur every displayed amount at a click, for demoing the plugin without exposing real numbers.
 - **Mobile-friendly layout** — auto-detects Obsidian mobile, or force it on/off manually.
 
+## Installation
+
+### Via BRAT (recommended while this is in beta)
+
+This plugin isn't in the community plugin store yet, so the easiest way to install it — and to keep getting updates — is [BRAT](https://github.com/TfTHacker/obsidian42-brat):
+
+1. Install **BRAT** from Obsidian's Community Plugins browser and enable it.
+2. Run **BRAT: Add a beta plugin for testing** from the command palette.
+3. Paste this repository URL: `https://github.com/gauv2/managemyfinance`
+4. Choose the latest version and click **Add plugin**.
+5. Enable **Finance** under Settings → Community Plugins.
+
+BRAT will check for new releases on startup and update the plugin automatically.
+
+### Manual
+
+Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/gauv2/managemyfinance/releases/latest) and drop them into `<vault>/.obsidian/plugins/finance-plugin/`, then reload Obsidian and enable the plugin.
+
 ## Getting started
 
-1. Install the plugin (see below) and enable it in Obsidian's Community Plugins settings.
+1. Install the plugin (see above) and enable it in Obsidian's Community Plugins settings.
 2. Open it from the ribbon icon, or run **Open Finance workspace** from the command palette.
 3. Add your first account, then use the **Import transactions** command (or the in-app Import button) to bring in a bank/broker export.
 4. Optionally run **Install eMoney categories & auto-categorize transactions** from the command palette to seed a standard category set and categorize what it can recognize.
@@ -35,6 +53,17 @@ npm run typecheck  # tsc -noEmit
 ```
 
 The build output (`main.js`, `manifest.json`, `styles.css`) goes in your vault at `.obsidian/plugins/finance-plugin/`.
+
+### Cutting a release
+
+BRAT and Obsidian both locate a plugin's files at `releases/download/<manifest.json version>/`, so the git tag has to match `manifest.json` exactly — plain `1.2.3`, no `v` prefix.
+
+```bash
+npm version patch   # or minor / major
+git push && git push --tags
+```
+
+`npm version` runs `version-bump.mjs`, which writes the new version into `manifest.json` and adds a `versions.json` entry mapping it to the current `minAppVersion`. Pushing the tag triggers `.github/workflows/release.yml`, which tests, builds, and publishes a release with `main.js`, `manifest.json`, and `styles.css` attached as assets. The workflow refuses to publish if the tag and `manifest.json` disagree.
 
 ## License
 
