@@ -20,9 +20,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
-      - run: npm ci
+      # npm install, not ci: a transitive dep (vitest -> vite) wants a newer esbuild than the plugin's
+      # own direct pin, needing two nested esbuild installs — reconciling that on the fly is more
+      # robust here than requiring the lockfile to exactly reproduce under whatever npm ships with
+      # this runner's Node version.
+      - run: npm install
       - run: npm run build
 
       - name: Verify manifest version matches the tag
