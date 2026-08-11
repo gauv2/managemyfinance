@@ -1,11 +1,23 @@
 /** Minimal RFC4180-ish CSV codec — no external dependency needed for this plugin's data files. */
 
+/** Some EU bank exports (e.g. ING's Dutch-locale download) use ';' since ',' is their decimal separator. */
+function detectDelimiter(text: string): "," | ";" {
+	const breakIdx = text.search(/\r\n|\r|\n/);
+	const firstLine = breakIdx === -1 ? text : text.slice(0, breakIdx);
+	const commas = (firstLine.match(/,/g) ?? []).length;
+	const semicolons = (firstLine.match(/;/g) ?? []).length;
+	return semicolons > commas ? ";" : ",";
+}
+
 export function parseCSV(text: string): string[][] {
 	const rows: string[][] = [];
 	let row: string[] = [];
 	let field = "";
 	let inQuotes = false;
-	const s = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	// Strip a UTF-8 BOM (common in Windows-exported bank CSVs) so the first header cell matches cleanly.
+	const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+	const s = withoutBom.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	const delimiter = detectDelimiter(s);
 
 	for (let i = 0; i < s.length; i++) {
 		const c = s[i];
@@ -22,7 +34,7 @@ export function parseCSV(text: string): string[][] {
 			}
 		} else if (c === '"') {
 			inQuotes = true;
-		} else if (c === ",") {
+		} else if (c === delimiter) {
 			row.push(field);
 			field = "";
 		} else if (c === "\n") {

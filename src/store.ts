@@ -1,18 +1,42 @@
 import { App, normalizePath } from "obsidian";
 import { parseCSV, toCSV } from "./csv";
-import { defaultCategories } from "./constants";
-import type { Account, Category, CategoryRule, Transaction } from "./types";
+import { DEFAULT_DATA_FOLDER, defaultCategories } from "./constants";
+import type { Account, Card, Category, CategoryRule, Portfolio, Subscription, Transaction } from "./types";
 
 export interface FinanceSettings {
+	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */
 	dataFolder: string;
 	fiMultiplier: number;
 	expectedReturn: number;
+	/** Scopes the whole workspace to one account's transactions; undefined means "All Accounts". */
+	activeAccountId?: string;
+	/** Selects a workspace page that isn't account-scoped, e.g. the subscriptions tracker. */
+	activeView?: "budgets" | "subscriptions" | "cards";
+	/** Blurs every displayed amount (hover to reveal) — for demoing the plugin without exposing real numbers. */
+	privacyMode?: boolean;
+	/** Every portfolio the vault knows about — each is a fully separate set of accounts/transactions/subscriptions. */
+	portfolios?: Portfolio[];
+	activePortfolioId?: string;
+	/** True once the first-run "add your cards" wizard has been shown (skipped or completed) — never auto-shown again. */
+	cardsIntroShown?: boolean;
+	/** User-dragged order of the pinned sidebar tabs (All Accounts / Subscriptions / Cards) — missing/unknown ids fall back to the default order. */
+	navOrder?: string[];
+	/** User-dragged order of the account list in the sidebar — filtered to the active portfolio's own account ids at render time. */
+	accountOrder?: string[];
+	/** "auto" follows Obsidian's own Platform.isMobile; "on"/"off" force the mobile-friendly layout regardless of device. */
+	mobileLayout?: "auto" | "on" | "off";
+	/** Manual, user-maintained rate table (Settings → Currency) for converting non-EUR subscriptions into EUR when
+	 *  summing totals — keyed by currency code, 1 unit of that currency = this many EUR. No network calls, ever. */
+	exchangeRates?: Record<string, number>;
+	/** User-dragged width of the sidebar, in pixels — undefined means the default (268px, set in CSS). */
+	navWidth?: number;
 }
 
 export const DEFAULT_SETTINGS: FinanceSettings = {
-	dataFolder: "Finance",
+	dataFolder: DEFAULT_DATA_FOLDER,
 	fiMultiplier: 25,
 	expectedReturn: 0.07,
+	mobileLayout: "auto",
 };
 
 const TX_COLUMNS: (keyof Transaction)[] = [
@@ -25,6 +49,7 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 	"currency",
 	"categoryId",
 	"type",
+	"code",
 	"source",
 	"raw",
 	"notes",
@@ -35,6 +60,7 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 	"fee",
 	"tax",
 	"action",
+	"attachmentPath",
 ];
 
 const NUMERIC_COLUMNS: (keyof Transaction)[] = ["amount", "shares", "price", "fee", "tax"];
@@ -49,6 +75,8 @@ export class FinanceStore {
 	categories: Category[] = [];
 	rules: CategoryRule[] = [];
 	transactions: Transaction[] = [];
+	subscriptions: Subscription[] = [];
+	cards: Card[] = [];
 
 	constructor(private app: App, public settings: FinanceSettings) {}
 
@@ -71,10 +99,52 @@ export class FinanceStore {
 		await this.ensureFolder(this.path("reports"));
 
 		this.categories = await this.readJson<Category[]>(this.path("data", "categories.json"), defaultCategories());
+		await this.migrateLegacyCategoryBudgets();
 		this.accounts = await this.readJson<Account[]>(this.path("data", "accounts.json"), []);
 		this.rules = await this.readJson<CategoryRule[]>(this.path("data", "rules.json"), []);
+		this.subscriptions = await this.readJson<Subscription[]>(this.path("data", "subscriptions.json"), []);
+		this.cards = await this.readJson<Card[]>(this.path("data", "cards.json"), []);
+		await this.migrateLegacyCardExpiry();
 
 		this.transactions = await this.readLedger();
+	}
+
+	/** One-time migration: pre-history installs stored a single flat `budget` per category. Fold that
+	 *  into `budgetHistory` under the current month (so nothing already planned is lost) and drop the
+	 *  legacy field — safe to run every load, it's a no-op once every category has moved over. */
+	private async migrateLegacyCategoryBudgets(): Promise<void> {
+		const now = new Date();
+		const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+		let changed = false;
+		for (const cat of this.categories) {
+			const legacy = (cat as unknown as { budget?: number }).budget;
+			if (legacy === undefined) continue;
+			cat.budgetHistory = { ...cat.budgetHistory };
+			if (cat.budgetHistory[month] === undefined) cat.budgetHistory[month] = legacy;
+			delete (cat as unknown as { budget?: number }).budget;
+			changed = true;
+		}
+		if (changed) await this.saveCategories();
+	}
+
+	/** One-time migration: pre-history installs stored expiry as a single "MM/YY" string. Split it into
+	 *  expiryMonth/expiryYear and drop the legacy field — safe to run every load. */
+	private async migrateLegacyCardExpiry(): Promise<void> {
+		let changed = false;
+		for (const card of this.cards) {
+			const legacy = (card as unknown as { expiry?: string }).expiry;
+			if (legacy !== undefined) {
+				const m = /^(\d{1,2})\s*\/\s*(\d{2,4})$/.exec(legacy.trim());
+				if (m && card.expiryMonth === undefined && card.expiryYear === undefined) {
+					card.expiryMonth = parseInt(m[1], 10);
+					const y = parseInt(m[2], 10);
+					card.expiryYear = y < 100 ? 2000 + y : y;
+				}
+				delete (card as unknown as { expiry?: string }).expiry;
+				changed = true;
+			}
+		}
+		if (changed) await this.saveCards();
 	}
 
 	private async readJson<T>(path: string, fallback: T): Promise<T> {
@@ -103,15 +173,25 @@ export class FinanceStore {
 				if (!file.toLowerCase().endsWith(".csv")) continue;
 				const rows = parseCSV(await adapter.read(file));
 				if (rows.length < 1) continue;
-				const header = rows[0];
+				const fileHeader = rows[0];
 				for (const row of rows.slice(1)) {
 					const record: Record<string, string> = {};
-					header.forEach((h, i) => (record[h] = row[i] ?? ""));
+					this.rowHeader(row, fileHeader).forEach((h, i) => (record[h] = row[i] ?? ""));
 					out.push(this.rowToTransaction(record));
 				}
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * A row whose field count matches the *current* schema is read against the current column
+	 * order, even if the file's stored header line is stale — otherwise a schema change (a column
+	 * added after the file already existed) silently shifts every field read against the old header.
+	 */
+	private rowHeader(row: string[], fileHeader: string[]): string[] {
+		const current = TX_COLUMNS as string[];
+		return row.length === current.length ? current : fileHeader;
 	}
 
 	private rowToTransaction(record: Record<string, string>): Transaction {
@@ -138,17 +218,26 @@ export class FinanceStore {
 		await this.app.vault.adapter.write(this.path("data", "rules.json"), JSON.stringify(this.rules, null, "\t"));
 	}
 
+	async saveSubscriptions(): Promise<void> {
+		await this.app.vault.adapter.write(this.path("data", "subscriptions.json"), JSON.stringify(this.subscriptions, null, "\t"));
+	}
+
+	async saveCards(): Promise<void> {
+		await this.app.vault.adapter.write(this.path("data", "cards.json"), JSON.stringify(this.cards, null, "\t"));
+	}
+
 	existingIds(): Set<string> {
 		return new Set(this.transactions.map((t) => t.id));
 	}
 
-	/** Appends only transactions whose id isn't already known. Safe to re-run on an overlapping export. */
-	async importTransactions(
-		source: Transaction["source"],
-		incoming: Transaction[]
-	): Promise<{ added: number; skipped: number }> {
+	/**
+	 * Appends only transactions whose id isn't already known. Safe to re-run on an overlapping export.
+	 * Groups by each transaction's own `source`/year — a single import (e.g. one combined workbook)
+	 * can carry rows from more than one source.
+	 */
+	async importTransactions(incoming: Transaction[]): Promise<{ added: number; skipped: number }> {
 		const existing = this.existingIds();
-		const byYear = new Map<string, Transaction[]>();
+		const bySourceYear = new Map<string, Transaction[]>();
 		let added = 0;
 		let skipped = 0;
 
@@ -160,12 +249,14 @@ export class FinanceStore {
 			existing.add(tx.id);
 			this.transactions.push(tx);
 			const year = tx.date.slice(0, 4) || "unknown";
-			if (!byYear.has(year)) byYear.set(year, []);
-			byYear.get(year)!.push(tx);
+			const key = `${tx.source}::${year}`;
+			if (!bySourceYear.has(key)) bySourceYear.set(key, []);
+			bySourceYear.get(key)!.push(tx);
 			added++;
 		}
 
-		for (const [year, txs] of byYear) {
+		for (const [key, txs] of bySourceYear) {
+			const [source, year] = key.split("::");
 			await this.appendToLedger(source, year, txs);
 		}
 		return { added, skipped };
@@ -185,10 +276,28 @@ export class FinanceStore {
 		if (await adapter.exists(file)) {
 			rows = parseCSV(await adapter.read(file));
 		}
-		if (rows.length === 0) rows.push(TX_COLUMNS as string[]);
+		rows = this.migrateLedgerRows(rows);
 
 		for (const tx of txs) rows.push(this.serializeTx(tx) as string[]);
 		await adapter.write(file, toCSV(rows));
+	}
+
+	/** Rewrites a ledger file's header + every row onto the current TX_COLUMNS shape, so a schema
+	 *  change never leaves a file with a stale header underneath newly-shaped rows. */
+	private migrateLedgerRows(rows: string[][]): string[][] {
+		const current = TX_COLUMNS as string[];
+		if (rows.length === 0) return [current];
+		const fileHeader = rows[0];
+		const isCurrent = fileHeader.length === current.length && fileHeader.every((h, i) => h === current[i]);
+		if (isCurrent) return rows;
+
+		const migrated: string[][] = [current];
+		for (const row of rows.slice(1)) {
+			const record: Record<string, string> = {};
+			this.rowHeader(row, fileHeader).forEach((h, i) => (record[h] = row[i] ?? ""));
+			migrated.push(current.map((h) => record[h] ?? ""));
+		}
+		return migrated;
 	}
 
 	/** Applies an in-place edit (e.g. re-categorizing) and rewrites the transaction's ledger file to match. */
@@ -207,5 +316,34 @@ export class FinanceStore {
 			if (t.source === tx.source && (t.date || "").slice(0, 4) === year) rows.push(this.serializeTx(t));
 		}
 		await this.app.vault.adapter.write(file, toCSV(rows));
+	}
+
+	/**
+	 * Bulk categoryId patch (e.g. from auto-categorization) — unlike calling updateTransaction in a
+	 * loop, each affected (source, year) ledger file is only read/rewritten once, not once per row.
+	 */
+	async recategorize(patches: Map<string, string>): Promise<number> {
+		const touchedFiles = new Set<string>();
+		let count = 0;
+		for (const tx of this.transactions) {
+			const newCategoryId = patches.get(tx.id);
+			if (newCategoryId === undefined || tx.categoryId === newCategoryId) continue;
+			tx.categoryId = newCategoryId;
+			touchedFiles.add(`${tx.source}::${(tx.date || "").slice(0, 4) || "unknown"}`);
+			count++;
+		}
+
+		for (const key of touchedFiles) {
+			const [source, year] = key.split("::");
+			const folder = this.path("data", "ledger", source);
+			await this.ensureFolder(folder);
+			const file = normalizePath(`${folder}/${year}.csv`);
+			const rows: (string | number | undefined)[][] = [TX_COLUMNS];
+			for (const t of this.transactions) {
+				if (t.source === source && (t.date || "").slice(0, 4) === year) rows.push(this.serializeTx(t));
+			}
+			await this.app.vault.adapter.write(file, toCSV(rows));
+		}
+		return count;
 	}
 }

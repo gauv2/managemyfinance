@@ -9,6 +9,10 @@ export interface WizardStep {
 	canGoNext?: () => boolean;
 	onNext?: () => void | Promise<void>;
 	nextLabel?: string;
+	/** Shows a ghost "Skip" action alongside Next — bypasses canGoNext and onNext, just advances (or closes on the last step). */
+	skippable?: boolean;
+	skipLabel?: string;
+	onSkip?: () => void | Promise<void>;
 }
 
 /**
@@ -97,6 +101,15 @@ export class WizardModal extends Modal {
 
 		const step = this.steps[this.stepIndex];
 		const isLast = this.stepIndex === this.steps.length - 1;
+
+		if (step.skippable) {
+			const skip = right.createEl("button", { cls: "fp-btn fp-btn-ghost", text: step.skipLabel ?? "Skip" });
+			skip.addEventListener("click", async () => {
+				if (step.onSkip) await step.onSkip();
+				this.close();
+			});
+		}
+
 		const next = right.createEl("button", {
 			cls: "fp-btn fp-btn-primary",
 			text: step.nextLabel ?? (isLast ? "Finish" : "Next"),

@@ -35,9 +35,10 @@ export function lineChart(
 	container: HTMLElement,
 	categories: string[],
 	series: ChartSeries[],
-	opts?: { height?: number; formatValue?: (n: number) => string }
+	opts?: { height?: number; formatValue?: (n: number) => string; money?: boolean }
 ): void {
 	const height = opts?.height ?? 220;
+	const money = opts?.money !== false;
 	const width = 640;
 	const padLeft = 52;
 	const padRight = 16;
@@ -46,6 +47,7 @@ export function lineChart(
 	const plotW = width - padLeft - padRight;
 	const plotH = height - padTop - padBottom;
 	const formatValue = opts?.formatValue ?? ((n) => new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n));
+	const formatLabel = opts?.formatValue ?? formatCompact;
 
 	const allValues = series.flatMap((s) => s.values);
 	const dataMin = Math.min(0, ...allValues);
@@ -56,7 +58,7 @@ export function lineChart(
 	const scaleY = (v: number) => padTop + plotH - ((v - scaleMin) / (scaleMax - scaleMin || 1)) * plotH;
 	const scaleX = (i: number) => padLeft + (categories.length <= 1 ? plotW / 2 : (i / (categories.length - 1)) * plotW);
 
-	const wrap = container.createDiv({ cls: "fp-chart" });
+	const wrap = container.createDiv({ cls: "fp-chart" + (money ? " fp-chart-money" : "") });
 
 	const legend = wrap.createDiv({ cls: "fp-chart-legend" });
 	series.forEach((s) => {
@@ -91,7 +93,7 @@ export function lineChart(
 		label.setAttribute("class", "fp-chart-axis-label");
 		label.setAttribute("text-anchor", "end");
 		label.setAttribute("dominant-baseline", "middle");
-		label.textContent = formatCompact(t);
+		label.textContent = formatLabel(t);
 		svg.appendChild(label);
 	}
 
@@ -106,7 +108,7 @@ export function lineChart(
 		svg.appendChild(label);
 	});
 
-	// Lines + markers + end labels
+	// Lines + markers
 	series.forEach((s) => {
 		const points = s.values.map((v, i) => `${scaleX(i)},${scaleY(v)}`).join(" ");
 		const polyline = document.createElementNS(NS, "polyline");
@@ -124,18 +126,31 @@ export function lineChart(
 			dot.style.setProperty("--fp-line-color", s.color);
 			svg.appendChild(dot);
 		});
+	});
 
-		const lastIdx = s.values.length - 1;
-		if (lastIdx >= 0) {
+	// End-of-line labels — series whose last value lands within a text-height of each other would
+	// otherwise render on top of one another (e.g. two rate lines both hovering near 0%), so labels
+	// are collision-resolved (sorted top-to-bottom, pushed apart to a minimum gap) before drawing.
+	const lastIdx = categories.length - 1;
+	if (lastIdx >= 0) {
+		const MIN_GAP = 14;
+		const endLabels = series
+			.map((s) => ({ y: scaleY(s.values[lastIdx]), text: formatLabel(s.values[lastIdx]) }))
+			.sort((a, b) => a.y - b.y);
+		for (let i = 1; i < endLabels.length; i++) {
+			const min = endLabels[i - 1].y + MIN_GAP;
+			if (endLabels[i].y < min) endLabels[i].y = min;
+		}
+		endLabels.forEach(({ y, text }) => {
 			const endLabel = document.createElementNS(NS, "text");
 			endLabel.setAttribute("x", String(scaleX(lastIdx) + 6));
-			endLabel.setAttribute("y", String(scaleY(s.values[lastIdx])));
+			endLabel.setAttribute("y", String(y));
 			endLabel.setAttribute("class", "fp-chart-end-label");
 			endLabel.setAttribute("dominant-baseline", "middle");
-			endLabel.textContent = formatCompact(s.values[lastIdx]);
+			endLabel.textContent = text;
 			svg.appendChild(endLabel);
-		}
-	});
+		});
+	}
 
 	// Hover crosshair + tooltip
 	const crosshair = document.createElementNS(NS, "line");
@@ -188,6 +203,77 @@ export function lineChart(
 	});
 }
 
+/**
+ * A tiny trend-only line (stat-tile contract): the history rides in the de-emphasis
+ * ink, only the current/last point picks up the series' accent color. No axes, no
+ * tooltip — it's a glance, not a chart the reader interrogates on its own.
+ */
+export function sparkline(container: HTMLElement, values: number[], accentColor: string, opts?: { height?: number; width?: number }): void {
+	if (values.length === 0) return;
+	const height = opts?.height ?? 32;
+	const width = opts?.width ?? 96;
+	const pad = 3;
+	const min = Math.min(...values, 0);
+	const max = Math.max(...values, 0);
+	const span = max - min || 1;
+	const scaleY = (v: number) => pad + (height - pad * 2) * (1 - (v - min) / span);
+	const scaleX = (i: number) => (values.length <= 1 ? width / 2 : pad + (i / (values.length - 1)) * (width - pad * 2));
+
+	const NS = "http://www.w3.org/2000/svg";
+	const svg = document.createElementNS(NS, "svg");
+	svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+	svg.setAttribute("class", "fp-sparkline");
+	container.appendChild(svg);
+
+	const polyline = document.createElementNS(NS, "polyline");
+	polyline.setAttribute("points", values.map((v, i) => `${scaleX(i)},${scaleY(v)}`).join(" "));
+	polyline.setAttribute("class", "fp-sparkline-line");
+	svg.appendChild(polyline);
+
+	const lastIdx = values.length - 1;
+	const dot = document.createElementNS(NS, "circle");
+	dot.setAttribute("cx", String(scaleX(lastIdx)));
+	dot.setAttribute("cy", String(scaleY(values[lastIdx])));
+	dot.setAttribute("r", "2.5");
+	dot.setAttribute("class", "fp-sparkline-dot");
+	dot.style.setProperty("--fp-line-color", accentColor);
+	svg.appendChild(dot);
+}
+
+/**
+ * Part-to-whole as a single horizontal bar (categorical color per segment, a 2px
+ * surface gap between them) plus a legend with the value and share — the
+ * skill-recommended form for part-to-whole instead of a pie/donut.
+ */
+export function stackedShareBar(
+	container: HTMLElement,
+	segments: { label: string; value: number; color: string }[],
+	opts?: { formatValue?: (n: number) => string }
+): void {
+	const formatValue = opts?.formatValue ?? ((n: number) => String(n));
+	const total = segments.reduce((sum, s) => sum + Math.max(0, s.value), 0);
+
+	const wrap = container.createDiv({ cls: "fp-share-bar-wrap" });
+	const bar = wrap.createDiv({ cls: "fp-share-bar" });
+	segments.forEach((s) => {
+		const pct = total > 0 ? Math.max(0, s.value) / total : 0;
+		if (pct <= 0) return;
+		const seg = bar.createDiv({ cls: "fp-share-bar-seg" });
+		seg.style.width = `${pct * 100}%`;
+		seg.style.setProperty("--fp-seg-color", s.color);
+	});
+
+	const legend = wrap.createDiv({ cls: "fp-share-bar-legend" });
+	segments.forEach((s) => {
+		const pct = total > 0 ? (Math.max(0, s.value) / total) * 100 : 0;
+		const item = legend.createDiv({ cls: "fp-share-bar-legend-item" });
+		const swatch = item.createSpan({ cls: "fp-chart-swatch" });
+		swatch.style.setProperty("--fp-swatch-color", s.color);
+		item.createSpan({ cls: "fp-share-bar-legend-label", text: s.label });
+		item.createSpan({ cls: "fp-share-bar-legend-value fp-money", text: `${formatValue(s.value)} · ${pct.toFixed(0)}%` });
+	});
+}
+
 /** Horizontal bar chart for category totals — each bar keeps that category's own color. */
 export function barChart(
 	container: HTMLElement,
@@ -207,7 +293,7 @@ export function barChart(
 		fill.style.width = `${Math.max(2, (r.value / max) * 100)}%`;
 
 		row.createDiv({
-			cls: "fp-barchart-value",
+			cls: "fp-barchart-value fp-money",
 			text: new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(r.value),
 		});
 	});
