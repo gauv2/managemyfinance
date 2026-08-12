@@ -156,6 +156,21 @@ export function renderSettingsSection(container: HTMLElement, plugin: FinancePlu
 			void save();
 		});
 
+		const tipsControl = settingRow(
+			appearance,
+			"Show tips in the sidebar",
+			"The small card below the nav that suggests things the plugin can do. Closing it with the × switches this off; turning it back on here brings the whole deck back, including any tips retired one at a time by earlier versions."
+		);
+		toggle(tipsControl, settings.tipsEnabled !== false, (next) => {
+			settings.tipsEnabled = next;
+			// Switching tips on has to actually show tips. Older builds retired them individually, and
+			// a vault carrying a full dismissedTips list would otherwise flip this on and see nothing —
+			// a toggle that visibly does nothing reads as broken. Nothing writes to that list any more,
+			// so clearing it here is the only way back.
+			if (next) settings.dismissedTips = [];
+			void save();
+		});
+
 		// ---- Subscriptions ---------------------------------------------------
 		const subs = settingsCard(container, {
 			icon: "repeat",

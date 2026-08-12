@@ -7,7 +7,7 @@ import { ManagePortfoliosModal } from "../modals/ManagePortfoliosModal";
 import type { FinanceViewId } from "../store";
 import type { Account } from "../types";
 import { icon } from "../ui/dom";
-import { availableTips, dismissTip } from "../ui/tips";
+import { availableTips } from "../ui/tips";
 import { openCardWizard } from "../wizards/CardWizard";
 import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { renderAccountPage } from "./sections/AccountPage";
@@ -428,14 +428,18 @@ export class FinanceView extends ItemView {
 		icon(tipHead, "sparkles", "fp-nav-tip-icon");
 		tipHead.createSpan({ cls: "fp-nav-tip-title", text: tip.title });
 
+		// Closes the whole deck, not just this tip. Retiring ten tips one × at a time reads as the card
+		// refusing to go away; one click closes it, and Settings turns it back on.
 		const dismissBtn = tipHead.createEl("button", { cls: "fp-nav-tip-dismiss" });
 		icon(dismissBtn, "x");
-		dismissBtn.setAttribute("aria-label", "Dismiss this tip");
-		dismissBtn.setAttribute("title", "Dismiss this tip — it won't come back");
+		dismissBtn.setAttribute("aria-label", "Hide tips");
+		dismissBtn.setAttribute("title", "Hide tips — turn them back on in Settings");
 		dismissBtn.addEventListener("click", async () => {
-			this.plugin.settings.dismissedTips = dismissTip(this.plugin, tip.id);
+			this.plugin.settings.tipsEnabled = false;
 			await this.plugin.saveSettings();
-			this.renderNavFooter();
+			// Full refresh, not just the footer: the Settings page may be open with the "Show tips"
+			// toggle on screen, and a switch still reading ON after you closed the card is a lie.
+			this.refresh();
 		});
 
 		card.createDiv({ cls: "fp-nav-tip-desc", text: tip.body });

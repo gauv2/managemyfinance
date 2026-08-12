@@ -5,9 +5,12 @@ import type FinancePlugin from "../main";
  *
  * A single tip that appears until you happen to satisfy it is a nag with no way out; it also can't
  * teach you anything about the rest of the app. This is a small deck instead: each tip knows when
- * it's *relevant* (there's no point suggesting transfer matching to someone with one account), you
- * can page through them, and dismissing one is permanent — dismissal is stored per tip id, so a
- * dismissed tip never returns even after a restart or a new release adds more.
+ * it's *relevant* (there's no point suggesting transfer matching to someone with one account), and
+ * you can page through them.
+ *
+ * Closing the card switches the whole deck off (`tipsEnabled`) rather than retiring one tip at a
+ * time — ten × clicks to silence a hint reads as the card refusing to leave. `dismissedTips` is
+ * still honoured for anything retired by earlier versions, so those stay gone if tips are re-enabled.
  */
 export interface Tip {
 	id: string;
@@ -96,15 +99,10 @@ export const TIPS: Tip[] = [
 	},
 ];
 
-/** Tips worth showing right now: relevant, and not dismissed. */
+/** Tips worth showing right now: relevant, and not dismissed. Empty when the deck is switched off. */
 export function availableTips(plugin: FinancePlugin): Tip[] {
+	if (plugin.settings.tipsEnabled === false) return [];
 	const dismissed = new Set(plugin.settings.dismissedTips ?? []);
 	return TIPS.filter((tip) => !dismissed.has(tip.id) && tip.isRelevant(plugin));
 }
 
-/** Dismisses a tip for good. Returns the updated dismissed list for saving. */
-export function dismissTip(plugin: FinancePlugin, id: string): string[] {
-	const dismissed = new Set(plugin.settings.dismissedTips ?? []);
-	dismissed.add(id);
-	return Array.from(dismissed);
-}

@@ -67,8 +67,13 @@ export interface FinanceSettings {
 	budgetAlerts?: boolean;
 	/** Fraction of a budget at which the warning fires — 0.9 means "tell me at 90%". */
 	budgetAlertThreshold?: number;
-	/** Sidebar tips the user has dismissed, by id — see src/ui/tips.ts. Dismissed means gone for good. */
+	/** Tips retired one-by-one by builds before the deck gained a single on/off switch. Nothing writes
+	 *  to this any more; it is still honoured so those tips stay gone, and cleared when tips are
+	 *  switched back on in settings. See src/ui/tips.ts. */
 	dismissedTips?: string[];
+	/** Whether the sidebar tip deck appears at all. Closing the card switches this off in one click,
+	 *  rather than making you retire ten tips one at a time; the settings page turns it back on. */
+	tipsEnabled?: boolean;
 	/** Notify on plugin load about subscriptions renewing within the next few days. */
 	subscriptionReminders?: boolean;
 	/** How many days ahead a subscription renewal reminder fires. */
@@ -88,6 +93,7 @@ export const DEFAULT_SETTINGS: FinanceSettings = {
 	budgetAlertThreshold: 0.9,
 	subscriptionReminders: true,
 	subscriptionReminderDays: 3,
+	tipsEnabled: true,
 };
 
 const TX_COLUMNS: (keyof Transaction)[] = [
