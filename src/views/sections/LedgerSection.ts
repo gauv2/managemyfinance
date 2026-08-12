@@ -1,7 +1,8 @@
 import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
+import { formatMoney } from "../../money";
 import type FinancePlugin from "../../main";
-import type { Transaction } from "../../types";
+import type { ReviewStatus, Transaction } from "../../types";
 import { categoryChainChip, emptyState, icon } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
 
@@ -17,6 +18,8 @@ interface LedgerFilterState {
 	categorySecondaryId: string;
 	dateFrom: string;
 	dateTo: string;
+	/** Review state to show: "" for all, otherwise a ReviewStatus. Mirrors the Review page's filter. */
+	reviewStatus: "" | ReviewStatus;
 }
 
 interface LedgerSortState {
@@ -37,6 +40,7 @@ const filterState: LedgerFilterState = {
 	categorySecondaryId: "",
 	dateFrom: "",
 	dateTo: "",
+	reviewStatus: "",
 };
 
 const sortState: LedgerSortState = {
@@ -118,6 +122,17 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		});
 	}
 	populateSecondaryFilter(primarySelect.value, filterState.categorySecondaryId);
+
+	const reviewSelect = filterRow.createEl("select", { cls: "fp-filter-select" });
+	(
+		[
+			["", "Any review state"],
+			["new", "Needs review"],
+			["flagged", "Flagged"],
+			["approved", "Approved"],
+		] as ["" | ReviewStatus, string][]
+	).forEach(([value, label]) => reviewSelect.createEl("option", { text: label, value }));
+	reviewSelect.value = filterState.reviewStatus;
 
 	const dateFrom = filterRow.createEl("input", { type: "date", cls: "fp-filter-date" });
 	dateFrom.value = filterState.dateFrom;
@@ -202,16 +217,23 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	}
 
 	function appendRow(t: Transaction): void {
-		const tr = tbody.createEl("tr", { cls: "fp-ledger-row" });
+		const status = t.review ?? "new";
+		const tr = tbody.createEl("tr", { cls: `fp-ledger-row fp-review-${status}` });
 		tr.addEventListener("click", () => new TransactionDetailModal(plugin.app, plugin, t).open());
 		tr.createEl("td", { text: t.date, cls: "fp-cell-date" });
-		tr.createEl("td", { text: t.description, cls: "fp-sensitive" });
+		const descCell = tr.createEl("td", { cls: "fp-sensitive" });
+		descCell.setText(t.description);
+		if (status !== "new") {
+			const mark = descCell.createSpan({ cls: `fp-review-mark is-${status}` });
+			icon(mark, status === "approved" ? "check" : "flag");
+			mark.setAttribute("title", status === "approved" ? "Reviewed and approved" : "Flagged during review");
+		}
 		if (showAccountColumn) tr.createEl("td", { text: accountById.get(t.accountId)?.name ?? "—" });
 		const catCell = tr.createEl("td");
 		const chain = categoryChain(store.categories, t.categoryId);
 		categoryChainChip(catCell, chain.primary, chain.secondary);
 		const amtCell = tr.createEl("td", { cls: "fp-cell-amount fp-money " + (t.amount < 0 ? "is-negative" : "is-positive") });
-		amtCell.setText(new Intl.NumberFormat("en-IE", { style: "currency", currency: t.currency || "EUR" }).format(t.amount));
+		amtCell.setText(formatMoney(t.amount, { currency: t.currency || "EUR" }));
 	}
 
 	function draw(): void {
@@ -220,6 +242,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		filterState.accountId = accountSelect ? accountSelect.value : "";
 		filterState.categoryPrimaryId = primarySelect.value;
 		filterState.categorySecondaryId = secondarySelect.value;
+		filterState.reviewStatus = reviewSelect.value as "" | ReviewStatus;
 		filterState.dateFrom = dateFrom.value;
 		filterState.dateTo = dateTo.value;
 
@@ -239,13 +262,14 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 				if (resolvePrimaryId(store.categories, t.categoryId) !== primaryFilter) return false;
 				return !secondaryFilter || t.categoryId === secondaryFilter;
 			})
+			.filter((t) => !filterState.reviewStatus || (t.review ?? "new") === filterState.reviewStatus)
 			.filter((t) => !from || t.date >= from)
 			.filter((t) => !to || t.date <= to)
 			.sort(compareTransactions);
 
 		const total = filtered.reduce((sum, t) => sum + t.amount, 0);
 		summaryCountVal.setText(String(filtered.length));
-		summaryTotalVal.setText(new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" }).format(total));
+		summaryTotalVal.setText(formatMoney(total));
 		summaryTotalVal.addClass("fp-money");
 		summaryTotalVal.removeClass("is-negative", "is-positive");
 		summaryTotalVal.addClass(total < 0 ? "is-negative" : "is-positive");
@@ -267,6 +291,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		draw();
 	});
 	secondarySelect.addEventListener("change", draw);
+	reviewSelect.addEventListener("change", draw);
 	dateFrom.addEventListener("change", draw);
 	dateTo.addEventListener("change", draw);
 	clearBtn.addEventListener("click", () => {
@@ -274,6 +299,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		if (accountSelect) accountSelect.value = "";
 		primarySelect.value = "";
 		populateSecondaryFilter("", "");
+		reviewSelect.value = "";
 		dateFrom.value = "";
 		dateTo.value = "";
 		draw();

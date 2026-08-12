@@ -1,5 +1,6 @@
 import { setIcon } from "obsidian";
 import { primaryCategories, secondaryCategoriesOf } from "../categories";
+import { decimalSeparator, formatMoney, formatMoneyForInput, parseMoney } from "../money";
 import type { Category } from "../types";
 
 export type Tone = "good" | "warn" | "bad" | "neutral";
@@ -158,6 +159,109 @@ export function tabSwitcher(container: HTMLElement, tabs: { label: string; rende
 			panel.removeClass("is-hidden");
 		});
 	});
+}
+
+export interface MoneyInputHandle {
+	input: HTMLInputElement;
+	/** The parsed amount, or undefined when the field is blank or unreadable. */
+	value: () => number | undefined;
+	setValue: (amount: number | undefined) => void;
+	/** Repoints the echo at a different currency, e.g. after a paired currency dropdown changes. */
+	setCurrency: (currency: string) => void;
+	/** False only when the field holds text that isn't an amount — a blank field is valid (= unset). */
+	isValid: () => boolean;
+}
+
+/**
+ * A money field that accepts whatever separator convention the user happens to type — "1.234,56",
+ * "1,234.56", "1234.56" and "€ 1 234,56" all land on the same number — and echoes the amount it
+ * actually read back underneath, so the interpretation is visible before anything is saved.
+ *
+ * Deliberately `type="text"`, not `type="number"`: a number input silently discards any value its own
+ * locale can't read, so typing "1.234,56" into one leaves an empty field and no explanation.
+ */
+export function moneyInput(
+	parent: HTMLElement,
+	opts: {
+		value?: number;
+		currency?: string;
+		placeholder?: string;
+		/** Rejects negatives (e.g. a subscription cost); defaults to allowing them (e.g. a balance). */
+		allowNegative?: boolean;
+		cls?: string;
+		onChange?: (value: number | undefined) => void;
+	} = {}
+): MoneyInputHandle {
+	const wrap = parent.createDiv({ cls: ["fp-money-input", opts.cls].filter(Boolean).join(" ") });
+	let currency = opts.currency;
+	const sep = decimalSeparator();
+	const input = wrap.createEl("input", {
+		type: "text",
+		cls: "fp-money-input-field",
+		attr: {
+			inputmode: "decimal",
+			autocomplete: "off",
+			placeholder: opts.placeholder ?? `0${sep}00`,
+		},
+	});
+	input.value = formatMoneyForInput(opts.value);
+	const echo = wrap.createDiv({ cls: "fp-money-input-echo" });
+
+	function parsed(): number | undefined {
+		const raw = input.value.trim();
+		if (!raw) return undefined;
+		const n = parseMoney(raw);
+		if (n === undefined) return undefined;
+		return opts.allowNegative === false ? Math.abs(n) : n;
+	}
+
+	function unreadable(): boolean {
+		return input.value.trim() !== "" && parseMoney(input.value) === undefined;
+	}
+
+	function renderEcho(): void {
+		echo.empty();
+		echo.removeClass("is-error");
+		const raw = input.value.trim();
+		if (!raw) {
+			echo.setText("");
+			return;
+		}
+		if (unreadable()) {
+			echo.addClass("is-error");
+			echo.setText(`Can't read "${raw}" as an amount`);
+			return;
+		}
+		const n = parsed();
+		echo.setText(`= ${formatMoney(n ?? 0, { currency })}`);
+	}
+
+	input.addEventListener("input", () => {
+		renderEcho();
+		opts.onChange?.(parsed());
+	});
+	// Rewriting the field on blur turns whatever was typed into this vault's own convention, so the
+	// same amount doesn't read two different ways depending on which field it was entered in.
+	input.addEventListener("blur", () => {
+		const n = parsed();
+		if (n !== undefined) input.value = formatMoneyForInput(n);
+		renderEcho();
+	});
+	renderEcho();
+
+	return {
+		input,
+		value: parsed,
+		setValue: (amount) => {
+			input.value = formatMoneyForInput(amount);
+			renderEcho();
+		},
+		setCurrency: (next) => {
+			currency = next;
+			renderEcho();
+		},
+		isValid: () => !unreadable(),
+	};
 }
 
 export function emptyState(

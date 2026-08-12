@@ -1,15 +1,19 @@
 import { Notice } from "obsidian";
 import { parseCSV } from "../csv";
-import { applyRules, buildAliasLookup } from "../import/categorize";
+import { aiCategorize, describeAiResult } from "../ai/categorizer";
+import { autoCategorize, effectiveRules } from "../import/autoCategorize";
+import { applyMemory, applyPendingSuggestions, learnFromHistory, unknownMerchants } from "../import/merchantMemory";
+import { buildAliasLookup } from "../import/categorize";
 import { applyColumnMapping, COLUMN_MAPPING_FIELDS, emptyColumnMapping, guessColumnMapping } from "../import/columnMapping";
 import { detectFormat } from "../import/detect";
 import { ingAccountIbans, parseIngRows } from "../import/ingParser";
 import { parseTradeRepublicRows } from "../import/tradeRepublicParser";
 import { extractTransactionTables, DetectedTable } from "../import/xlsxWorkbook";
 import type FinancePlugin from "../main";
+import { formatMoney } from "../money";
 import type { Transaction } from "../types";
 import { badge, icon, renderCategoryPicker } from "../ui/dom";
-import { WizardModal, WizardStep } from "./WizardModal";
+import { WizardModal, type WizardControls, WizardStep } from "./WizardModal";
 
 const FORMAT_LABEL: Record<DetectedTable["format"], string> = {
 	ing: "ING bank",
@@ -32,6 +36,12 @@ export function openImportWizard(plugin: FinancePlugin): void {
 	let ibans: string[] = [];
 	let ibanAccountMap = new Map<string, string>();
 	let parsed: Transaction[] = [];
+	let fileHits = 0;
+	let memoryHits = 0;
+	let ruleHits = 0;
+	let aiHits = 0;
+	/** Set once the Categorize step has auto-run the AI, so re-rendering it doesn't fire again. */
+	let aiAutoRun = false;
 	let loadError: string | null = null;
 
 	function setTables(name: string, newTables: DetectedTable[]): void {
@@ -74,12 +84,100 @@ export function openImportWizard(plugin: FinancePlugin): void {
 		}
 	}
 
+	/**
+	 * "Ask Claude" for the rows that survived merchant memory and the rule set.
+	 *
+	 * Always rendered when something is uncategorized — disabled with a route to the setting when the
+	 * feature is off, rather than hidden. A button you cannot find is indistinguishable from one that
+	 * does not exist.
+	 */
+	function renderAiAction(c: HTMLElement, uncategorized: Transaction[], wizard: WizardControls): void {
+		const ai = plugin.settings.ai;
+		const pending = unknownMerchants(uncategorized, store.merchants);
+		const row = c.createDiv({ cls: "fp-ai-action" });
+
+		if (!ai?.enabled) {
+			icon(row, "sparkles", "fp-ai-action-icon");
+			row.createSpan({
+				cls: "fp-ai-action-text",
+				text: `Claude can identify the ${pending.length} unrecognized merchant${pending.length === 1 ? "" : "s"} behind these — it's switched off.`,
+			});
+			const openBtn = row.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+			icon(openBtn, "settings");
+			openBtn.createSpan({ text: "Turn on AI categorization" });
+			openBtn.addEventListener("click", () => plugin.openVaultSettings("ai"));
+			return;
+		}
+
+		if (pending.length === 0) {
+			icon(row, "check-circle-2", "fp-ai-action-icon");
+			row.createSpan({ cls: "fp-ai-action-text", text: "Claude has already seen every merchant here." });
+			return;
+		}
+
+		icon(row, "sparkles", "fp-ai-action-icon");
+		const text = row.createDiv({ cls: "fp-ai-action-text" });
+		// Real per-merchant counts. The previous version divided total rows by merchant count, which
+		// reported "1 merchant · 260 rows each" when that merchant covered a single row.
+		const covered = pending.reduce((sum, m) => sum + m.count, 0);
+		text.createDiv({
+			text: `${pending.length} unrecognized merchant${pending.length === 1 ? "" : "s"}, covering ${covered} of these ${uncategorized.length} rows.`,
+		});
+		// Naming them makes the number actionable: 29 merchants is a decision you can reason about,
+		// 223 rows is not.
+		text.createDiv({
+			cls: "fp-ai-action-names",
+			text: pending.slice(0, 8).map((m) => `${m.name} (${m.count})`).join(" · ") + (pending.length > 8 ? ` · +${pending.length - 8} more` : ""),
+		});
+
+		const runBtn = row.createEl("button", { cls: "fp-btn fp-btn-primary" });
+		icon(runBtn, "sparkles");
+		const label = runBtn.createSpan({ text: "Ask Claude" });
+		runBtn.setAttribute("title", "Sends only the merchant names and your category tree — no amounts, dates or account details.");
+		runBtn.addEventListener("click", async () => {
+			runBtn.disabled = true;
+			label.setText("Asking…");
+			try {
+				const result = await aiCategorize(uncategorized, store.categories, store.merchants, ai, (done, total) =>
+					label.setText(`Asking… ${done}/${total}`)
+				);
+				store.merchants = result.memory;
+				await store.saveMerchants();
+				// These rows aren't in the store yet, so the answers are applied to the parsed batch
+				// in memory and land in the ledger when the import completes.
+				for (const tx of parsed) {
+					const patch = result.patches.get(tx.id);
+					if (!patch?.categoryId) continue;
+					tx.categoryId = patch.categoryId;
+					// Carried into the ledger with the row, so an uncertain answer is findable in Review
+					// instead of being indistinguishable from a confident one.
+					if (patch.review) tx.review = patch.review;
+				}
+				aiHits += result.patches.size;
+				new Notice(describeAiResult(result, result.patches.size), 10000);
+				c.empty();
+				void steps[2].render(c, wizard);
+				wizard.refreshFooter();
+			} catch (err) {
+				new Notice(`AI categorization failed: ${err instanceof Error ? err.message : String(err)}`, 12000);
+				runBtn.disabled = false;
+				label.setText("Ask Claude");
+			}
+		});
+
+		// Opt-in: run it without being asked, so an import lands fully categorized in one pass.
+		if (ai.autoOnImport && !aiAutoRun) {
+			aiAutoRun = true;
+			runBtn.click();
+		}
+	}
+
 	const steps: WizardStep[] = [
 		{
 			id: "source",
 			title: "Source",
 			icon: "file-up",
-			render: (c) => {
+			render: (c, wizard) => {
 				c.createEl("h3", { text: "Pick a file to import" });
 				c.createEl("p", {
 					cls: "fp-step-desc",
@@ -126,7 +224,8 @@ export function openImportWizard(plugin: FinancePlugin): void {
 
 				function refresh() {
 					c.empty();
-					steps[0].render(c);
+					void steps[0].render(c, wizard);
+					wizard.refreshFooter();
 				}
 			},
 			canGoNext: () => !!selectedFile,
@@ -135,7 +234,7 @@ export function openImportWizard(plugin: FinancePlugin): void {
 			id: "preview",
 			title: "Preview",
 			icon: "table",
-			render: (c) => {
+			render: (c, wizard) => {
 				c.createEl("h3", { text: "Preview & format" });
 				const formatRow = c.createDiv({ cls: "fp-format-row" });
 				const hasUnknown = tables.some((t) => t.format === "unknown");
@@ -169,28 +268,93 @@ export function openImportWizard(plugin: FinancePlugin): void {
 					c.createEl("p", {
 						cls: "fp-step-desc",
 						text: hasUnknown
-							? "We didn't recognize this file's columns — pick which of your file's columns holds each piece of data. Date, Description, and Amount are required; everything else is optional."
-							: "Column mapping (auto-detected) — review or override which column holds each piece of data before importing.",
+							? "We didn't recognize this file's columns, so nothing has been read from it yet — tell us which of your columns holds each piece of data. Date, Description and Amount are required; the rest are optional."
+							: "Column mapping (auto-detected) — check that each ledger field points at the right column before importing.",
 					});
+
+					// Live status: what's been mapped, and what's still missing. Rendered before the grid
+					// so the answer to "is this file understood yet?" is the first thing on screen, and
+					// repainted on every change so it always describes the current selection.
+					const statusEl = c.createDiv({ cls: "fp-map-status" });
+					const renderMapStatus = (): void => {
+						statusEl.empty();
+						const mapped = COLUMN_MAPPING_FIELDS.filter((f) => f.key !== "debitValue" && mapping[f.key]);
+						const missingRequired = COLUMN_MAPPING_FIELDS.filter((f) => f.required && !mapping[f.key]);
+
+						const head = statusEl.createDiv({ cls: "fp-map-status-head" });
+						if (missingRequired.length > 0) {
+							icon(head, "alert-triangle", "fp-map-status-icon is-warn");
+							head.createSpan({
+								cls: "fp-map-status-title",
+								text:
+									mapped.length === 0
+										? "Not mapped yet — this file can't be read until the required fields are set"
+										: `Still missing ${missingRequired.map((f) => f.label).join(", ")}`,
+							});
+						} else {
+							icon(head, "check-circle-2", "fp-map-status-icon is-ok");
+							head.createSpan({
+								cls: "fp-map-status-title",
+								text: `Mapped — ${mapped.length} field${mapped.length === 1 ? "" : "s"} will be read from this file`,
+							});
+						}
+
+						if (mapped.length > 0) {
+							const list = statusEl.createDiv({ cls: "fp-map-status-list" });
+							mapped.forEach((f) => {
+								const item = list.createDiv({ cls: "fp-map-status-item" });
+								item.createSpan({ cls: "fp-map-status-field", text: f.label });
+								icon(item, "arrow-left", "fp-map-status-arrow");
+								item.createSpan({ cls: "fp-map-status-col", text: mapping[f.key] });
+							});
+						}
+
+						const unmapped = COLUMN_MAPPING_FIELDS.filter((f) => f.key !== "debitValue" && !f.required && !mapping[f.key]);
+						if (unmapped.length > 0 && missingRequired.length === 0) {
+							statusEl.createDiv({
+								cls: "fp-map-status-note",
+								text: `Not mapped (optional): ${unmapped.map((f) => f.label).join(", ")}.`,
+							});
+						}
+					};
 
 					const mapGrid = c.createDiv({ cls: "fp-column-mapping-grid" });
 					const headers = mappableHeaders();
 					COLUMN_MAPPING_FIELDS.forEach((field) => {
 						const row = mapGrid.createDiv({ cls: "fp-form-row" });
-						row.createEl("label", { text: field.label });
+						const lbl = row.createEl("label");
+						lbl.createSpan({ text: field.label });
+						lbl.createSpan({
+							cls: field.required ? "fp-field-req" : "fp-field-opt",
+							text: field.required ? "required" : "optional",
+						});
 						const select = row.createEl("select");
 						select.createEl("option", { text: "— none —", value: "" });
 						headers.forEach((h) => {
 							const opt = select.createEl("option", { text: h, value: h });
 							if (mapping[field.key] === h) opt.selected = true;
 						});
-						select.addEventListener("change", () => (mapping[field.key] = select.value));
+						select.addEventListener("change", () => {
+							mapping[field.key] = select.value;
+							renderMapStatus();
+							// The Next button's enabled state depends on the required fields being set.
+							wizard.refreshFooter();
+						});
 					});
+					renderMapStatus();
 					const dvRow = mapGrid.createDiv({ cls: "fp-form-row" });
-					dvRow.createEl("label", { text: "Value that means \"money out\" (only used if Debit/Credit is mapped)" });
-					const dvInput = dvRow.createEl("input", { type: "text", attr: { placeholder: "e.g. Debit, DR, -" } });
+					const dvLabel = dvRow.createEl("label");
+					dvLabel.createSpan({ text: "\"Money out\" value" });
+					dvLabel.createSpan({ cls: "fp-field-opt", text: "optional" });
+					// Control and caveat share one wrapper so the row still occupies exactly the two subgrid
+					// tracks every other row does — a third direct child would overlap the field.
+					const dvControl = dvRow.createDiv({ cls: "fp-field-control" });
+					const dvInput = dvControl.createEl("input", { type: "text", attr: { placeholder: "e.g. Debit, DR, -" } });
 					dvInput.value = mapping.debitValue;
 					dvInput.addEventListener("input", () => (mapping.debitValue = dvInput.value));
+					// The caveat lives under the field rather than inside its label, where it ran to three
+					// lines and dragged the whole row out of alignment.
+					dvControl.createDiv({ cls: "fp-field-hint", text: "Only used when Debit/Credit is mapped." });
 				}
 
 				if (hasIng) {
@@ -261,6 +425,18 @@ export function openImportWizard(plugin: FinancePlugin): void {
 					c.createEl("p", { cls: "fp-step-desc", text: `${totalRows} rows found across ${tables.length} sheet${tables.length === 1 ? "" : "s"}.` });
 				}
 			},
+			blockedReason: () => {
+				if (tables.length === 0) return "No readable data in this file.";
+				const missing = COLUMN_MAPPING_FIELDS.filter((f) => f.required && !mapping[f.key]);
+				if (mappableHeaders().length > 0 && missing.length > 0) {
+					return `Map ${missing.map((f) => f.label).join(", ")} first.`;
+				}
+				if (tables.some((t) => t.format === "unknown") && !genericAccountId) return "Choose an account to import into.";
+				if (tables.some((t) => t.format === "ing") && ibans.length > 1 && !ibans.every((i) => ibanAccountMap.has(i))) {
+					return "Map every IBAN to an account first.";
+				}
+				return undefined;
+			},
 			canGoNext: () => {
 				if (tables.length === 0) return false;
 				const mappingOk = mappableHeaders().length === 0 || (!!mapping.date && !!mapping.description && !!mapping.amount);
@@ -297,29 +473,105 @@ export function openImportWizard(plugin: FinancePlugin): void {
 						);
 					}
 				}
-				for (const tx of parsed) {
-					if (!tx.categoryId) tx.categoryId = applyRules(tx, store.rules);
+				// Rows the export categorized itself, via its own Main Cat./Sub Cat. columns — counted
+				// before anything else runs, since the parser has already applied them.
+				fileHits = parsed.filter((tx) => tx.categoryId).length;
+
+				// Merchant memory first: a shop you have already filed once is settled, and nothing a rule
+				// or a model says should override a decision you made yourself.
+				let learned = learnFromHistory(store.transactions, store.merchants);
+				// Apply answers already given but never written — see applyPendingSuggestions().
+				if (plugin.settings.ai?.applyLowConfidence !== false) {
+					const pending = applyPendingSuggestions(learned);
+					learned = pending.map;
+					store.merchants = pending.map;
+					if (pending.keys.size > 0) void store.saveMerchants();
 				}
+				const fromMemory = applyMemory(parsed, learned, store.categories);
+				for (const tx of parsed) {
+					const categoryId = fromMemory.patches.get(tx.id);
+					if (categoryId) tx.categoryId = categoryId;
+				}
+				memoryHits = fromMemory.patches.size;
+
+				// Then the shipped merchant rules and the user's own, plus the bank's own type column
+				// for the unambiguous cases (ATM withdrawals, interest) — see autoCategorize().
+				const rules = effectiveRules(store.categories, store.rules);
+				const { patches } = autoCategorize(parsed, store.categories, rules);
+				for (const tx of parsed) {
+					const categoryId = patches.get(tx.id);
+					if (categoryId) tx.categoryId = categoryId;
+				}
+				ruleHits = patches.size;
 			},
 		},
 		{
 			id: "review",
 			title: "Categorize",
 			icon: "tags",
-			render: (c) => {
+			render: (c, wizard) => {
 				const uncategorized = parsed.filter((t) => !t.categoryId);
+				const done = parsed.length - uncategorized.length;
 				c.createEl("h3", { text: "Review categorization" });
-				c.createEl("p", {
-					cls: "fp-step-desc",
-					text: `${parsed.length - uncategorized.length} auto-categorized, ${uncategorized.length} need a category.`,
+
+				// Says what was matched and by what, then names the biggest categories — a bare count
+				// gives no way to tell "the rules worked" from "the rules found nothing".
+				const summary = c.createDiv({ cls: "fp-map-status" });
+				const head = summary.createDiv({ cls: "fp-map-status-head" });
+				icon(head, done > 0 ? "check-circle-2" : "alert-triangle", `fp-map-status-icon ${done > 0 ? "is-ok" : "is-warn"}`);
+				head.createSpan({
+					cls: "fp-map-status-title",
+					text:
+						done > 0
+							? `${done} of ${parsed.length} auto-categorized, ${uncategorized.length} still need a category`
+							: `Nothing matched — all ${parsed.length} need a category`,
 				});
+				if (done > 0) {
+					// Every contributor named. The previous version reported only memory and rules, so on
+					// an export that carries its own category column the numbers didn't add up.
+					const parts = [
+						fileHits > 0 ? `${fileHits} from the file's own category column` : "",
+						`${memoryHits} from merchants you've filed before`,
+						`${ruleHits} from the built-in rules`,
+						aiHits > 0 ? `${aiHits} from Claude` : "",
+					].filter(Boolean);
+					summary.createDiv({ cls: "fp-map-status-note", text: `${parts.join(", ")}.` });
+				}
+
+				if (done > 0) {
+					const byCategory = new Map<string, number>();
+					for (const tx of parsed) {
+						if (!tx.categoryId) continue;
+						const name = store.categories.find((cat) => cat.id === tx.categoryId)?.name ?? "Unknown";
+						byCategory.set(name, (byCategory.get(name) ?? 0) + 1);
+					}
+					const list = summary.createDiv({ cls: "fp-map-status-list" });
+					Array.from(byCategory.entries())
+						.sort((a, b) => b[1] - a[1])
+						.slice(0, 8)
+						.forEach(([name, n]) => {
+							const item = list.createDiv({ cls: "fp-map-status-item" });
+							item.createSpan({ cls: "fp-map-status-field", text: name });
+							item.createSpan({ cls: "fp-map-status-col", text: `${n}` });
+						});
+				}
+
+				summary.createDiv({
+					cls: "fp-map-status-note",
+					text: "Anything left uncategorized still imports — it lands in the Review queue, where you can categorize in bulk rather than one row at a time here.",
+				});
+
+				// The AI step belongs here as much as on the Review page: this is where you are actually
+				// looking at the rows nothing could identify.
+				if (uncategorized.length > 0) renderAiAction(c, uncategorized, wizard);
+
 				const list = c.createDiv({ cls: "fp-review-list" });
 				const shown = uncategorized.slice(0, 25);
 				shown.forEach((tx) => {
 					const row = list.createDiv({ cls: "fp-review-row" });
 					row.createDiv({
 						cls: "fp-review-desc",
-						text: `${tx.date}  ·  ${tx.description}  ·  € ${tx.amount.toFixed(2)}`,
+						text: `${tx.date}  ·  ${tx.description}  ·  ${formatMoney(tx.amount, { currency: tx.currency || "EUR" })}`,
 					});
 					renderCategoryPicker(row, {
 						categories: store.categories,
@@ -332,7 +584,7 @@ export function openImportWizard(plugin: FinancePlugin): void {
 				if (uncategorized.length > shown.length) {
 					c.createEl("p", {
 						cls: "fp-step-desc",
-						text: `+ ${uncategorized.length - shown.length} more — categorize the rest from the Ledger afterwards.`,
+						text: `+ ${uncategorized.length - shown.length} more — do those from the Review page after importing, where you can select many at once.`,
 					});
 				}
 			},
@@ -364,5 +616,6 @@ export function openImportWizard(plugin: FinancePlugin): void {
 		subtitle: "Bring in a bank or broker export without re-typing anything.",
 		icon: "download",
 		steps,
+		buildStamp: `v${plugin.manifest.version} · loaded ${plugin.loadedAt}`,
 	}).open();
 }

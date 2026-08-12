@@ -1,11 +1,12 @@
 import { App, FuzzySuggestModal, Modal, Notice, TFile } from "obsidian";
 import { categoryChain } from "../categories";
+import { formatMoney } from "../money";
 import type FinancePlugin from "../main";
-import type { Transaction } from "../types";
-import { categoryChainChip, icon, renderCategoryPicker } from "../ui/dom";
+import type { ReviewStatus, Transaction } from "../types";
+import { badge, categoryChainChip, icon, renderCategoryPicker } from "../ui/dom";
 
 function formatAmount(tx: Transaction): string {
-	return new Intl.NumberFormat("en-IE", { style: "currency", currency: tx.currency || "EUR" }).format(tx.amount);
+	return formatMoney(tx.amount, { currency: tx.currency || "EUR" });
 }
 
 function row(container: HTMLElement, label: string, value: string | HTMLElement, opts?: { sensitive?: boolean }): void {
@@ -85,6 +86,10 @@ export class TransactionDetailModal extends Modal {
 			},
 		});
 
+		const reviewRow = body.createDiv({ cls: "fp-detail-row" });
+		reviewRow.createDiv({ cls: "fp-detail-label", text: "Review" });
+		this.renderReview(reviewRow.createDiv({ cls: "fp-detail-value" }));
+
 		row(body, "Type", this.tx.type || "—");
 		if (this.tx.code) row(body, "Code", this.tx.code);
 		row(body, "Source", this.tx.source);
@@ -120,6 +125,37 @@ export class TransactionDetailModal extends Modal {
 		icon(closeBtn, "check");
 		closeBtn.createSpan({ text: "Close" });
 		closeBtn.addEventListener("click", () => this.close());
+	}
+
+	/** The same three-state control the Review page uses, so a transaction opened from anywhere can be
+	 *  signed off without going back to the queue to find it again. */
+	private renderReview(container: HTMLElement): void {
+		container.empty();
+		const status: ReviewStatus = this.tx.review ?? "new";
+		const meta: Record<ReviewStatus, { label: string; tone: "good" | "warn" | "neutral" }> = {
+			new: { label: "Needs review", tone: "neutral" },
+			approved: { label: "Approved", tone: "good" },
+			flagged: { label: "Flagged", tone: "warn" },
+		};
+		badge(container, meta[status].label, meta[status].tone);
+
+		const set = async (next: ReviewStatus): Promise<void> => {
+			const review = next === "new" ? undefined : next;
+			await this.plugin.store.updateTransaction(this.tx.id, { review });
+			this.tx.review = review;
+			this.plugin.refreshViews();
+			this.renderReview(container);
+		};
+
+		const approveBtn = container.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" + (status === "approved" ? " is-active" : "") });
+		icon(approveBtn, "check");
+		approveBtn.setAttribute("title", status === "approved" ? "Mark as needing review again" : "Approve");
+		approveBtn.addEventListener("click", () => void set(status === "approved" ? "new" : "approved"));
+
+		const flagBtn = container.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" + (status === "flagged" ? " is-active" : "") });
+		icon(flagBtn, "flag");
+		flagBtn.setAttribute("title", status === "flagged" ? "Remove flag" : "Flag for a decision later");
+		flagBtn.addEventListener("click", () => void set(status === "flagged" ? "new" : "flagged"));
 	}
 
 	/** Renders the current attachment state into `container`, re-rendering itself in place after any change. */

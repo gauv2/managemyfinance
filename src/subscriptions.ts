@@ -1,3 +1,4 @@
+import { formatMoney } from "./money";
 import type { Subscription, SubscriptionBillingCycle } from "./types";
 
 export const SUBSCRIPTION_CATEGORIES = [
@@ -18,8 +19,10 @@ export function subCurrency(sub: Pick<Subscription, "currency">): string {
 	return sub.currency ?? "EUR";
 }
 
-export function formatMoney(n: number, currency: string): string {
-	return new Intl.NumberFormat("en-IE", { style: "currency", currency }).format(n);
+/** A subscription's own cost in its own currency — totals across currencies go through the EUR
+ *  conversion helpers below instead. Separator convention follows the vault's number-format setting. */
+export function formatSubMoney(n: number, currency: string): string {
+	return formatMoney(n, { currency });
 }
 
 export const BILLING_CYCLE_LABEL: Record<SubscriptionBillingCycle, string> = {
@@ -42,6 +45,44 @@ export function monthlyCost(sub: Subscription): number {
 
 export function yearlyCost(sub: Subscription): number {
 	return monthlyCost(sub) * 12;
+}
+
+/**
+ * The period a figure is *quoted* in, which is a separate question from `billingCycle`, the period it
+ * is actually *charged* in. A quarterly subscription is billed four times a year and can still be
+ * quoted per month or per year; conflating the two is why "monthly total" and "yearly total" used to
+ * be the only two fixed numbers on the page.
+ */
+export type DisplayCycle = "monthly" | "yearly";
+
+/** The Subscriptions page's setting: a fixed basis for everything, or let each subscription choose. */
+export type SubscriptionViewMode = DisplayCycle | "per-subscription";
+
+export const DISPLAY_CYCLE_SUFFIX: Record<DisplayCycle, string> = {
+	monthly: "/mo",
+	yearly: "/yr",
+};
+
+export const DISPLAY_CYCLE_LABEL: Record<DisplayCycle, string> = {
+	monthly: "Per month",
+	yearly: "Per year",
+};
+
+/** Which basis one subscription is quoted in: the page's, unless the page defers to each subscription. */
+export function effectiveDisplayCycle(sub: Pick<Subscription, "displayCycle">, view: SubscriptionViewMode | undefined): DisplayCycle {
+	if (view === "monthly" || view === "yearly") return view;
+	return sub.displayCycle ?? "monthly";
+}
+
+/** Everything normalises through the monthly figure, so switching basis is exactly a factor of 12 —
+ *  a yearly-billed subscription and a weekly one stay comparable in either. */
+export function costForCycle(sub: Subscription, cycle: DisplayCycle): number {
+	return cycle === "yearly" ? yearlyCost(sub) : monthlyCost(sub);
+}
+
+/** Scales an already-monthly aggregate (a total, a chart value) into the requested basis. */
+export function scaleMonthly(monthlyAmount: number, cycle: DisplayCycle): number {
+	return cycle === "yearly" ? monthlyAmount * 12 : monthlyAmount;
 }
 
 /** Manual, user-maintained rate table (Settings → Currency) — 1 unit of the key currency = that many EUR. No network calls, ever. */

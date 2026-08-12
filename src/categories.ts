@@ -48,3 +48,53 @@ export function categoryChain(categories: Category[], categoryId: string | undef
 export function descendantIds(categories: Category[], primaryId: string): string[] {
 	return [primaryId, ...secondaryCategoriesOf(categories, primaryId).map((c) => c.id)];
 }
+
+/**
+ * Whether `categoryId` may be moved under `newParentId` (or to the top level, when that's undefined).
+ *
+ * The category model is deliberately exactly two levels deep — every rollup, budget and chart in the
+ * app assumes a category is either a primary or one step below one. These rules are what keep that
+ * true, so the check lives here next to the readers that depend on it rather than in the UI:
+ *
+ *   - nothing can be its own parent, or move to where it already is;
+ *   - a parent must itself be a primary, otherwise the result is three levels deep;
+ *   - a category that has children of its own can't become a child, for the same reason.
+ */
+export function canReparent(categories: Category[], categoryId: string, newParentId: string | undefined): boolean {
+	const cat = categories.find((c) => c.id === categoryId);
+	if (!cat) return false;
+	if (newParentId === categoryId) return false;
+	if ((cat.parentId ?? undefined) === (newParentId ?? undefined)) return false;
+
+	if (newParentId === undefined) return true;
+
+	const parent = categories.find((c) => c.id === newParentId);
+	if (!parent || parent.parentId) return false;
+	return secondaryCategoriesOf(categories, categoryId).length === 0;
+}
+
+/** The categories `categoryId` could legally be moved under, plus the top level. UI-facing companion
+ *  to canReparent, so the dropdown only ever offers moves that will actually be accepted. */
+export function reparentTargets(categories: Category[], categoryId: string): Category[] {
+	return primaryCategories(categories).filter((p) => canReparent(categories, categoryId, p.id));
+}
+
+/**
+ * Applies a move, returning a new list. Also drops `budgetMode` when a category stops being a primary,
+ * since "budget is the sum of my subcategories" is meaningless for something that can't have any.
+ */
+export function reparented(categories: Category[], categoryId: string, newParentId: string | undefined): Category[] {
+	if (!canReparent(categories, categoryId, newParentId)) return categories;
+	return categories.map((c) => {
+		if (c.id !== categoryId) return c;
+		const moved: Category = { ...c };
+		if (newParentId === undefined) {
+			delete moved.parentId;
+		} else {
+			moved.parentId = newParentId;
+			delete moved.budgetMode;
+			delete moved.defaultSecondariesSeeded;
+		}
+		return moved;
+	});
+}

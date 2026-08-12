@@ -24,12 +24,15 @@ export const COLUMN_MAPPING_FIELDS: ColumnMappingField[] = [
 	{ key: "date", label: "Date", required: true, guesses: ["date", "datum"] },
 	{ key: "description", label: "Description", required: true, guesses: ["description", "omschrijving", "memo", "name"] },
 	{ key: "amount", label: "Amount", required: true, guesses: ["amount", "bedrag", "value"] },
-	{ key: "counterparty", label: "Counterparty (optional)", guesses: ["counterparty", "tegenrekening", "payee", "merchant"] },
-	{ key: "debitCredit", label: "Debit/Credit indicator (optional)", guesses: ["debit/credit", "direction", "type"] },
-	{ key: "currency", label: "Currency (optional)", guesses: ["currency", "valuta"] },
-	{ key: "type", label: "Transaction type (optional)", guesses: ["transaction type", "mutatiesoort", "category"] },
-	{ key: "notes", label: "Notes (optional)", guesses: ["notif", "mededelingen", "note", "memo"] },
-	{ key: "code", label: "Code (optional)", guesses: ["code"] },
+	// Labels stay short deliberately: they sit in a three-column grid, and a label that wraps to two
+	// lines used to push its own input a row lower than its neighbours'. Optional-ness is a marker
+	// beside the name now, not part of it.
+	{ key: "counterparty", label: "Counterparty", guesses: ["counterparty", "tegenrekening", "payee", "merchant"] },
+	{ key: "debitCredit", label: "Debit/Credit", guesses: ["debit/credit", "direction", "type"] },
+	{ key: "currency", label: "Currency", guesses: ["currency", "valuta"] },
+	{ key: "type", label: "Transaction type", guesses: ["transaction type", "mutatiesoort", "category"] },
+	{ key: "notes", label: "Notes", guesses: ["notif", "mededelingen", "note", "memo"] },
+	{ key: "code", label: "Code", guesses: ["code"] },
 ];
 
 export function emptyColumnMapping(): ColumnMapping {

@@ -4,6 +4,7 @@ import type FinancePlugin from "../main";
 import { CreateAccountModal } from "../modals/CreateAccountModal";
 import { ManageAccountsModal } from "../modals/ManageAccountsModal";
 import { ManagePortfoliosModal } from "../modals/ManagePortfoliosModal";
+import type { FinanceViewId } from "../store";
 import type { Account } from "../types";
 import { icon } from "../ui/dom";
 import { openCardWizard } from "../wizards/CardWizard";
@@ -11,6 +12,8 @@ import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { renderAccountPage } from "./sections/AccountPage";
 import { renderBudgetsSection } from "./sections/BudgetsSection";
 import { renderCardsSection } from "./sections/CardsSection";
+import { renderReviewSection } from "./sections/ReviewSection";
+import { renderSettingsSection } from "./sections/SettingsSection";
 import { renderSubscriptionsSection } from "./sections/SubscriptionsSection";
 
 /** Checking-like accounts first, then savings, then investing/crypto, then everything else (e.g. cash). */
@@ -22,9 +25,11 @@ interface NavTabDef {
 	icon: string;
 	isActive: boolean;
 	onClick: () => void;
+	/** Shown as a count pill on the tab when above zero — currently the unreviewed-transactions backlog. */
+	badgeCount?: number;
 }
 
-const DEFAULT_NAV_ORDER = ["all-accounts", "budgets", "subscriptions", "cards"];
+const DEFAULT_NAV_ORDER = ["all-accounts", "budgets", "subscriptions", "cards", "review"];
 
 function possessive(name: string): string {
 	const trimmed = name.trim();
@@ -138,6 +143,7 @@ export class FinanceView extends ItemView {
 	}
 
 	refresh(): void {
+		this.applyPrivacyClass();
 		this.applyMobileClass();
 		this.renderBrandTitle();
 		this.renderNav();
@@ -196,7 +202,7 @@ export class FinanceView extends ItemView {
 		this.renderBody();
 	}
 
-	private async selectView(view: "budgets" | "subscriptions" | "cards"): Promise<void> {
+	private async selectView(view: FinanceViewId): Promise<void> {
 		this.plugin.settings.activeView = view;
 		await this.plugin.saveSettings();
 		this.renderNav();
@@ -207,13 +213,6 @@ export class FinanceView extends ItemView {
 	 *  the view's own DOM subtree, so they only pick up privacy mode via a class shared that high up. */
 	private applyPrivacyClass(): void {
 		document.body.toggleClass("fp-privacy", !!this.plugin.settings.privacyMode);
-	}
-
-	private async togglePrivacy(): Promise<void> {
-		this.plugin.settings.privacyMode = !this.plugin.settings.privacyMode;
-		await this.plugin.saveSettings();
-		this.applyPrivacyClass();
-		this.renderNav();
 	}
 
 	/** Saved order, filtered to known tabs, then any tab missing from it (e.g. newly added) appended in default order. */
@@ -261,6 +260,7 @@ export class FinanceView extends ItemView {
 		});
 		icon(item, def.icon, "fp-nav-icon");
 		item.createSpan({ cls: "fp-nav-label", text: def.label });
+		if (def.badgeCount) item.createSpan({ cls: "fp-nav-count", text: String(def.badgeCount) });
 		icon(item, "grip-vertical", "fp-nav-drag-handle");
 		item.addEventListener("click", () => def.onClick());
 		this.wireDrag(item, def.id, (draggedId, targetId) => void this.reorderNavTabs(draggedId, targetId));
@@ -321,15 +321,16 @@ export class FinanceView extends ItemView {
 				isActive: activeView === "cards",
 				onClick: () => void this.selectView("cards"),
 			},
+			review: {
+				id: "review",
+				label: "Review",
+				icon: "check-check",
+				isActive: activeView === "review",
+				onClick: () => void this.selectView("review"),
+				badgeCount: this.plugin.store.transactions.filter((t) => (t.review ?? "new") === "new").length,
+			},
 		};
 		this.navTabOrder().forEach((id) => this.renderDraggableTab(tabDefs[id]));
-
-		const privacyOn = !!this.plugin.settings.privacyMode;
-		const privacyItem = this.navItemsEl.createDiv({ cls: "fp-nav-item fp-nav-item-ghost" + (privacyOn ? " is-privacy-on" : "") });
-		icon(privacyItem, privacyOn ? "eye-off" : "eye", "fp-nav-icon");
-		privacyItem.createSpan({ cls: "fp-nav-label", text: privacyOn ? "Amounts hidden" : "Hide amounts" });
-		privacyItem.setAttribute("title", "Blur every amount — hover one to peek. Useful when demoing the plugin.");
-		privacyItem.addEventListener("click", () => void this.togglePrivacy());
 
 		const accountById = new Map(this.plugin.store.accounts.map((a) => [a.id, a]));
 		const accounts = this.accountOrder()
@@ -391,27 +392,60 @@ export class FinanceView extends ItemView {
 			suggestBtn.addEventListener("click", () => void this.selectView("budgets"));
 		}
 
-		const settingsItem = this.navFooterEl.createDiv({ cls: "fp-nav-item fp-nav-item-settings" });
-		icon(settingsItem, "settings", "fp-nav-icon");
+		// Two entries on purpose: this plugin has two distinct settings surfaces, and the footer is where
+		// both are found. "Settings" is the app's own display preferences (a page in this workspace);
+		// "Vault settings" is Obsidian's modal, holding the data itself.
+		const settingsItem = this.navFooterEl.createDiv({
+			cls: "fp-nav-item fp-nav-item-settings" + (this.plugin.settings.activeView === "settings" ? " is-active" : ""),
+		});
+		icon(settingsItem, "sliders-horizontal", "fp-nav-icon");
 		settingsItem.createSpan({ cls: "fp-nav-label", text: "Settings" });
 		icon(settingsItem, "chevron-right", "fp-nav-item-chevron");
-		settingsItem.addEventListener("click", () => {
+		settingsItem.addEventListener("click", () => void this.selectView("settings"));
+
+		const vaultSettingsItem = this.navFooterEl.createDiv({ cls: "fp-nav-item fp-nav-item-settings fp-nav-item-ghost" });
+		icon(vaultSettingsItem, "database", "fp-nav-icon");
+		vaultSettingsItem.createSpan({ cls: "fp-nav-label", text: "Vault settings" });
+		icon(vaultSettingsItem, "external-link", "fp-nav-item-chevron");
+		vaultSettingsItem.setAttribute("title", "Data folder, accounts, categories, exchange rates, import, backup and restore");
+		vaultSettingsItem.addEventListener("click", () => {
 			const appWithSetting = this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } };
 			appWithSetting.setting.open();
 			appWithSetting.setting.openTabById(this.plugin.manifest.id);
 		});
+
+		// Always visible, because the question "which build am I looking at?" comes up while you're
+		// using the plugin, not while you're in its settings. The load time is the half that actually
+		// answers it — see FinancePlugin.loadedAt.
+		const stamp = this.navFooterEl.createDiv({ cls: "fp-nav-version" });
+		stamp.createSpan({ cls: "fp-nav-version-num", text: `v${this.plugin.manifest.version}` });
+		stamp.createSpan({ cls: "fp-nav-version-time", text: `loaded ${this.plugin.loadedAt}` });
+		stamp.setAttribute(
+			"title",
+			`${this.plugin.manifest.name} v${this.plugin.manifest.version}, loaded at ${this.plugin.loadedAt}. Obsidian only re-reads a plugin when it's toggled or the app restarts — if this time hasn't moved, your rebuild isn't running yet.`
+		);
 	}
 
 	private renderBody(): void {
 		this.bodyEl.empty();
-		if (this.plugin.settings.activeView === "budgets") {
-			renderBudgetsSection(this.bodyEl, this.plugin);
-		} else if (this.plugin.settings.activeView === "subscriptions") {
-			renderSubscriptionsSection(this.bodyEl, this.plugin);
-		} else if (this.plugin.settings.activeView === "cards") {
-			renderCardsSection(this.bodyEl, this.plugin);
-		} else {
-			renderAccountPage(this.bodyEl, this.plugin);
+		switch (this.plugin.settings.activeView) {
+			case "budgets":
+				renderBudgetsSection(this.bodyEl, this.plugin);
+				break;
+			case "subscriptions":
+				renderSubscriptionsSection(this.bodyEl, this.plugin);
+				break;
+			case "cards":
+				renderCardsSection(this.bodyEl, this.plugin);
+				break;
+			case "review":
+				renderReviewSection(this.bodyEl, this.plugin);
+				break;
+			case "settings":
+				renderSettingsSection(this.bodyEl, this.plugin);
+				break;
+			default:
+				renderAccountPage(this.bodyEl, this.plugin);
 		}
 	}
 }

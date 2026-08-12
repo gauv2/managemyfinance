@@ -2,14 +2,14 @@ import { App, Modal, Notice } from "obsidian";
 import { ACCOUNT_TYPE_META } from "../constants";
 import type FinancePlugin from "../main";
 import type { Account, AccountType } from "../types";
-import { icon } from "../ui/dom";
+import { icon, moneyInput } from "../ui/dom";
 
 /** Quick "add a container" flow — a new account starts empty; its transactions arrive via the next import. */
 export class CreateAccountModal extends Modal {
 	private name = "";
 	private type: AccountType = "debit";
 	private iban = "";
-	private openingBalance = "0";
+	private openingBalance: number | undefined = 0;
 
 	constructor(app: App, private plugin: FinancePlugin, private onCreated?: (account: Account) => void) {
 		super(app);
@@ -47,9 +47,10 @@ export class CreateAccountModal extends Modal {
 
 		const balRow = form.createDiv({ cls: "fp-form-row" });
 		balRow.createEl("label", { text: "Opening balance" });
-		const balInput = balRow.createEl("input", { type: "number", attr: { step: "0.01" } });
-		balInput.value = this.openingBalance;
-		balInput.addEventListener("input", () => (this.openingBalance = balInput.value));
+		moneyInput(balRow, {
+			value: this.openingBalance,
+			onChange: (v) => (this.openingBalance = v),
+		});
 
 		const footer = c.createDiv({ cls: "fp-wizard-footer" });
 		const left = footer.createDiv({ cls: "fp-wizard-footer-left" });
@@ -75,7 +76,7 @@ export class CreateAccountModal extends Modal {
 			name: this.name.trim(),
 			type: this.type,
 			currency: "EUR",
-			openingBalance: parseFloat(this.openingBalance) || 0,
+			openingBalance: this.openingBalance ?? 0,
 			iban: this.iban.trim() || undefined,
 		};
 		this.plugin.store.accounts.push(account);

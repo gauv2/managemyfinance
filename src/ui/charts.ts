@@ -1,4 +1,5 @@
 import { icon } from "./dom";
+import { formatMoneyRounded } from "../money";
 
 export interface ChartSeries {
 	label: string;
@@ -46,7 +47,7 @@ export function lineChart(
 	const padBottom = 28;
 	const plotW = width - padLeft - padRight;
 	const plotH = height - padTop - padBottom;
-	const formatValue = opts?.formatValue ?? ((n) => new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n));
+	const formatValue = opts?.formatValue ?? ((n) => formatMoneyRounded(n));
 	const formatLabel = opts?.formatValue ?? formatCompact;
 
 	const allValues = series.flatMap((s) => s.values);
@@ -294,7 +295,7 @@ export function barChart(
 
 		row.createDiv({
 			cls: "fp-barchart-value fp-money",
-			text: new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(r.value),
+			text: formatMoneyRounded(r.value),
 		});
 	});
 }

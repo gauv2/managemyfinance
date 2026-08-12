@@ -2,6 +2,7 @@ import { Notice } from "obsidian";
 import { budgetForMonth, budgetStatuses, currentMonth, shiftMonth, suggestedBudget } from "../../budgets";
 import { primaryCategories, secondaryCategoriesOf } from "../../categories";
 import { categoryTotals, primaryCategoryTotals } from "../../kpi";
+import { formatMoney, formatMoneyForInput, parseMoney } from "../../money";
 import type FinancePlugin from "../../main";
 import { CategoryExpensesModal } from "../../modals/CategoryExpensesModal";
 import type { Category } from "../../types";
@@ -10,7 +11,7 @@ import { categoryChip, categoryIconLabel, emptyState, icon, ringGauge, type Tone
 import { renderRingKpiCard } from "../../ui/kpiCard";
 
 function formatEUR(n: number): string {
-	return new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" }).format(n);
+	return formatMoney(n);
 }
 
 function monthLabel(month: string): string {
@@ -217,12 +218,14 @@ export function renderBudgetsSection(container: HTMLElement, plugin: FinancePlug
 			plannedCell.createDiv({ cls: "fp-budget-computed", text: planned !== undefined ? formatEUR(planned) : "—" });
 			plannedCell.createDiv({ cls: "fp-budget-hint-text", text: `from ${secondaries.length} subcategor${secondaries.length === 1 ? "y" : "ies"}` });
 		} else {
+			// Text, not number: a number input silently discards "1.234,56" (or "1,234.56", depending on
+			// which locale the browser is in) rather than reading it. parseMoney handles both — see money.ts.
 			const input = plannedCell.createEl("input", {
-				type: "number",
+				type: "text",
 				cls: "fp-budget-input-plain",
-				attr: { min: "0", step: "1", placeholder: "0" },
+				attr: { inputmode: "decimal", autocomplete: "off", placeholder: "0" },
 			});
-			input.value = planned ? String(planned) : "";
+			input.value = formatMoneyForInput(planned);
 			input.addEventListener("blur", () => void saveCategoryBudget(category, month, input.value));
 			input.addEventListener("keydown", (ev) => {
 				if (ev.key === "Enter") input.blur();
@@ -284,11 +287,11 @@ export function renderBudgetsSection(container: HTMLElement, plugin: FinancePlug
 				const plannedCell = tr.createEl("td", { cls: "fp-table-num" });
 				const subPlanned = budgetForMonth(store.categories, sub, month);
 				const input = plannedCell.createEl("input", {
-					type: "number",
+					type: "text",
 					cls: "fp-budget-input-plain",
-					attr: { min: "0", step: "1", placeholder: "0" },
+					attr: { inputmode: "decimal", autocomplete: "off", placeholder: "0" },
 				});
-				input.value = subPlanned ? String(subPlanned) : "";
+				input.value = formatMoneyForInput(subPlanned);
 				input.addEventListener("blur", () => void saveCategoryBudget(sub, month, input.value));
 				input.addEventListener("keydown", (ev) => {
 					if (ev.key === "Enter") input.blur();
@@ -338,8 +341,13 @@ export function renderBudgetsSection(container: HTMLElement, plugin: FinancePlug
 	}
 
 	async function saveCategoryBudget(category: Category, month: string, rawValue: string): Promise<void> {
-		const parsed = parseFloat(rawValue);
-		const amount = isFinite(parsed) && parsed > 0 ? parsed : undefined;
+		if (rawValue.trim() !== "" && parseMoney(rawValue) === undefined) {
+			new Notice(`Couldn't read "${rawValue}" as an amount — budget left unchanged.`);
+			render();
+			return;
+		}
+		const parsed = parseMoney(rawValue);
+		const amount = parsed !== undefined && parsed > 0 ? parsed : undefined;
 		const target = store.categories.find((c) => c.id === category.id);
 		if (!target) return;
 		if ((target.budgetHistory?.[month] ?? undefined) === amount) return;

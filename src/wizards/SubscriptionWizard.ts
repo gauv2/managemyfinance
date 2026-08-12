@@ -1,8 +1,17 @@
 import { Notice } from "obsidian";
 import type FinancePlugin from "../main";
 import { CURRENCIES } from "../constants";
-import { BILLING_CYCLE_LABEL, SUBSCRIPTION_CATEGORIES, formatMoney, monthlyCost, subCurrency } from "../subscriptions";
+import {
+	BILLING_CYCLE_LABEL,
+	DISPLAY_CYCLE_LABEL,
+	type DisplayCycle,
+	SUBSCRIPTION_CATEGORIES,
+	formatSubMoney,
+	monthlyCost,
+	subCurrency,
+} from "../subscriptions";
 import type { Subscription, SubscriptionBillingCycle, SubscriptionPaidVia } from "../types";
+import { moneyInput, type MoneyInputHandle } from "../ui/dom";
 import { WizardModal, WizardStep } from "./WizardModal";
 
 const BILLING_CYCLES: SubscriptionBillingCycle[] = ["monthly", "yearly", "quarterly", "weekly"];
@@ -36,15 +45,21 @@ function formSelectField(parent: HTMLElement, label: string, options: string[]):
 function formMoneyField(
 	parent: HTMLElement,
 	label: string,
-	currencies: string[]
-): { row: HTMLElement; select: HTMLSelectElement; input: HTMLInputElement } {
+	currencies: string[],
+	opts: { value?: number; currency?: string; onChange: (value: number | undefined) => void }
+): { row: HTMLElement; select: HTMLSelectElement; money: MoneyInputHandle } {
 	const row = parent.createDiv({ cls: "fp-form-row" });
 	row.createEl("label", { text: label });
 	const wrap = row.createDiv({ cls: "fp-form-money-wrap" });
 	const select = wrap.createEl("select");
 	currencies.forEach((c) => select.createEl("option", { text: c, value: c }));
-	const input = wrap.createEl("input", { type: "number", attr: { placeholder: "0.00", step: "0.01", min: "0" } });
-	return { row, select, input };
+	const money = moneyInput(wrap, {
+		value: opts.value,
+		currency: opts.currency,
+		allowNegative: false,
+		onChange: opts.onChange,
+	});
+	return { row, select, money };
 }
 
 function formSelectFieldVL(
@@ -67,7 +82,7 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 	let plan = existing?.plan ?? "";
 	let website = existing?.website ?? "";
 	let category = existing?.category ?? SUBSCRIPTION_CATEGORIES[0];
-	let cost = existing ? String(existing.cost) : "";
+	let cost: number | undefined = existing?.cost;
 	let currency = existing ? subCurrency(existing) : "EUR";
 	let billingCycle: SubscriptionBillingCycle = existing?.billingCycle ?? "monthly";
 	let paidVia: SubscriptionPaidVia = existing?.paidVia ?? "private";
@@ -77,6 +92,7 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 	let endDate = existing?.endDate ?? "";
 	let cancelUrl = existing?.cancelUrl ?? "";
 	let notes = existing?.notes ?? "";
+	let displayCycle: DisplayCycle | "" = existing?.displayCycle ?? "";
 
 	const steps: WizardStep[] = [
 		{
@@ -103,11 +119,16 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 				categoryField.select.value = category;
 				categoryField.select.addEventListener("change", () => (category = categoryField.select.value));
 
-				const costField = formMoneyField(grid, "Cost", CURRENCIES);
+				const costField = formMoneyField(grid, "Cost", CURRENCIES, {
+					value: cost,
+					currency,
+					onChange: (v) => (cost = v),
+				});
 				costField.select.value = currency;
-				costField.input.value = cost;
-				costField.select.addEventListener("change", () => (currency = costField.select.value));
-				costField.input.addEventListener("input", () => (cost = costField.input.value));
+				costField.select.addEventListener("change", () => {
+					currency = costField.select.value;
+					costField.money.setCurrency(currency);
+				});
 
 				const cycleField = formSelectField(
 					grid,
@@ -132,9 +153,19 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 				accountField.select.value = accountId;
 				accountField.select.addEventListener("change", () => (accountId = accountField.select.value));
 
+				// Distinct from the billing cycle above: that's how often it's charged, this is only how you
+				// prefer to think about the number. Applies when the Subscriptions page is set to "Mixed".
+				const quoteField = formSelectFieldVL(grid, "Quote as", [
+					{ value: "", label: "Follow the page setting" },
+					{ value: "monthly", label: DISPLAY_CYCLE_LABEL.monthly },
+					{ value: "yearly", label: DISPLAY_CYCLE_LABEL.yearly },
+				]);
+				quoteField.select.value = displayCycle;
+				quoteField.select.addEventListener("change", () => (displayCycle = quoteField.select.value as DisplayCycle | ""));
+
 				setTimeout(() => nameField.input.focus(), 0);
 			},
-			canGoNext: () => name.trim().length > 0 && isFinite(parseFloat(cost)) && parseFloat(cost) >= 0,
+			canGoNext: () => name.trim().length > 0 && cost !== undefined && cost >= 0,
 		},
 		{
 			id: "schedule",
@@ -160,10 +191,10 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 				notesField.input.value = notes;
 				notesField.input.addEventListener("input", () => (notes = notesField.input.value));
 
-				const monthly = monthlyCost({ cost: parseFloat(cost) || 0, billingCycle } as Subscription);
+				const monthly = monthlyCost({ cost: cost ?? 0, billingCycle } as Subscription);
 				c.createDiv({
 					cls: "fp-sub-form-preview fp-money",
-					text: `≈ ${formatMoney(monthly, currency)}/mo · ${formatMoney(monthly * 12, currency)}/yr`,
+					text: `≈ ${formatSubMoney(monthly, currency)}/mo · ${formatSubMoney(monthly * 12, currency)}/yr`,
 				});
 
 				setTimeout(() => nextDueField.input.focus(), 0);
@@ -177,7 +208,7 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 					plan: plan.trim() || undefined,
 					website: website.trim() || undefined,
 					category,
-					cost: parseFloat(cost),
+					cost: cost ?? 0,
 					currency,
 					billingCycle,
 					paidVia,
@@ -187,6 +218,7 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 					endDate: endDate || undefined,
 					cancelUrl: cancelUrl.trim() || undefined,
 					notes: notes.trim() || undefined,
+					displayCycle: displayCycle || undefined,
 				};
 
 				if (existing) {

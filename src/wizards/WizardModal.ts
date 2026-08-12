@@ -1,12 +1,21 @@
 import { App, Modal } from "obsidian";
 import { icon } from "../ui/dom";
 
+/** Handed to a step's render() so it can tell the shell that its validity has changed. */
+export interface WizardControls {
+	/** Re-evaluates canGoNext and repaints the footer. Call after a control changes step validity. */
+	refreshFooter(): void;
+}
+
 export interface WizardStep {
 	id: string;
 	title: string;
 	icon: string;
-	render: (container: HTMLElement) => void | Promise<void>;
+	render: (container: HTMLElement, wizard: WizardControls) => void | Promise<void>;
 	canGoNext?: () => boolean;
+	/** Shown beside a disabled Next, saying what is still missing. Without it a blocked step just
+	 *  looks like a button that does nothing when pressed. */
+	blockedReason?: () => string | undefined;
 	onNext?: () => void | Promise<void>;
 	nextLabel?: string;
 	/** Shows a ghost "Skip" action alongside Next — bypasses canGoNext and onNext, just advances (or closes on the last step). */
@@ -30,12 +39,18 @@ export class WizardModal extends Modal {
 	private wizSubtitle: string;
 	private wizIcon: string;
 
-	constructor(app: App, opts: { title: string; subtitle: string; icon: string; steps: WizardStep[] }) {
+	private buildStamp?: string;
+
+	constructor(
+		app: App,
+		opts: { title: string; subtitle: string; icon: string; steps: WizardStep[]; buildStamp?: string }
+	) {
 		super(app);
 		this.steps = opts.steps;
 		this.wizTitle = opts.title;
 		this.wizSubtitle = opts.subtitle;
 		this.wizIcon = opts.icon;
+		this.buildStamp = opts.buildStamp;
 	}
 
 	onOpen(): void {
@@ -47,6 +62,10 @@ export class WizardModal extends Modal {
 		const headText = head.createDiv({ cls: "fp-wizard-header-text" });
 		headText.createDiv({ cls: "fp-wizard-title", text: this.wizTitle });
 		headText.createDiv({ cls: "fp-wizard-subtitle", text: this.wizSubtitle });
+		// Which build produced this dialog. Obsidian only re-reads a plugin on toggle or restart, so a
+		// rebuilt main.js can sit on disk while the old one is still running — and every screenshot of
+		// this wizard would otherwise be ambiguous about which code produced it.
+		if (this.buildStamp) head.createDiv({ cls: "fp-wizard-build", text: this.buildStamp });
 
 		this.stepsEl = this.contentEl.createDiv({ cls: "fp-wizard-steps" });
 		this.bodyEl = this.contentEl.createDiv({ cls: "fp-wizard-body" });
@@ -75,11 +94,15 @@ export class WizardModal extends Modal {
 		});
 	}
 
+	private readonly controls: WizardControls = {
+		refreshFooter: () => this.renderFooter(),
+	};
+
 	private async renderStep(): Promise<void> {
 		this.renderStepsIndicator();
 		this.bodyEl.empty();
 		const step = this.steps[this.stepIndex];
-		await step.render(this.bodyEl);
+		await step.render(this.bodyEl, this.controls);
 		this.renderFooter();
 	}
 
@@ -110,10 +133,18 @@ export class WizardModal extends Modal {
 			});
 		}
 
+		// A step that can't be advanced now says so, and looks unavailable. It used to render as a
+		// normal button that silently did nothing, which reads as the wizard being broken.
+		const blocked = !!step.canGoNext && !step.canGoNext();
+		const reason = blocked ? step.blockedReason?.() : undefined;
+		if (reason) right.createSpan({ cls: "fp-wizard-blocked-reason", text: reason });
+
 		const next = right.createEl("button", {
 			cls: "fp-btn fp-btn-primary",
 			text: step.nextLabel ?? (isLast ? "Finish" : "Next"),
 		});
+		next.disabled = blocked;
+		if (reason) next.setAttribute("title", reason);
 		next.addEventListener("click", async () => {
 			if (step.canGoNext && !step.canGoNext()) return;
 			if (step.onNext) await step.onNext();

@@ -3,6 +3,7 @@
    with a small set of semantic tone colors (good/warn/bad) layered on top for financial status. */
 
 .fp-workspace,
+.fp-settings,
 .fp-wizard-modal {
 	--fp-good: #22c55e;
 	--fp-good-bg: rgba(34, 197, 94, 0.12);
@@ -550,173 +551,427 @@
 	padding: 28px 32px;
 }
 
-/* ---------- Settings tab ---------- */
+/* ==========================================================================
+   Settings — left nav over grouped panels, matching the AWTY plugin's layout:
+   a sticky icon nav down the side, and each group a soft-filled panel with an
+   icon, a subtitle and a status chip, so what needs attention is legible
+   without opening anything.
+   ========================================================================== */
 
-.fp-settings-shell {
+/* The scope banner sits above the flex row, so the row is its own element rather
+   than the tab container itself. */
+.fp-settings-shell-row {
 	display: flex;
-	align-items: flex-start;
 	gap: 20px;
-	padding-top: 28px;
-}
-.fp-settings-nav {
-	width: 180px;
-	padding: 0;
-	background: transparent;
-	border-right: none;
-}
-.fp-settings-nav .fp-nav-items {
-	gap: 6px;
-}
-.fp-settings-nav .fp-nav-item {
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--fp-radius-md);
-}
-.fp-settings-nav .fp-nav-item.is-active {
-	background: var(--background-modifier-border);
-}
-.fp-settings-content {
-	flex: 1;
-	min-width: 0;
-	max-width: 625px;
-}
-.fp-settings-card {
-	display: grid;
-	grid-template-rows: auto 1fr;
-	padding: 22px 26px;
-	transition: grid-template-rows 0.22s ease;
-}
-.fp-settings-card.is-collapsed {
-	grid-template-rows: auto 0fr;
-}
-.fp-settings-card-head {
-	display: flex;
 	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px;
-	margin-bottom: 18px;
 }
-.fp-settings-card-head.is-clickable {
+
+.fp-settings-nav {
+	flex: 0 0 150px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	position: sticky;
+	top: 0;
+}
+
+.fp-settings-nav-item {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 8px;
+	padding: 6px 10px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: 13px;
+	text-align: left;
 	cursor: pointer;
 }
-.fp-settings-card-head-left {
-	display: flex;
-	align-items: flex-start;
-	gap: 12px;
-	min-width: 0;
-}
-.fp-settings-card-head-right {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-shrink: 0;
-}
-.fp-settings-card-icon {
-	flex-shrink: 0;
-	margin-top: 2px;
-	color: var(--fp-neutral);
-}
-.fp-settings-card-icon svg {
-	width: 20px;
-	height: 20px;
-}
-.fp-settings-card-title {
-	font-weight: 700;
-	font-size: var(--font-ui-medium);
+
+.fp-settings-nav-item:hover {
+	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
-.fp-settings-card-desc {
-	margin-top: 2px;
-	font-size: var(--font-ui-small);
+
+.fp-settings-nav-item.is-active {
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	font-weight: 600;
+}
+
+.fp-settings-nav-item.is-active .fp-settings-nav-icon svg {
+	color: var(--interactive-accent);
+}
+
+.fp-settings-nav-icon {
+	display: flex;
+}
+
+.fp-settings-nav-icon svg {
+	width: 15px;
+	height: 15px;
+}
+
+/* The unreviewed backlog, shown on the nav item rather than only inside the panel. */
+.fp-settings-nav-count {
+	margin-left: auto;
+	padding: 0 6px;
+	border-radius: 999px;
+	background: var(--background-modifier-hover);
+	color: var(--color-orange);
+	font-size: 10px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.fp-settings-body {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+@media (max-width: 700px) {
+	.fp-settings-shell-row {
+		flex-direction: column;
+	}
+	.fp-settings-nav {
+		flex-direction: row;
+		flex-wrap: wrap;
+		position: static;
+		width: 100%;
+	}
+}
+
+/* --- panel ---------------------------------------------------------------- */
+
+.fp-sgroup {
+	background: var(--background-secondary);
+	border-radius: 10px;
+	padding: 14px 16px;
+	margin-bottom: 16px;
+}
+
+.fp-sgroup-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 8px;
+}
+
+.fp-sgroup-head.is-clickable {
+	cursor: pointer;
+}
+
+.fp-sgroup-icon {
+	display: flex;
+	color: var(--interactive-accent);
+}
+
+.fp-sgroup-icon svg {
+	width: 18px;
+	height: 18px;
+}
+
+.fp-sgroup-titles {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.fp-sgroup-title {
+	font-weight: 600;
+}
+
+.fp-sgroup-sub {
+	font-size: 12px;
 	color: var(--text-muted);
 }
-.fp-settings-card-chevron {
-	display: inline-flex;
+
+.fp-sgroup-body .setting-item {
+	border-top: none;
+	padding: 10px 0;
+}
+
+.fp-sgroup-body .setting-item-control:has(> :only-child) input[type="text"] {
+	min-width: 200px;
+}
+
+.fp-sgroup-label {
+	margin: 8px 0 4px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+/* Collapsing is opt-in per panel — used only where the body is a long grid
+   (the currency table, the feature list) that would otherwise bury the panels
+   under it. */
+.fp-sgroup.is-collapsed .fp-sgroup-head {
+	margin-bottom: 0;
+}
+
+.fp-sgroup.is-collapsed .fp-sgroup-body {
+	display: none;
+}
+
+.fp-sgroup-chevron {
+	display: flex;
 	color: var(--text-faint);
 }
-.fp-settings-card-chevron svg {
+
+.fp-sgroup-chevron svg {
+	width: 14px;
+	height: 14px;
 	transition: transform 0.2s ease;
 }
-.fp-settings-card:not(.is-collapsed) .fp-settings-card-chevron svg {
+
+.fp-sgroup:not(.is-collapsed) .fp-sgroup-chevron svg {
 	transform: rotate(180deg);
 }
-.fp-settings-card-body {
-	min-height: 0;
+
+/* A panel whose actions are irreversible reads differently from the rest. */
+.fp-sgroup-danger {
+	border-left: 3px solid var(--color-red);
+}
+
+.fp-sgroup-danger .fp-sgroup-icon {
+	color: var(--color-red);
+}
+
+/* --- status chip ---------------------------------------------------------- */
+
+.fp-chip {
+	padding: 2px 8px;
+	border-radius: 10px;
+	background: var(--background-modifier-hover);
+	color: var(--text-muted);
+	font-size: 11px;
+	white-space: nowrap;
+}
+
+/* In a panel head the chip has to yield to the title beside it rather than push it. */
+.fp-sgroup-head .fp-chip {
+	max-width: 60%;
 	overflow: hidden;
-}
-.fp-settings-card .setting-item {
-	padding: 18px 0;
-	border-top: 1px solid var(--background-modifier-border);
-}
-.fp-settings-card .setting-item:first-of-type {
-	border-top: none;
-	padding-top: 0;
-}
-.fp-settings-card .setting-item:last-child {
-	padding-bottom: 0;
-}
-.fp-settings-card .setting-item-info {
-	padding-right: 24px;
-}
-.fp-settings-card .setting-item-control:has(> :only-child) input[type="text"],
-.fp-settings-card .setting-item-control:has(> :only-child) input[type="number"] {
-	min-width: 220px;
+	text-overflow: ellipsis;
 }
 
-/* ---------- Category rows (Settings → Categories) ---------- */
+.fp-chip-ok {
+	color: var(--color-green);
+}
 
-.fp-category-row {
+.fp-chip-warn {
+	color: var(--color-orange);
+}
+
+.fp-chip-pending {
+	color: var(--text-muted);
+}
+
+/* --- inline help and notes ------------------------------------------------ */
+
+.fp-setting-help {
+	margin: 4px 0 8px;
+	padding: 8px 10px;
+	border-radius: 6px;
+	background: var(--background-modifier-hover);
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.fp-setting-note {
+	margin: 6px 0 2px;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.fp-setting-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 14px;
+	margin: 6px 0 2px;
+	font-size: 12px;
+}
+
+
+/* ==========================================================================
+   Category rows (Settings → Categories)
+
+   One grid, one column template, every row emitting every cell. The previous
+   version built rows out of Obsidian's `Setting`, which right-aligns its
+   controls — so a row with a move dropdown and a row without were different
+   widths and no two columns lined up.
+   ========================================================================== */
+
+.fp-cat-table {
+	display: flex;
+	flex-direction: column;
+	margin: 6px 0 4px;
+}
+
+.fp-cat-row {
+	display: grid;
+	grid-template-columns: 26px minmax(0, 1fr) 34px 130px 150px 32px 30px;
+	align-items: center;
+	gap: 8px;
+	padding: 5px 0;
 	border-top: 1px solid var(--background-modifier-border);
 }
-.fp-category-row:first-child {
+.fp-cat-row:first-child {
 	border-top: none;
 }
-.fp-category-row-head {
+.fp-cat-cell {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	min-width: 0;
 }
-.fp-category-row-head .setting-item {
-	flex: 1 1 auto;
+
+/* Column headings, so the bare inputs below them are self-explanatory. */
+.fp-cat-row.is-head {
+	padding-bottom: 2px;
 	border-top: none;
-	padding: 18px 0;
 }
-.fp-category-expand {
-	display: flex;
-	align-items: center;
+.fp-cat-head-cell {
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+}
+
+/* Nesting is shown with an accent rather than an indent, which would shift the columns. */
+.fp-cat-row.is-sub {
+	background: var(--background-secondary);
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+.fp-cat-row.is-sub .fp-cat-name {
+	font-style: italic;
+}
+.fp-cat-row.is-add {
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.fp-cat-expand {
 	justify-content: center;
-	width: 24px;
 	height: 24px;
-	flex-shrink: 0;
 	color: var(--text-muted);
 	cursor: pointer;
 	border-radius: var(--fp-radius-sm);
 }
-.fp-category-expand:hover {
+.fp-cat-expand:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
-.fp-category-expand.is-empty {
-	visibility: hidden;
+.fp-cat-expand.is-empty {
+	cursor: default;
 	pointer-events: none;
 }
-.fp-category-expand svg {
+.fp-cat-expand svg {
 	width: 15px;
 	height: 15px;
 }
-.fp-subcategory-list {
-	margin: 0 0 8px 44px;
-	padding-left: 14px;
-	border-left: 2px solid var(--background-modifier-border);
+
+.fp-cat-name,
+.fp-cat-icon-input {
+	width: 100%;
+	min-width: 0;
+	padding: 5px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-sm);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
 }
-.fp-subcategory-list .setting-item {
-	padding: 12px 0;
+.fp-cat-icon-input {
+	font-family: var(--font-monospace);
+	font-size: 12px;
+}
+
+/* A plain swatch — the native colour input's chrome is far too tall for a dense row. */
+.fp-cat-colour {
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 50%;
+	background: none;
+	cursor: pointer;
+	appearance: none;
+	-webkit-appearance: none;
+	justify-self: center;
+}
+.fp-cat-colour::-webkit-color-swatch-wrapper {
+	padding: 2px;
+}
+.fp-cat-colour::-webkit-color-swatch {
+	border: none;
+	border-radius: 50%;
+}
+
+.fp-cat-move select,
+.fp-cat-move .fp-btn {
+	width: 100%;
+	min-width: 0;
+	font-size: var(--font-ui-smaller);
+}
+.fp-cat-move select {
+	padding: 5px 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-sm);
+	background: var(--interactive-normal);
+	color: var(--text-normal);
+}
+
+.fp-cat-delete {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: var(--fp-radius-sm);
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-faint);
+	cursor: pointer;
+}
+.fp-cat-delete:hover {
+	background: var(--fp-bad-bg);
+	color: var(--fp-bad);
+}
+.fp-cat-delete svg {
+	width: 15px;
+	height: 15px;
+}
+
+.fp-cat-count {
+	justify-content: flex-end;
+}
+
+/* Narrow screens: the move and count columns are the first to go. */
+@media (max-width: 720px) {
+	.fp-cat-row {
+		grid-template-columns: 26px minmax(0, 1fr) 34px 100px 32px;
+	}
+	.fp-cat-row .fp-cat-move,
+	.fp-cat-row .fp-cat-count {
+		display: none;
+	}
+	.fp-cat-row.is-head .fp-cat-head-cell:nth-child(5),
+	.fp-cat-row.is-head .fp-cat-head-cell:nth-child(7) {
+		display: none;
+	}
 }
 
 .fp-about-feature-list {
 	display: flex;
 	flex-direction: column;
-	gap: 18px;
+	gap: 14px;
+	margin-top: 4px;
 }
 .fp-about-feature {
 	display: flex;
@@ -729,23 +984,23 @@
 	color: var(--fp-neutral);
 }
 .fp-about-feature-title {
-	font-weight: 700;
-	font-size: var(--font-ui-small);
+	font-weight: 600;
+	font-size: 13px;
 	color: var(--text-normal);
 }
 .fp-about-feature-desc {
 	margin-top: 2px;
-	font-size: var(--font-ui-small);
+	font-size: 12px;
 	color: var(--text-muted);
 	line-height: 1.5;
 }
 .fp-about-steps {
-	margin: 0;
+	margin: 4px 0 0;
 	padding-left: 20px;
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
-	font-size: var(--font-ui-small);
+	gap: 8px;
+	font-size: 12px;
 	color: var(--text-normal);
 	line-height: 1.5;
 }
@@ -755,15 +1010,16 @@
 
 .fp-currency-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-	gap: 12px;
+	grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+	gap: 8px;
+	margin-top: 6px;
 }
 .fp-currency-tile {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	padding: 10px 12px;
+	padding: 8px 10px;
 	border-radius: var(--fp-radius-md);
 	border: 1px solid var(--background-modifier-border);
 	background: var(--background-primary);
@@ -1365,11 +1621,81 @@
 	max-height: 220px;
 	overflow-y: auto;
 }
+/* Three columns of label-over-field. Each cell spans two implicit rows and inherits them via
+   subgrid, so every input in a row sits on the same baseline no matter how tall its label is —
+   a wrapping label used to shove its own field a line lower than its neighbours'. */
 .fp-column-mapping-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-	gap: 12px 16px;
+	grid-auto-rows: auto auto;
+	align-items: start;
+	gap: 10px 16px;
 	margin-bottom: 14px;
+}
+.fp-column-mapping-grid > .fp-form-row {
+	display: grid;
+	grid-row: span 2;
+	grid-template-rows: subgrid;
+	gap: 5px;
+	min-width: 0;
+}
+/* Without subgrid the rows can't share tracks, so a uniform label height is the fallback that keeps
+   the fields level; two lines is the worst case now that the labels are short. */
+@supports not (grid-template-rows: subgrid) {
+	.fp-column-mapping-grid > .fp-form-row {
+		display: flex;
+		flex-direction: column;
+	}
+	.fp-column-mapping-grid > .fp-form-row > label {
+		min-height: 2.6em;
+	}
+}
+.fp-column-mapping-grid > .fp-form-row > label {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	flex-wrap: wrap;
+	align-self: end;
+}
+.fp-column-mapping-grid select,
+.fp-column-mapping-grid input {
+	width: 100%;
+	min-width: 0;
+	align-self: start;
+}
+
+/* Required / optional as a marker beside the name, so the name itself stays short. */
+.fp-field-req,
+.fp-field-opt {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	padding: 1px 5px;
+	border-radius: 999px;
+	white-space: nowrap;
+}
+.fp-field-req {
+	color: var(--fp-neutral);
+	background: var(--fp-neutral-bg);
+}
+.fp-field-opt {
+	color: var(--text-faint);
+	background: var(--background-modifier-hover);
+}
+/* Control plus caveat, occupying the single field track so the row keeps two subgrid rows. */
+.fp-field-control {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	align-self: start;
+}
+/* A caveat about a field, under it rather than inside its label. */
+.fp-field-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	line-height: 1.4;
 }
 .fp-iban-label {
 	font-family: var(--font-monospace);
@@ -1395,7 +1721,10 @@
 	flex-direction: column;
 	gap: 6px;
 }
-.fp-review-row {
+/* Scoped to the list on purpose. The review *table* reuses .fp-review-row on its <tr>, and an
+   unscoped `display: flex` here turned every row into a flex container: the cells blockified, so
+   they stopped belonging to the table's columns and the header no longer sat above its own data. */
+.fp-review-list .fp-review-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -2946,4 +3275,746 @@
 }
 .fp-mobile .fp-tab {
 	flex-shrink: 0;
+}
+
+/* ============================================================================
+   Money input — a text field that accepts either separator convention and
+   echoes back the amount it read. See src/money.ts for why it isn't type=number.
+   ========================================================================== */
+.fp-money-input {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+	flex: 1;
+}
+.fp-money-input-field {
+	padding: 7px 10px;
+	border-radius: var(--fp-radius-sm);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	font-variant-numeric: tabular-nums;
+	width: 100%;
+}
+.fp-money-input-echo {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+	min-height: 1.2em;
+}
+.fp-money-input-echo.is-error {
+	color: var(--fp-bad);
+}
+.fp-money-input:has(.fp-money-input-echo.is-error) .fp-money-input-field {
+	border-color: var(--fp-bad);
+}
+
+/* Form scaffolding shared by the account editor and the delete dialogs. */
+.fp-form-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	line-height: 1.4;
+}
+.fp-form-section-label {
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+	margin-top: 6px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+.fp-form-row-inline {
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+}
+.fp-form-row-inline label {
+	color: var(--text-normal);
+	font-weight: 500;
+}
+.fp-form-balance-summary {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-md);
+	background: var(--background-secondary);
+}
+.fp-form-balance-line {
+	display: flex;
+	align-items: baseline;
+	gap: 7px;
+	flex-wrap: wrap;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-muted);
+}
+.fp-form-balance-op {
+	color: var(--text-faint);
+}
+.fp-form-balance-result {
+	font-weight: 700;
+	color: var(--text-normal);
+}
+
+/* ============================================================================
+   Settings — the two surfaces. This banner sits above Obsidian's own tab.
+   ========================================================================== */
+.fp-settings-scope-banner {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 10px 12px;
+	margin-bottom: 16px;
+	border-radius: 10px;
+	border-left: 3px solid var(--interactive-accent);
+	background: var(--background-secondary);
+}
+.fp-settings-scope-icon {
+	display: flex;
+	flex: none;
+	color: var(--interactive-accent);
+	padding-top: 2px;
+}
+.fp-settings-scope-icon svg {
+	width: 16px;
+	height: 16px;
+}
+.fp-settings-scope-banner > div {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.fp-settings-scope-title {
+	font-weight: 600;
+	font-size: 13px;
+	color: var(--text-normal);
+}
+.fp-settings-scope-desc {
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-muted);
+	margin-top: 1px;
+}
+
+/* The in-app settings page's own rows. */
+.fp-app-setting-row {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 12px 0;
+	border-top: 1px solid var(--background-modifier-border);
+	flex-wrap: wrap;
+}
+.fp-app-setting-row:first-child {
+	border-top: none;
+	padding-top: 4px;
+}
+.fp-app-setting-info {
+	flex: 1;
+	min-width: 220px;
+}
+.fp-app-setting-name {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-app-setting-desc {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	line-height: 1.45;
+	margin-top: 2px;
+}
+.fp-app-setting-control {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+.fp-app-setting-example {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+	padding-bottom: 8px;
+}
+.fp-app-setting-shortcuts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 4px 0 8px;
+}
+
+/* Segmented control — used for number format, layout and the subscriptions basis. */
+.fp-segmented {
+	display: inline-flex;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-md);
+	overflow: hidden;
+	background: var(--background-primary);
+}
+.fp-segmented-btn {
+	padding: 5px 11px;
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	cursor: pointer;
+	box-shadow: none;
+	white-space: nowrap;
+}
+.fp-segmented-btn + .fp-segmented-btn {
+	border-left: 1px solid var(--background-modifier-border);
+}
+.fp-segmented-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.fp-segmented-btn.is-active {
+	background: var(--fp-neutral);
+	color: var(--text-on-accent);
+}
+
+/* Toggle switch. */
+.fp-toggle {
+	position: relative;
+	width: 38px;
+	height: 22px;
+	padding: 0;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-modifier-border);
+	cursor: pointer;
+	box-shadow: none;
+	flex-shrink: 0;
+	transition: background 120ms ease;
+}
+.fp-toggle.is-on {
+	background: var(--fp-neutral);
+	border-color: var(--fp-neutral);
+}
+.fp-toggle-knob {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--background-primary);
+	transition: transform 120ms ease;
+}
+.fp-toggle.is-on .fp-toggle-knob {
+	transform: translateX(16px);
+}
+
+/* Unreviewed-count pill on the Review nav tab. */
+.fp-nav-count {
+	margin-left: auto;
+	padding: 1px 7px;
+	border-radius: 999px;
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+	background: var(--fp-warn-bg);
+	color: var(--fp-warn);
+	font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================================
+   Review page
+   ========================================================================== */
+.fp-review-bulk-bar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 9px 12px;
+	margin-bottom: 10px;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.fp-review-bulk-bar.is-active {
+	border-color: var(--fp-neutral);
+	background: var(--fp-neutral-bg);
+}
+.fp-review-bulk-left {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+}
+.fp-review-bulk-count {
+	font-weight: 600;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	white-space: nowrap;
+}
+.fp-review-bulk-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-review-bulk-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-left: auto;
+}
+.fp-review-bulk-picker .fp-category-picker {
+	margin: 0;
+}
+.fp-review-check {
+	width: 15px;
+	height: 15px;
+	cursor: pointer;
+	accent-color: var(--fp-neutral);
+}
+/* Deterministic columns. Without table-layout:fixed every cell sized itself, the header drifted out
+   of step with the body, and a long description stretched its row to five lines. */
+.fp-review-table {
+	table-layout: fixed;
+	width: 100%;
+	/* Below this the description column would be crushed to a few characters; the wrap scrolls
+	   horizontally instead, which stays readable. */
+	min-width: 720px;
+}
+/* border-box so a declared column width is the width you get. Content-box made every column 20px
+   wider than stated, and the eight columns' padding came out of the one auto column — description
+   was left with 66px. */
+.fp-review-table th,
+.fp-review-table td {
+	box-sizing: border-box;
+	vertical-align: middle;
+	padding: 8px 10px;
+	overflow-wrap: anywhere;
+}
+.fp-review-table .col-check {
+	width: 34px;
+	padding-right: 0;
+}
+.fp-review-table .col-date {
+	width: 96px;
+	white-space: nowrap;
+}
+.fp-review-table .col-desc {
+	width: auto;
+}
+.fp-review-table .col-account {
+	width: 112px;
+}
+.fp-review-table .col-amount {
+	width: 104px;
+	text-align: right;
+	white-space: nowrap;
+}
+.fp-review-table .col-category {
+	width: 264px;
+	vertical-align: top;
+}
+.fp-review-table .col-status {
+	width: 88px;
+}
+.fp-review-table .col-actions {
+	width: 108px;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.fp-review-row.is-selected {
+	background: var(--fp-neutral-bg);
+}
+/* A left edge in the status colour: readable at a glance while scanning a long queue. */
+.fp-review-row td:first-child {
+	border-left: 3px solid transparent;
+}
+.fp-review-row.is-approved td:first-child {
+	border-left-color: var(--fp-good);
+}
+.fp-review-row.is-flagged td:first-child {
+	border-left-color: var(--fp-warn);
+}
+.fp-review-row.is-approved {
+	opacity: 0.72;
+}
+
+/* Two lines of description is plenty to identify a row; more just pushes the next row off-screen. */
+.fp-review-desc-text {
+	color: var(--text-normal);
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.fp-review-desc-sub {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-review-merchant-hint {
+	margin-top: 3px;
+	font-size: var(--font-ui-smaller);
+	color: var(--fp-neutral);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Chip on top, the two selects sharing the row beneath it, both inside the fixed column. */
+.fp-review-cat-chip {
+	margin-bottom: 4px;
+}
+.fp-review-cat-cell .fp-category-picker {
+	display: flex;
+	gap: 6px;
+	margin: 0;
+}
+.fp-review-cat-cell .fp-category-picker select {
+	flex: 1 1 0;
+	min-width: 0;
+	font-size: var(--font-ui-smaller);
+}
+
+.fp-review-actions .fp-btn-icon {
+	padding: 3px;
+}
+.fp-review-more {
+	display: flex;
+	justify-content: center;
+	padding: 10px 0 4px;
+}
+
+/* Narrow pane: account and status are the least load-bearing columns, so they go first and the
+   description keeps its room. Measured against the pane, not the window — see ReviewSection. */
+.fp-review-table-wrap {
+	container-type: inline-size;
+}
+@container (max-width: 1040px) {
+	.fp-review-table .col-account,
+	.fp-review-table .col-status {
+		display: none;
+	}
+	.fp-review-table .col-category {
+		width: 216px;
+	}
+}
+
+.fp-btn-icon.is-active {
+	background: var(--fp-neutral-bg);
+	color: var(--fp-neutral);
+}
+
+/* Quiet review marker on ledger rows. */
+.fp-review-mark {
+	display: inline-flex;
+	vertical-align: middle;
+	margin-left: 6px;
+	opacity: 0.75;
+}
+.fp-review-mark.is-approved {
+	color: var(--fp-good);
+}
+.fp-review-mark.is-flagged {
+	color: var(--fp-warn);
+}
+.fp-review-mark .svg-icon {
+	width: 13px;
+	height: 13px;
+}
+
+/* Subscriptions: monthly/yearly basis. */
+.fp-sub-view-toggle {
+	align-self: center;
+}
+.fp-sub-card-amount-alt {
+	font-size: var(--font-ui-smaller);
+	font-weight: 500;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+.fp-mobile .fp-app-setting-row {
+	flex-direction: column;
+	align-items: stretch;
+}
+.fp-mobile .fp-review-bulk-actions {
+	margin-left: 0;
+}
+.fp-mobile .fp-segmented {
+	flex-wrap: wrap;
+}
+
+/* Build stamp, pinned under the sidebar's settings links. Quiet enough to ignore in normal use,
+   present enough to answer "which build is this?" without opening anything. */
+.fp-nav-version {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 12px 2px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	cursor: default;
+}
+.fp-nav-version-num {
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+.fp-nav-version-time {
+	font-variant-numeric: tabular-nums;
+	opacity: 0.8;
+}
+.fp-mobile .fp-nav-version {
+	justify-content: flex-start;
+	gap: 10px;
+}
+
+/* ==========================================================================
+   Import wizard — mapping and categorization status. Answers "has this file
+   been understood yet?" before the grid rather than after it.
+   ========================================================================== */
+.fp-map-status {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+	border-radius: var(--fp-radius-md);
+	background: var(--background-secondary);
+	border-left: 3px solid var(--background-modifier-border);
+}
+.fp-map-status:has(.fp-map-status-icon.is-ok) {
+	border-left-color: var(--fp-good);
+}
+.fp-map-status:has(.fp-map-status-icon.is-warn) {
+	border-left-color: var(--fp-warn);
+}
+.fp-map-status-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.fp-map-status-icon {
+	display: flex;
+	flex: none;
+}
+.fp-map-status-icon.is-ok {
+	color: var(--fp-good);
+}
+.fp-map-status-icon.is-warn {
+	color: var(--fp-warn);
+}
+.fp-map-status-title {
+	font-weight: 600;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+.fp-map-status-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+	gap: 4px 16px;
+}
+.fp-map-status-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	font-size: var(--font-ui-smaller);
+}
+.fp-map-status-field {
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+.fp-map-status-arrow {
+	display: flex;
+	color: var(--text-faint);
+}
+.fp-map-status-arrow svg {
+	width: 12px;
+	height: 12px;
+}
+.fp-map-status-col {
+	color: var(--text-normal);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-map-status-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	line-height: 1.45;
+}
+
+/* Why Next is unavailable, next to the disabled button. */
+.fp-wizard-blocked-reason {
+	font-size: var(--font-ui-smaller);
+	color: var(--fp-warn);
+	margin-right: 4px;
+}
+.fp-btn:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+/* ==========================================================================
+   AI categorization — settings key row, payload preview, review suggestions.
+   ========================================================================== */
+.fp-keyrow {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 8px 0 4px;
+}
+.fp-key-input {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding: 6px 9px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-sm);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-family: var(--font-monospace);
+	font-size: 12px;
+}
+.fp-key-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	padding: 5px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-md);
+	background: var(--background-primary);
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.fp-key-btn:hover {
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
+}
+.fp-key-warning {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 8px 10px;
+	margin-bottom: 8px;
+	border-radius: var(--fp-radius-md);
+	background: color-mix(in srgb, var(--color-orange) 10%, transparent);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.45;
+}
+.fp-key-warning-icon {
+	display: flex;
+	flex: none;
+	color: var(--color-orange);
+	padding-top: 1px;
+}
+
+/* The exact text that would be sent, shown before anything is. */
+.fp-ai-payload {
+	max-height: 260px;
+	overflow: auto;
+	margin: 6px 0 0;
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-md);
+	background: var(--background-primary-alt, var(--background-primary));
+	border: 1px solid var(--background-modifier-border);
+	font-family: var(--font-monospace);
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--text-muted);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* How many other rows one decision settles — the reason to make it. */
+.fp-review-merchant-hint {
+	margin-top: 3px;
+	font-size: var(--font-ui-smaller);
+	color: var(--fp-neutral);
+	font-weight: 600;
+}
+
+.fp-review-suggestion {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 6px;
+	padding: 5px 8px;
+	border-radius: var(--fp-radius-md);
+	background: var(--fp-neutral-bg);
+	font-size: var(--font-ui-smaller);
+}
+.fp-review-suggestion-icon {
+	display: flex;
+	flex: none;
+	color: var(--fp-neutral);
+}
+.fp-review-suggestion-text {
+	color: var(--text-muted);
+}
+.fp-review-suggestion-name {
+	color: var(--text-normal);
+	font-weight: 600;
+}
+.fp-review-suggestion-conf {
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+.fp-btn-tiny {
+	padding: 2px 8px;
+	font-size: var(--font-ui-smaller);
+}
+
+/* The "Ask Claude" action inside the import wizard's Categorize step. Always present when there is
+   something to ask about — a button you can't find is the same as one that doesn't exist. */
+.fp-ai-action {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin: 0 0 14px;
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.fp-ai-action-icon {
+	display: flex;
+	flex: none;
+	color: var(--fp-neutral);
+}
+.fp-ai-action-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+.fp-btn.is-muted {
+	opacity: 0.6;
+}
+
+/* The unrecognized merchants, named — 29 shops is a number you can reason about, 223 rows isn't. */
+.fp-ai-action-names {
+	margin-top: 3px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	line-height: 1.45;
+}
+
+/* Which build drew this wizard. Obsidian only re-reads a plugin on toggle or restart, so without
+   this a screenshot can't say whether it came from the code you just built or the one before it. */
+.fp-wizard-build {
+	margin-top: 4px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
 }

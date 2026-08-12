@@ -2,14 +2,20 @@ import { Notice } from "obsidian";
 import type FinancePlugin from "../../main";
 import {
 	BILLING_CYCLE_LABEL,
+	DISPLAY_CYCLE_LABEL,
+	DISPLAY_CYCLE_SUFFIX,
+	type DisplayCycle,
 	SUBSCRIPTION_CATEGORIES,
+	type SubscriptionViewMode,
+	costForCycle,
 	daysUntil,
+	effectiveDisplayCycle,
 	type ExchangeRates,
-	formatMoney,
+	formatSubMoney,
 	isActive,
-	monthlyCost,
 	monthlyCostInBase,
 	nextOccurrence,
+	scaleMonthly,
 	subCurrency,
 	subscriptionTotals,
 	totalsByBillingCycle,
@@ -17,6 +23,7 @@ import {
 	totalsByPaidVia,
 	upcomingPayments,
 } from "../../subscriptions";
+import { formatMoney } from "../../money";
 import type { Subscription } from "../../types";
 import { barChart, stackedShareBar } from "../../ui/charts";
 import { badge, emptyState, icon, initialsAvatar, statTile } from "../../ui/dom";
@@ -26,7 +33,7 @@ const CAT_COLORS = ["var(--fp-cat-1)", "var(--fp-cat-2)", "var(--fp-cat-3)", "va
 const DUE_SOON_DAYS = 7;
 
 function formatEUR(n: number): string {
-	return new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" }).format(n);
+	return formatMoney(n);
 }
 
 function formatDateLabel(iso: string): string {
@@ -44,6 +51,12 @@ function formatRelativeDays(days: number): string {
 function categoryColor(category: string): string {
 	const idx = SUBSCRIPTION_CATEGORIES.indexOf(category);
 	return CAT_COLORS[(idx < 0 ? 0 : idx) % CAT_COLORS.length];
+}
+
+/** "MONTHLY SPEND" / "YEARLY SPEND" — the caption every chart and group total carries so a figure is
+ *  never ambiguous about which basis it's in, whichever way the page toggle is set. */
+function spendCaption(cycle: DisplayCycle): string {
+	return cycle === "yearly" ? "YEARLY SPEND" : "MONTHLY SPEND";
 }
 
 function cardHeadRow(parent: HTMLElement, title: string, label?: string): HTMLElement {
@@ -67,6 +80,10 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 		const subs = store.subscriptions;
 		const today = new Date();
 		const rates = plugin.settings.exchangeRates;
+		const view: SubscriptionViewMode = plugin.settings.subscriptionView ?? "monthly";
+		// Aggregates need one shared basis even in "mixed" mode; monthly is the natural one, since every
+		// normalisation in subscriptions.ts already goes through it.
+		const basis: DisplayCycle = view === "yearly" ? "yearly" : "monthly";
 
 		const header = container.createDiv({ cls: "fp-section-header" });
 		const headText = header.createDiv();
@@ -76,6 +93,36 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 			text: "Everything you pay for on repeat — cost per cycle, next payment date and when each one ends. Totals are normalised to a monthly figure.",
 		});
 		const headerActions = header.createDiv({ cls: "fp-section-header-actions" });
+
+		// The page-level basis. "Mixed" defers to each subscription's own displayCycle, which is why the
+		// KPI row keeps showing both a monthly and a yearly total in that mode — with the cards quoted in
+		// different units, a single headline number would have nothing to be the total *of*.
+		const viewToggle = headerActions.createDiv({ cls: "fp-segmented fp-sub-view-toggle" });
+		(
+			[
+				["monthly", DISPLAY_CYCLE_LABEL.monthly],
+				["yearly", DISPLAY_CYCLE_LABEL.yearly],
+				["per-subscription", "Mixed"],
+			] as [SubscriptionViewMode, string][]
+		).forEach(([mode, label]) => {
+			const btn = viewToggle.createEl("button", {
+				cls: "fp-segmented-btn" + (view === mode ? " is-active" : ""),
+				text: label,
+			});
+			btn.setAttribute(
+				"title",
+				mode === "per-subscription"
+					? "Quote each subscription however it's set individually"
+					: `Quote everything ${mode === "yearly" ? "per year" : "per month"}`
+			);
+			btn.addEventListener("click", async () => {
+				if (view === mode) return;
+				plugin.settings.subscriptionView = mode;
+				await plugin.saveSettings();
+				render();
+			});
+		});
+
 		const refreshBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary" });
 		icon(refreshBtn, "refresh-cw");
 		refreshBtn.createSpan({ text: "Refresh" });
@@ -87,11 +134,28 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 		addBtn.addEventListener("click", () => openSubscriptionWizard(plugin, undefined, () => render()));
 
 		const totals = subscriptionTotals(subs, rates, today, DUE_SOON_DAYS);
+		const suffix = DISPLAY_CYCLE_SUFFIX[basis];
 		const kpis = container.createDiv({ cls: "fp-stat-grid" });
-		statTile(kpis, { label: "Per month", value: formatEUR(totals.perMonth), iconName: "calendar" });
-		statTile(kpis, { label: "Per year", value: formatEUR(totals.perYear), iconName: "calendar-days" });
-		statTile(kpis, { label: "Private /mo", value: formatEUR(totals.privatePerMonth), iconName: "user" });
-		statTile(kpis, { label: "Business /mo", value: formatEUR(totals.businessPerMonth), iconName: "briefcase", tone: "warn" });
+		// The headline total leads with whichever basis is selected; the other stays alongside it, since
+		// "what does this cost me a year" and "what does it cost me a month" are both always worth seeing.
+		if (basis === "yearly") {
+			statTile(kpis, { label: "Per year", value: formatEUR(totals.perYear), iconName: "calendar-days" });
+			statTile(kpis, { label: "Per month", value: formatEUR(totals.perMonth), iconName: "calendar" });
+		} else {
+			statTile(kpis, { label: "Per month", value: formatEUR(totals.perMonth), iconName: "calendar" });
+			statTile(kpis, { label: "Per year", value: formatEUR(totals.perYear), iconName: "calendar-days" });
+		}
+		statTile(kpis, {
+			label: `Private ${suffix}`,
+			value: formatEUR(scaleMonthly(totals.privatePerMonth, basis)),
+			iconName: "user",
+		});
+		statTile(kpis, {
+			label: `Business ${suffix}`,
+			value: formatEUR(scaleMonthly(totals.businessPerMonth, basis)),
+			iconName: "briefcase",
+			tone: "warn",
+		});
 		statTile(kpis, { label: "Active", value: String(totals.activeCount), iconName: "check-circle", tone: "good", money: false });
 		statTile(kpis, {
 			label: `Due ≤ ${DUE_SOON_DAYS} days`,
@@ -111,19 +175,19 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 			});
 		} else {
 			const breakdown = container.createDiv({ cls: "fp-sub-breakdown-grid" });
-			renderShareCard(breakdown, "By category", totalsByCategory(subs, rates, today), categoryColor);
-			renderShareCard(breakdown, "By billing cycle", totalsByBillingCycle(subs, rates, today));
-			renderShareCard(breakdown, "Private vs business", totalsByPaidVia(subs, rates, today));
+			renderShareCard(breakdown, "By category", totalsByCategory(subs, rates, today), basis, categoryColor);
+			renderShareCard(breakdown, "By billing cycle", totalsByBillingCycle(subs, rates, today), basis);
+			renderShareCard(breakdown, "Private vs business", totalsByPaidVia(subs, rates, today), basis);
 
 			const topRows = subs
 				.filter((s) => isActive(s, today))
-				.map((s) => ({ label: s.name, value: monthlyCostInBase(s, rates), color: categoryColor(s.category) }))
+				.map((s) => ({ label: s.name, value: scaleMonthly(monthlyCostInBase(s, rates), basis), color: categoryColor(s.category) }))
 				.filter((r) => r.value > 0)
 				.sort((a, b) => b.value - a.value)
 				.slice(0, 5);
 			if (topRows.length > 0) {
 				const topCard = container.createDiv({ cls: "fp-card" });
-				cardHeadRow(topCard, "Top subscriptions", "MONTHLY COST");
+				cardHeadRow(topCard, "Top subscriptions", basis === "yearly" ? "YEARLY COST" : "MONTHLY COST");
 				barChart(topCard, topRows);
 			}
 
@@ -133,40 +197,50 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 			if (payments.length > 0) {
 				const label = upcomingHead.createDiv({ cls: "fp-card-head-label" });
 				label.createSpan({ text: `NEXT ${payments.length} · ` });
-				label.createSpan({ cls: "fp-money", text: formatEUR(payments.reduce((s, p) => s + monthlyCostInBase(p.sub, rates), 0)) });
+				label.createSpan({
+					cls: "fp-money",
+					text: formatEUR(scaleMonthly(payments.reduce((s, p) => s + monthlyCostInBase(p.sub, rates), 0), basis)),
+				});
 			}
 			if (payments.length === 0) {
 				upcomingCard.createEl("p", { cls: "fp-step-desc", text: "No upcoming payments." });
 			} else {
 				const list = upcomingCard.createDiv({ cls: "fp-sub-upcoming-list" });
-				payments.forEach((p) => renderUpcomingRow(list, p));
+				payments.forEach((p) => renderUpcomingRow(list, p, view));
 			}
 		}
 
-		if (subs.length > 0) renderList(container, subs, today, rates);
+		if (subs.length > 0) renderList(container, subs, today, rates, view, basis);
 	}
 
 	function renderShareCard(
 		parent: HTMLElement,
 		title: string,
 		rows: { label: string; value: number }[],
+		basis: DisplayCycle,
 		colorFor?: (label: string) => string
 	): void {
 		const card = parent.createDiv({ cls: "fp-card fp-sub-share-card" });
-		cardHeadRow(card, title, "MONTHLY SPEND");
-		const total = rows.reduce((s, r) => s + r.value, 0);
+		cardHeadRow(card, title, spendCaption(basis));
+		// These aggregates all arrive monthly; scaling here keeps subscriptions.ts free of display concerns.
+		const scaled = rows.map((r) => ({ ...r, value: scaleMonthly(r.value, basis) }));
+		const total = scaled.reduce((s, r) => s + r.value, 0);
 		if (total <= 0) {
 			card.createEl("p", { cls: "fp-step-desc", text: "No spend yet." });
 			return;
 		}
 		stackedShareBar(
 			card,
-			rows.map((r, i) => ({ label: r.label, value: r.value, color: colorFor ? colorFor(r.label) : CAT_COLORS[i % CAT_COLORS.length] })),
+			scaled.map((r, i) => ({ label: r.label, value: r.value, color: colorFor ? colorFor(r.label) : CAT_COLORS[i % CAT_COLORS.length] })),
 			{ formatValue: formatEUR }
 		);
 	}
 
-	function renderUpcomingRow(parent: HTMLElement, p: { sub: Subscription; date: string; daysUntil: number }): void {
+	function renderUpcomingRow(
+		parent: HTMLElement,
+		p: { sub: Subscription; date: string; daysUntil: number },
+		view: SubscriptionViewMode
+	): void {
 		const row = parent.createDiv({ cls: "fp-sub-upcoming-row" });
 		const dateCol = row.createDiv({ cls: "fp-sub-upcoming-date" });
 		dateCol.createDiv({ text: formatDateLabel(p.date) });
@@ -180,12 +254,20 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 		badge(nameLine, p.sub.paidVia === "business" ? "BUSINESS" : "PRIVATE", p.sub.paidVia === "business" ? "warn" : "neutral");
 		info.createDiv({ cls: "fp-sub-upcoming-meta", text: `${p.sub.category}${p.sub.plan ? " · " + p.sub.plan : ""}` });
 
+		const cycle = effectiveDisplayCycle(p.sub, view);
 		const amount = row.createDiv({ cls: "fp-sub-upcoming-amount fp-money" });
-		amount.createDiv({ text: formatMoney(monthlyCost(p.sub), subCurrency(p.sub)) });
-		amount.createDiv({ cls: "fp-sub-upcoming-amount-sub", text: "/mo" });
+		amount.createDiv({ text: formatSubMoney(costForCycle(p.sub, cycle), subCurrency(p.sub)) });
+		amount.createDiv({ cls: "fp-sub-upcoming-amount-sub", text: DISPLAY_CYCLE_SUFFIX[cycle] });
 	}
 
-	function renderList(parent: HTMLElement, subs: Subscription[], today: Date, rates: ExchangeRates | undefined): void {
+	function renderList(
+		parent: HTMLElement,
+		subs: Subscription[],
+		today: Date,
+		rates: ExchangeRates | undefined,
+		view: SubscriptionViewMode,
+		basis: DisplayCycle
+	): void {
 		const card = parent.createDiv({ cls: "fp-card" });
 		cardHeadRow(card, `${subs.length} subscription${subs.length === 1 ? "" : "s"}`);
 
@@ -203,13 +285,15 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 			const groupTotal = items.reduce((sum, s) => sum + monthlyCostInBase(s, rates), 0);
 			const groupLabel = card.createDiv({ cls: "fp-sub-group-label" });
 			groupLabel.createSpan({ text: `${category.toUpperCase()} · ` });
-			groupLabel.createSpan({ cls: "fp-money", text: `${formatEUR(groupTotal)}/mo` });
+			groupLabel.createSpan({ cls: "fp-money", text: `${formatEUR(scaleMonthly(groupTotal, basis))}${DISPLAY_CYCLE_SUFFIX[basis]}` });
 			const grid = card.createDiv({ cls: "fp-sub-card-grid" });
-			[...items].sort((a, b) => monthlyCostInBase(b, rates) - monthlyCostInBase(a, rates)).forEach((sub) => renderSubCard(grid, sub, today));
+			[...items]
+				.sort((a, b) => monthlyCostInBase(b, rates) - monthlyCostInBase(a, rates))
+				.forEach((sub) => renderSubCard(grid, sub, today, view));
 		});
 	}
 
-	function renderSubCard(parent: HTMLElement, sub: Subscription, today: Date): void {
+	function renderSubCard(parent: HTMLElement, sub: Subscription, today: Date, view: SubscriptionViewMode): void {
 		const card = parent.createDiv({ cls: "fp-sub-card" + (isActive(sub, today) ? "" : " is-inactive") });
 		const top = card.createDiv({ cls: "fp-sub-card-top" });
 		initialsAvatar(top, sub.name, categoryColor(sub.category), "fp-sub-card-avatar");
@@ -217,12 +301,21 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 		info.createDiv({ cls: "fp-sub-card-name", text: sub.name });
 		if (sub.plan) info.createDiv({ cls: "fp-sub-card-plan", text: sub.plan });
 
+		const cycle = effectiveDisplayCycle(sub, view);
 		const amount = top.createDiv({ cls: "fp-sub-card-amount fp-money" });
-		amount.createDiv({ text: formatMoney(monthlyCost(sub), subCurrency(sub)) });
-		amount.createDiv({ cls: "fp-sub-card-amount-sub", text: "/mo" });
+		amount.createDiv({ text: formatSubMoney(costForCycle(sub, cycle), subCurrency(sub)) });
+		amount.createDiv({ cls: "fp-sub-card-amount-sub", text: DISPLAY_CYCLE_SUFFIX[cycle] });
+		// The other basis, quietly, so switching the toggle is never needed just to sanity-check a figure.
+		amount.createDiv({
+			cls: "fp-sub-card-amount-alt",
+			text: `${formatSubMoney(costForCycle(sub, cycle === "yearly" ? "monthly" : "yearly"), subCurrency(sub))}${
+				DISPLAY_CYCLE_SUFFIX[cycle === "yearly" ? "monthly" : "yearly"]
+			}`,
+		});
 
 		const meta = card.createDiv({ cls: "fp-sub-card-meta" });
-		meta.createSpan({ text: `${sub.category} · ${BILLING_CYCLE_LABEL[sub.billingCycle]}` });
+		// Billed-every vs quoted-per are different things, so the card says which cadence it's actually charged on.
+		meta.createSpan({ text: `${sub.category} · billed ${BILLING_CYCLE_LABEL[sub.billingCycle].toLowerCase()}` });
 		badge(meta, sub.paidVia === "business" ? "BUSINESS" : "PRIVATE", sub.paidVia === "business" ? "warn" : "neutral");
 		const accountName = sub.accountId ? plugin.store.accounts.find((a) => a.id === sub.accountId)?.name : undefined;
 		if (accountName) badge(meta, accountName.toUpperCase(), "neutral");
