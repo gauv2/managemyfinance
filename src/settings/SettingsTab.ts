@@ -1204,11 +1204,11 @@ export class FinanceSettingTab extends PluginSettingTab {
 		});
 		const steps = start.content.createEl("ol", { cls: "fp-about-steps" });
 		[
-			"Open the workspace from the ribbon icon, or run \u201COpen Finance workspace\u201D from the command palette.",
+			"Open the workspace from the ribbon icon, or run “Open Finance workspace” from the command palette.",
 			"Add your first account from the sidebar, or under Accounts on this page.",
-			"Use \u201CImport transactions\u201D to bring in a bank or broker export.",
+			"Use “Import transactions” to bring in a bank or broker export.",
 			"Work down the Review queue in the workspace: fix categories, then approve.",
-			"Optionally run \u201CInstall eMoney categories & auto-categorize transactions\u201D from the command palette to seed a standard category set.",
+			"Optionally run “Install default categories & auto-categorize transactions” from the command palette to seed a standard category set.",
 		].forEach((step) => steps.createEl("li", { text: step }));
 	}
 }

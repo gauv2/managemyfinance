@@ -78,9 +78,9 @@ export default class FinancePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: "install-emoney-categories",
-			name: "Install eMoney categories & auto-categorize transactions",
-			callback: () => void this.installEmoneyCategoriesAndCategorize(),
+			id: "install-default-categories",
+			name: "Install default categories & auto-categorize transactions",
+			callback: () => void this.installDefaultCategoriesAndCategorize(),
 		});
 	}
 
@@ -267,11 +267,11 @@ export default class FinancePlugin extends Plugin {
 	}
 
 	/**
-	 * One-shot, safe to re-run: adds any eMoney categories this portfolio doesn't already have (by
-	 * name — never touches or removes existing ones), adds the default keyword rules it doesn't
-	 * already have, then categorizes every currently-uncategorized transaction it can match.
+	 * One-shot, safe to re-run: adds any of the plugin's default categories this portfolio doesn't
+	 * already have (by name — never touches or removes existing ones), adds the default keyword rules
+	 * it doesn't already have, then categorizes every currently-uncategorized transaction it can match.
 	 */
-	async installEmoneyCategoriesAndCategorize(): Promise<void> {
+	async installDefaultCategoriesAndCategorize(): Promise<void> {
 		const store = this.store;
 
 		const missing = defaultCategories().filter((seed) => !store.categories.some((c) => c.name === seed.name));

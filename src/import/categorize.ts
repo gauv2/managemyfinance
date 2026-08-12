@@ -3,8 +3,8 @@ import type { Category, CategoryRule, Transaction } from "../types";
 
 /**
  * Legacy aliases are applied first and real categories second, so that when a secondary category's
- * own name matches one of eMoney's subcategory alias keys (e.g. a "Public Transport" secondary vs.
- * the `CATEGORY_ALIAS_SEED["public transport"]` entry, which points at the flat "Auto & Transport"
+ * own name matches one of the built-in subcategory alias keys (e.g. a "Public Transport" secondary
+ * vs. the `CATEGORY_ALIAS_SEED["public transport"]` entry, which points at the flat "Auto & Transport"
  * primary), the actual category wins and the match lands at the correct, more specific level.
  */
 export function buildAliasLookup(categories: Category[]): Map<string, string> {

@@ -24,7 +24,7 @@ export interface YearSummary {
 }
 
 /** Moving your own money between your own accounts (e.g. checking → savings) is neither income nor expense.
- *  "Savings & Transfers" is this app's old (pre-eMoney) category name, kept for backward compatibility.
+ *  "Savings & Transfers" is this app's older category name, kept for backward compatibility.
  *  Matching is case-insensitive/trimmed since imported or hand-typed category names can vary in casing. */
 const TRANSFER_CATEGORY_NAMES = new Set(["transfers", "savings", "savings & transfers"]);
 /** Trade Republic (and any importer using the same vocabulary) tags cash moved into/out of a brokerage,

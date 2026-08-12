@@ -90,3 +90,32 @@ export function renderRingKpiCard(
 
 	return card;
 }
+
+/** Stat tile with a round icon badge next to the label, a hero value, and a colored one-line caption
+ *  underneath (e.g. "/ month", "in 19 days") — no trend/gauge, just the figure and its unit/status.
+ *  Used by the Subscriptions summary row. */
+export function renderIconStatCard(
+	container: HTMLElement,
+	opts: {
+		label: string;
+		iconName: string;
+		value: string;
+		caption: string;
+		accentColor: string;
+		captionColor?: string;
+		money?: boolean;
+	}
+): HTMLElement {
+	const card = container.createDiv({ cls: "fp-icon-stat-card" });
+	card.style.setProperty("--fp-icon-stat-accent", opts.accentColor);
+
+	const head = card.createDiv({ cls: "fp-icon-stat-head" });
+	const badge = head.createDiv({ cls: "fp-icon-stat-badge" });
+	icon(badge, opts.iconName);
+	head.createSpan({ cls: "fp-icon-stat-label", text: opts.label });
+
+	card.createDiv({ cls: "fp-icon-stat-value" + (opts.money === false ? "" : " fp-money"), text: opts.value });
+	const caption = card.createDiv({ cls: "fp-icon-stat-caption", text: opts.caption });
+	if (opts.captionColor) caption.style.color = opts.captionColor;
+	return card;
+}

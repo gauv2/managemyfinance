@@ -18,11 +18,11 @@ export const ACCOUNT_TYPE_META: Record<AccountType, { label: string; icon: strin
 type AccountType = Account["type"];
 
 /**
- * Based on eMoney Advisor's standard "Spending & Budget Categories" list (the same taxonomy used by
- * many bank/PFM dashboards). eMoney nests subcategories under each bold category; this app's Category
- * model is flat, so subcategory names live on as aliases/rule keywords instead of separate categories.
- * "Excluded" and "Unclassified" (eMoney's own meta-labels for hidden/unsorted transactions) are left
- * out since they're not real budget categories here — anything unmatched is simply "Uncategorized".
+ * The plugin's standard "Spending & Budget Categories" set — the same broad taxonomy used by most
+ * bank/PFM dashboards, nested into primary categories with subcategories underneath. This app's
+ * Category model is flat, so subcategory names live on as aliases/rule keywords instead of separate
+ * categories. "Excluded" and "Unclassified" meta-labels for hidden/unsorted transactions are left out
+ * since they're not real budget categories here — anything unmatched is simply "Uncategorized".
  */
 export function defaultCategories(): Category[] {
 	const seed: [string, string, string][] = [
@@ -172,9 +172,9 @@ export function defaultSecondaryCategories(primaries: Category[]): Category[] {
 }
 
 /**
- * Maps historical/external category labels onto the canonical eMoney-based set above: both this
- * app's old default names (pre-eMoney) and eMoney's own subcategory names (so a bank/spreadsheet
- * export that already tags rows with e.g. "Gas & Fuel" or "Groceries" lands on the right parent).
+ * Maps historical/external category labels onto the canonical set above: both this app's older
+ * default names and common external subcategory names (so a bank/spreadsheet export that already
+ * tags rows with e.g. "Gas & Fuel" or "Groceries" lands on the right parent).
  */
 export const CATEGORY_ALIAS_SEED: Record<string, string> = {
 	// This app's previous default category names.
@@ -201,7 +201,7 @@ export const CATEGORY_ALIAS_SEED: Record<string, string> = {
 	"payment requests paid": "Transfers",
 	reimbursable: "Transfers",
 
-	// eMoney's own subcategories, mapped up to their parent category.
+	// Common external subcategory names, mapped up to their parent category.
 	"auto payment": "Auto & Transport",
 	"auto registration": "Auto & Transport",
 	"auto service": "Auto & Transport",

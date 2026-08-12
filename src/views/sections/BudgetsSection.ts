@@ -9,6 +9,7 @@ import type { Category } from "../../types";
 import { barChart } from "../../ui/charts";
 import { categoryChip, categoryIconLabel, emptyState, icon, ringGauge, type Tone } from "../../ui/dom";
 import { renderRingKpiCard } from "../../ui/kpiCard";
+import { openMonthPicker } from "../../ui/monthPicker";
 
 function formatEUR(n: number): string {
 	return formatMoney(n);
@@ -78,7 +79,16 @@ export function renderBudgetsSection(container: HTMLElement, plugin: FinancePlug
 			budgetsState.month = shiftMonth(month, -1);
 			render();
 		});
-		monthNav.createSpan({ cls: "fp-month-nav-label", text: monthLabel(month) });
+		const monthLabelBtn = monthNav.createEl("button", { cls: "fp-month-nav-label fp-month-nav-label-btn", text: monthLabel(month) });
+		monthLabelBtn.addEventListener("click", () => {
+			openMonthPicker(monthLabelBtn, {
+				value: month,
+				onSelect: (m) => {
+					budgetsState.month = m;
+					render();
+				},
+			});
+		});
 		const nextBtn = monthNav.createEl("button", { cls: "fp-btn-icon fp-month-nav-btn" });
 		icon(nextBtn, "chevron-right");
 		nextBtn.setAttr("aria-label", "Next month");

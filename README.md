@@ -58,7 +58,7 @@ plugin `data.json` in plain text; the settings panel says so.
 1. Install the plugin (see below) and enable it in Obsidian's Community Plugins settings.
 2. Open it from the ribbon icon, or run **Open Finance workspace** from the command palette.
 3. Add your first account, then use the **Import transactions** command (or the in-app Import button) to bring in a bank/broker export.
-4. Optionally run **Install eMoney categories & auto-categorize transactions** from the command palette to seed a standard category set and categorize what it can recognize.
+4. Optionally run **Install default categories & auto-categorize transactions** from the command palette to seed a standard category set and categorize what it can recognize.
 
 All data lives under a folder in your vault (`Finance` by default, configurable per portfolio) as human-readable JSON (accounts, categories, rules, subscriptions, cards) and CSV (the transaction ledger, one file per source per year) — nothing is stored anywhere the plugin doesn't tell you about, and everything stays readable/diffable outside the plugin too.
 

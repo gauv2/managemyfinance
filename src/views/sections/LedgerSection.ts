@@ -1,9 +1,11 @@
+import { Notice } from "obsidian";
 import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
+import { ManageRulesModal } from "../../modals/ManageRulesModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import { formatMoney } from "../../money";
 import type FinancePlugin from "../../main";
 import type { ReviewStatus, Transaction } from "../../types";
-import { categoryChainChip, emptyState, icon } from "../../ui/dom";
+import { categoryChainChip, emptyState, icon, renderCategoryPicker, type CategoryPickerValue } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
 
 type LedgerSortColumn = "date" | "description" | "account" | "category" | "amount";
@@ -48,6 +50,11 @@ const sortState: LedgerSortState = {
 	direction: "desc",
 };
 
+/** Checked transaction ids for bulk actions (currently just bulk categorize) — module scope for the
+ *  same reason as filterState/sortState, and also so it survives the re-render a bulk apply itself
+ *  triggers (cleared explicitly after a successful apply instead). */
+const selectedIds: Set<string> = new Set();
+
 /** First click on a text column reads A→Z; first click on date/amount reads newest/largest first. */
 const DEFAULT_SORT_DIRECTION: Record<LedgerSortColumn, LedgerSortDirection> = {
 	date: "desc",
@@ -87,6 +94,13 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		cls: "fp-search",
 	});
 	search.value = filterState.search;
+
+	const rulesBtn = controls.createEl("button", { cls: "fp-btn fp-btn-secondary fp-ledger-rules-btn" });
+	icon(rulesBtn, "list-filter");
+	rulesBtn.createSpan({ text: "Rules" });
+	rulesBtn.addEventListener("click", () => {
+		new ManageRulesModal(plugin.app, plugin, () => draw()).open();
+	});
 
 	const filterRow = container.createDiv({ cls: "fp-ledger-filters" });
 
@@ -142,6 +156,39 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 
 	const clearBtn = filterRow.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Clear filters" });
 
+	const bulkBar = container.createDiv({ cls: "fp-ledger-bulk-bar" });
+	const bulkCount = bulkBar.createSpan({ cls: "fp-ledger-bulk-count" });
+	const bulkPickerWrap = bulkBar.createDiv({ cls: "fp-ledger-bulk-picker" });
+	let bulkPickerValue: CategoryPickerValue = {};
+	renderCategoryPicker(bulkPickerWrap, {
+		categories: store.categories,
+		primaryPlaceholder: "Choose category…",
+		onChange: (value) => {
+			bulkPickerValue = value;
+		},
+	});
+	const bulkApplyBtn = bulkBar.createEl("button", { cls: "fp-btn fp-btn-primary", text: "Apply to selected" });
+	bulkApplyBtn.addEventListener("click", () => void applyBulkCategory());
+	const bulkClearBtn = bulkBar.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Clear selection" });
+	bulkClearBtn.addEventListener("click", () => {
+		selectedIds.clear();
+		draw();
+	});
+
+	async function applyBulkCategory(): Promise<void> {
+		const categoryId = bulkPickerValue.secondaryId ?? bulkPickerValue.primaryId;
+		if (!categoryId) {
+			new Notice("Choose a category first");
+			return;
+		}
+		const patches = new Map<string, string>();
+		selectedIds.forEach((id) => patches.set(id, categoryId));
+		const count = await store.recategorize(patches);
+		new Notice(`Categorized ${count} transaction${count === 1 ? "" : "s"}`);
+		selectedIds.clear();
+		plugin.refreshViews();
+	}
+
 	const summary = container.createDiv({ cls: "fp-ledger-summary" });
 	const summaryCountItem = summary.createDiv({ cls: "fp-ledger-summary-item" });
 	const summaryCountVal = summaryCountItem.createSpan({ cls: "fp-ledger-summary-value" });
@@ -153,6 +200,14 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	const tableWrap = container.createDiv({ cls: "fp-card fp-ledger-table-wrap" });
 	const table = tableWrap.createEl("table", { cls: "fp-table fp-ledger-table" });
 	const thead = table.createEl("thead").createEl("tr");
+
+	const selectAllTh = thead.createEl("th", { cls: "fp-ledger-th-select" });
+	const selectAllCheckbox = selectAllTh.createEl("input", { type: "checkbox" });
+	selectAllCheckbox.addEventListener("change", () => {
+		if (selectAllCheckbox.checked) currentFiltered.forEach((t) => selectedIds.add(t.id));
+		else currentFiltered.forEach((t) => selectedIds.delete(t.id));
+		draw();
+	});
 
 	const columns: { id: LedgerSortColumn; label: string }[] = [
 		{ id: "date", label: "Date" },
@@ -195,6 +250,21 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	updateSortIndicators();
 
 	const tbody = table.createEl("tbody");
+	/** Every currently filtered transaction (not just the 200 rendered) — what "select all" selects,
+	 *  and what the header checkbox's checked/indeterminate state is judged against. */
+	let currentFiltered: Transaction[] = [];
+
+	function updateBulkBar(): void {
+		bulkBar.toggleClass("is-visible", selectedIds.size > 0);
+		bulkCount.setText(`${selectedIds.size} selected`);
+	}
+
+	function updateSelectAllState(): void {
+		const selectableCount = currentFiltered.length;
+		const selectedCount = currentFiltered.filter((t) => selectedIds.has(t.id)).length;
+		selectAllCheckbox.checked = selectableCount > 0 && selectedCount === selectableCount;
+		selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < selectableCount;
+	}
 
 	function compareTransactions(a: Transaction, b: Transaction): number {
 		const dir = sortState.direction === "asc" ? 1 : -1;
@@ -218,8 +288,21 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 
 	function appendRow(t: Transaction): void {
 		const status = t.review ?? "new";
-		const tr = tbody.createEl("tr", { cls: `fp-ledger-row fp-review-${status}` });
+		const tr = tbody.createEl("tr", { cls: `fp-ledger-row fp-review-${status}` + (selectedIds.has(t.id) ? " is-selected" : "") });
 		tr.addEventListener("click", () => new TransactionDetailModal(plugin.app, plugin, t).open());
+
+		const selectCell = tr.createEl("td", { cls: "fp-ledger-td-select" });
+		const checkbox = selectCell.createEl("input", { type: "checkbox" });
+		checkbox.checked = selectedIds.has(t.id);
+		checkbox.addEventListener("click", (ev) => ev.stopPropagation());
+		checkbox.addEventListener("change", () => {
+			if (checkbox.checked) selectedIds.add(t.id);
+			else selectedIds.delete(t.id);
+			tr.toggleClass("is-selected", checkbox.checked);
+			updateBulkBar();
+			updateSelectAllState();
+		});
+
 		tr.createEl("td", { text: t.date, cls: "fp-cell-date" });
 		const descCell = tr.createEl("td", { cls: "fp-sensitive" });
 		descCell.setText(t.description);
@@ -266,6 +349,9 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 			.filter((t) => !from || t.date >= from)
 			.filter((t) => !to || t.date <= to)
 			.sort(compareTransactions);
+		currentFiltered = filtered;
+		updateBulkBar();
+		updateSelectAllState();
 
 		const total = filtered.reduce((sum, t) => sum + t.amount, 0);
 		summaryCountVal.setText(String(filtered.length));
