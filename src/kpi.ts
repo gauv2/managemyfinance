@@ -1,3 +1,4 @@
+import { descendantIds, resolvePrimaryId } from "./categories";
 import type { Account, Category, Transaction } from "./types";
 
 /**
@@ -42,7 +43,10 @@ const TRANSFER_ACCOUNT_MARKERS = new Set(["deposit", "withdraw", "withdrawal"]);
  */
 function isTransfer(store: KpiStore, tx: Transaction): boolean {
 	if (tx.categoryId) {
-		const cat = store.categories.find((c) => c.id === tx.categoryId);
+		// Resolve through a secondary category to its primary first, so e.g. a "Savings Transfer"
+		// secondary nested under "Transfers" is still recognized as a transfer.
+		const primaryId = resolvePrimaryId(store.categories, tx.categoryId);
+		const cat = store.categories.find((c) => c.id === primaryId);
 		if (cat && TRANSFER_CATEGORY_NAMES.has(cat.name.trim().toLowerCase())) return true;
 	}
 	const account = store.accounts.find((a) => a.id === tx.accountId);
@@ -213,6 +217,8 @@ export function fiProjection(
 	return undefined;
 }
 
+/** Spend by category id exactly as tagged on each transaction — a secondary and its primary are
+ *  separate keys here. Use `primaryCategoryTotals` when you want secondaries rolled up into their parent. */
 export function categoryTotals(store: KpiStore, year?: string, accountId?: string): Map<string, number> {
 	const totals = new Map<string, number>();
 	for (const tx of store.transactions) {
@@ -226,11 +232,29 @@ export function categoryTotals(store: KpiStore, year?: string, accountId?: strin
 	return totals;
 }
 
-/** The individual expense transactions behind one category's total in `categoryTotals` for a given
- *  month — same filters (expenses only, transfers excluded), so the two always add up to the same figure. */
+/** Same as `categoryTotals`, but a transaction tagged with a secondary category counts toward its
+ *  primary category's total — the view budgets and dashboards want, so spend doesn't fragment across
+ *  however many secondary categories a primary happens to have. */
+export function primaryCategoryTotals(store: KpiStore, year?: string, accountId?: string): Map<string, number> {
+	const totals = new Map<string, number>();
+	for (const tx of store.transactions) {
+		if (tx.amount >= 0) continue;
+		if (year && !tx.date?.startsWith(year)) continue;
+		if (accountId && tx.accountId !== accountId) continue;
+		if (isTransfer(store, tx)) continue;
+		const key = resolvePrimaryId(store.categories, tx.categoryId) ?? "uncategorized";
+		totals.set(key, (totals.get(key) ?? 0) + -tx.amount);
+	}
+	return totals;
+}
+
+/** The individual expense transactions behind one category's total for a given month — same filters
+ *  (expenses only, transfers excluded) as `categoryTotals`/`primaryCategoryTotals`. When `categoryId`
+ *  is a primary category, this includes transactions tagged with any of its secondary categories too. */
 export function categoryTransactions(store: KpiStore, categoryId: string, month: string): Transaction[] {
+	const ids = new Set(descendantIds(store.categories, categoryId));
 	return store.transactions
-		.filter((tx) => tx.amount < 0 && tx.date?.startsWith(month) && tx.categoryId === categoryId && !isTransfer(store, tx))
+		.filter((tx) => tx.amount < 0 && tx.date?.startsWith(month) && tx.categoryId !== undefined && ids.has(tx.categoryId) && !isTransfer(store, tx))
 		.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 

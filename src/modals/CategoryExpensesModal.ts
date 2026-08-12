@@ -1,8 +1,9 @@
 import { App, Modal } from "obsidian";
+import { categoryChain, secondaryCategoriesOf } from "../categories";
 import { categoryTransactions } from "../kpi";
 import type FinancePlugin from "../main";
 import type { Category, Transaction } from "../types";
-import { icon } from "../ui/dom";
+import { categoryChainChip, icon } from "../ui/dom";
 import { TransactionDetailModal } from "./TransactionDetailModal";
 
 function formatEUR(n: number): string {
@@ -27,8 +28,10 @@ export class CategoryExpensesModal extends Modal {
 		const c = this.contentEl;
 		c.addClass("fp-account-modal");
 
-		const txs = categoryTransactions(this.plugin.store, this.category.id, this.month);
+		const store = this.plugin.store;
+		const txs = categoryTransactions(store, this.category.id, this.month);
 		const total = txs.reduce((s, t) => s + -t.amount, 0);
+		const showSecondary = secondaryCategoriesOf(store.categories, this.category.id).length > 0;
 
 		c.createEl("h3", { text: `${this.category.name} — ${monthLabel(this.month)}` });
 		c.createDiv({
@@ -44,9 +47,10 @@ export class CategoryExpensesModal extends Modal {
 			const headRow = table.createEl("thead").createEl("tr");
 			headRow.createEl("th", { text: "Date" });
 			headRow.createEl("th", { text: "Description" });
+			if (showSecondary) headRow.createEl("th", { text: "Subcategory" });
 			headRow.createEl("th", { text: "Amount", cls: "fp-table-num" });
 			const tbody = table.createEl("tbody");
-			txs.forEach((t) => this.renderRow(tbody, t));
+			txs.forEach((t) => this.renderRow(tbody, t, showSecondary));
 		}
 
 		const footer = c.createDiv({ cls: "fp-wizard-footer" });
@@ -57,10 +61,16 @@ export class CategoryExpensesModal extends Modal {
 		closeBtn.addEventListener("click", () => this.close());
 	}
 
-	private renderRow(tbody: HTMLElement, t: Transaction): void {
+	private renderRow(tbody: HTMLElement, t: Transaction, showSecondary: boolean): void {
 		const row = tbody.createEl("tr", { cls: "fp-table-row-clickable" });
 		row.createEl("td", { text: t.date });
 		row.createEl("td", { text: t.counterparty?.trim() || t.description || "—" });
+		if (showSecondary) {
+			const cell = row.createEl("td");
+			const chain = categoryChain(this.plugin.store.categories, t.categoryId);
+			if (chain.secondary) categoryChainChip(cell, chain.secondary);
+			else cell.createSpan({ cls: "fp-budget-hint-text", text: "—" });
+		}
 		row.createEl("td", { cls: "fp-table-num fp-money", text: formatEUR(-t.amount) });
 		row.addEventListener("click", () => {
 			this.close();

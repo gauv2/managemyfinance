@@ -1,8 +1,9 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
+import { primaryCategories, secondaryCategoriesOf } from "../categories";
 import { ACCOUNT_TYPE_META, CURRENCIES, DEFAULT_DATA_FOLDER } from "../constants";
 import { fetchLatestRates } from "../fx";
 import type FinancePlugin from "../main";
-import type { AccountType } from "../types";
+import type { AccountType, Category } from "../types";
 import { badge, icon } from "../ui/dom";
 import { openImportWizard } from "../wizards/ImportWizard";
 
@@ -37,7 +38,7 @@ const FEATURES: { icon: string; title: string; desc: string }[] = [
 	{
 		icon: "target",
 		title: "Budgets",
-		desc: "Simple monthly limits per category, kept per month (not overwritten as the calendar rolls forward) so past plans and actuals stay around for year-end review. Progress bars, suggested budgets from recent spending, and a click-through to the transactions behind any total.",
+		desc: "Monthly limits per category, kept per month (not overwritten as the calendar rolls forward) so past plans and actuals stay around for year-end review. Set one total per category, or split it across secondary categories (e.g. Car → Fuel, Car Wash) for a per-subcategory breakdown. Progress bars, suggested budgets from recent spending, and a click-through to the transactions behind any total.",
 	},
 	{
 		icon: "repeat",
@@ -82,6 +83,7 @@ interface SettingsGroup {
 export class FinanceSettingTab extends PluginSettingTab {
 	private activeGroupId = "general";
 	private cardExpanded = new Map<string, boolean>();
+	private categoryExpanded = new Map<string, boolean>();
 
 	constructor(app: App, private plugin: FinancePlugin) {
 		super(app, plugin);
@@ -273,56 +275,108 @@ export class FinanceSettingTab extends PluginSettingTab {
 			);
 	}
 
+	/** One inline-editable name/color/icon/delete row — shared shape for both primary and secondary
+	 *  categories, so a subcategory row looks and behaves exactly like its parent's, just indented. */
+	private renderCategoryRow(parent: HTMLElement, cat: Category, onDelete: () => Promise<void>): void {
+		const store = this.plugin.store;
+		new Setting(parent)
+			.addText((t) => {
+				t.setValue(cat.name);
+				t.inputEl.addEventListener("blur", async () => {
+					const v = t.getValue().trim();
+					if (!v || v === cat.name) {
+						t.setValue(cat.name);
+						return;
+					}
+					cat.name = v;
+					await store.saveCategories();
+				});
+			})
+			.addColorPicker((c) =>
+				c.setValue(cat.color).onChange(async (v) => {
+					cat.color = v;
+					await store.saveCategories();
+				})
+			)
+			.addText((t) => {
+				t.setValue(cat.icon).setPlaceholder("Icon");
+				t.inputEl.addClass("fp-category-icon-input");
+				t.inputEl.addEventListener("blur", async () => {
+					cat.icon = t.getValue().trim() || cat.icon;
+					await store.saveCategories();
+				});
+			})
+			.addButton((b) =>
+				b
+					.setIcon("trash-2")
+					.setTooltip("Delete")
+					.onClick(onDelete)
+			);
+	}
+
 	private renderCategories(content: HTMLElement): void {
 		const store = this.plugin.store;
+		const primaries = primaryCategories(store.categories);
+		const secondaryCount = store.categories.length - primaries.length;
 		const card = this.card(content, {
 			icon: "tag",
 			title: "Categories",
-			desc: "Labels used to classify transactions in the ledger — rename, recolor, or remove any of them.",
-			badge: `${store.categories.length} categor${store.categories.length === 1 ? "y" : "ies"}`,
+			desc: "Labels used to classify transactions in the ledger. Each category can optionally have its own secondary categories underneath it — e.g. Car → Fuel, Parking, Car Wash — for finer-grained insight without cluttering the top level.",
+			badge: `${primaries.length} categor${primaries.length === 1 ? "y" : "ies"}${secondaryCount ? `, ${secondaryCount} sub` : ""}`,
 		});
 
-		if (store.categories.length === 0) {
+		if (primaries.length === 0) {
 			card.createEl("p", { cls: "fp-step-desc", text: "No categories yet — add one below." });
 		} else {
-			store.categories.forEach((cat) => {
-				new Setting(card)
-					.addText((t) => {
-						t.setValue(cat.name);
-						t.inputEl.addEventListener("blur", async () => {
-							const v = t.getValue().trim();
-							if (!v || v === cat.name) {
-								t.setValue(cat.name);
-								return;
-							}
-							cat.name = v;
+			primaries.forEach((cat) => {
+				const secondaries = secondaryCategoriesOf(store.categories, cat.id);
+				const expanded = this.categoryExpanded.get(cat.id) ?? false;
+
+				const row = card.createDiv({ cls: "fp-category-row" });
+				const rowHead = row.createDiv({ cls: "fp-category-row-head" });
+				const expandBtn = rowHead.createDiv({ cls: "fp-category-expand" + (secondaries.length === 0 ? " is-empty" : "") });
+				icon(expandBtn, expanded ? "chevron-down" : "chevron-right");
+				expandBtn.addEventListener("click", () => {
+					this.categoryExpanded.set(cat.id, !expanded);
+					this.display();
+				});
+				this.renderCategoryRow(rowHead, cat, async () => {
+					store.categories = store.categories.filter((c) => c.id !== cat.id && c.parentId !== cat.id);
+					await store.saveCategories();
+					this.display();
+				});
+				if (secondaries.length > 0) badge(rowHead, `${secondaries.length}`, "neutral");
+
+				if (expanded) {
+					const subList = row.createDiv({ cls: "fp-subcategory-list" });
+					secondaries.forEach((sub) => {
+						this.renderCategoryRow(subList, sub, async () => {
+							store.categories = store.categories.filter((c) => c.id !== sub.id);
 							await store.saveCategories();
+							this.display();
 						});
-					})
-					.addColorPicker((c) =>
-						c.setValue(cat.color).onChange(async (v) => {
-							cat.color = v;
-							await store.saveCategories();
-						})
-					)
-					.addText((t) => {
-						t.setValue(cat.icon).setPlaceholder("Icon");
-						t.inputEl.addClass("fp-category-icon-input");
-						t.inputEl.addEventListener("blur", async () => {
-							cat.icon = t.getValue().trim() || cat.icon;
-							await store.saveCategories();
-						});
-					})
-					.addButton((b) =>
-						b
-							.setIcon("trash-2")
-							.setTooltip("Delete")
-							.onClick(async () => {
-								store.categories = store.categories.filter((c) => c.id !== cat.id);
+					});
+
+					let newSubName = "";
+					new Setting(subList)
+						.setName("Add subcategory")
+						.addText((t) => t.setPlaceholder(`e.g. ${cat.name === "Auto & Transport" ? "Car Wash" : "New subcategory"}`).onChange((v) => (newSubName = v)))
+						.addButton((b) =>
+							b.setButtonText("Add").onClick(async () => {
+								if (!newSubName.trim()) return;
+								store.categories.push({
+									id: `cat-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+									name: newSubName.trim(),
+									color: cat.color,
+									icon: cat.icon,
+									aliases: [],
+									parentId: cat.id,
+								});
 								await store.saveCategories();
 								this.display();
 							})
-					);
+						);
+				}
 			});
 		}
 

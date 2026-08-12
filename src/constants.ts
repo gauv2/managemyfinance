@@ -63,6 +63,115 @@ export function defaultCategories(): Category[] {
 }
 
 /**
+ * Curated secondary categories per primary category, for the primaries where a second level is
+ * actually useful for spend insight (e.g. "how much did I spend on car washes this year"). Not every
+ * primary gets subcategories — Income, Transfers, Taxes, etc. stay flat since splitting them further
+ * wouldn't help anyone's budgeting. Colors are inherited from the parent; only name/icon differ.
+ */
+const DEFAULT_SECONDARY_SEED: Record<string, [string, string][]> = {
+	"Auto & Transport": [
+		["Fuel", "fuel"],
+		["Parking", "map-pin"],
+		["Maintenance & Repairs", "wrench"],
+		["Car Wash", "sparkles"],
+		["Public Transport", "bus"],
+		["Auto Insurance", "shield"],
+	],
+	Food: [
+		["Groceries", "shopping-cart"],
+		["Restaurants & Dining", "utensils"],
+		["Coffee & Snacks", "coffee"],
+		["Fast Food", "pizza"],
+		["Alcohol & Bars", "wine"],
+	],
+	Shopping: [
+		["Clothing", "shirt"],
+		["Electronics", "laptop"],
+		["Books", "book-open"],
+		["Sports & Hobbies", "dumbbell"],
+		["Home & Decor", "sofa"],
+	],
+	Home: [
+		["Furniture & Decor", "sofa"],
+		["Home Improvement", "hammer"],
+		["Home Supplies", "spray-can"],
+		["Household Services", "brush"],
+	],
+	"Bills & Utilities": [
+		["Electricity & Gas", "zap"],
+		["Water", "droplet"],
+		["Internet & Phone", "wifi"],
+		["Garbage & Recycling", "trash-2"],
+	],
+	"Health & Fitness": [
+		["Gym", "dumbbell"],
+		["Hair & Nails", "scissors"],
+		["Spa & Massage", "sparkles"],
+	],
+	Medical: [
+		["Doctor", "stethoscope"],
+		["Dentist", "smile"],
+		["Pharmacy", "pill"],
+	],
+	Entertainment: [
+		["Movies & Streaming", "film"],
+		["Concerts & Events", "ticket"],
+		["Music", "music"],
+		["Subscriptions", "tv"],
+	],
+	Insurance: [
+		["Health Insurance", "heart-pulse"],
+		["Home Insurance", "home"],
+		["Life Insurance", "shield"],
+	],
+	Pets: [
+		["Pet Food", "dog"],
+		["Veterinary", "stethoscope"],
+		["Grooming", "scissors"],
+	],
+	Kids: [
+		["Childcare & Daycare", "baby"],
+		["Kids Clothing", "shirt"],
+		["Toys", "gamepad-2"],
+	],
+	"Travel & Vacation": [
+		["Flights", "plane"],
+		["Hotels", "building-2"],
+		["Rental Car", "car"],
+	],
+	"Mortgage & Rent": [
+		["Mortgage Interest", "percent"],
+		["Mortgage Principal", "landmark"],
+	],
+};
+
+/**
+ * Builds the default secondary categories for a given set of primary categories, e.g. Car ->
+ * Fuel/Parking/Maintenance/Car Wash/Public Transport/Auto Insurance. Only primaries present in
+ * `DEFAULT_SECONDARY_SEED` (by name) get any — the rest stay flat. Called against whatever the
+ * user's actual primary category ids are, so it's safe to call again later for primaries that were
+ * added after the initial seed (it's purely additive — callers should skip any name already present).
+ */
+export function defaultSecondaryCategories(primaries: Category[]): Category[] {
+	const out: Category[] = [];
+	for (const primary of primaries) {
+		const subs = DEFAULT_SECONDARY_SEED[primary.name];
+		if (!subs) continue;
+		for (const [name, icon] of subs) {
+			out.push({
+				id: `${primary.id}-sub-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+				name,
+				color: primary.color,
+				icon,
+				aliases: [],
+				parentId: primary.id,
+			});
+		}
+	}
+	return out;
+}
+
+/**
  * Maps historical/external category labels onto the canonical eMoney-based set above: both this
  * app's old default names (pre-eMoney) and eMoney's own subcategory names (so a bank/spreadsheet
  * export that already tags rows with e.g. "Gas & Fuel" or "Groceries" lands on the right parent).

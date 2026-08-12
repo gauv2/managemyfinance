@@ -1,4 +1,4 @@
-import { categoryTotals, netWorth, summarizeByYear, yearSummaryFor } from "../../../kpi";
+import { netWorth, primaryCategoryTotals, summarizeByYear, yearSummaryFor } from "../../../kpi";
 import type FinancePlugin from "../../../main";
 import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
 import type { Account } from "../../../types";
@@ -59,7 +59,7 @@ export function renderCheckingDashboard(container: HTMLElement, plugin: FinanceP
 		deltaRow(tbody, years.map((y) => y.netWorthEOY));
 	}
 
-	const totals = categoryTotals(store, currentYear?.year, account.id);
+	const totals = primaryCategoryTotals(store, currentYear?.year, account.id);
 	if (totals.size > 0) {
 		const catCard = container.createDiv({ cls: "fp-card" });
 		catCard.createEl("h3", { text: `Spending by category — ${currentYear?.year}` });

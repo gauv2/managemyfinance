@@ -39,6 +39,7 @@ function possessive(name: string): string {
  */
 export class FinanceView extends ItemView {
 	private navItemsEl!: HTMLElement;
+	private navFooterEl!: HTMLElement;
 	private bodyEl!: HTMLElement;
 	private brandEl!: HTMLElement;
 	private brandTitleEl!: HTMLElement;
@@ -51,7 +52,7 @@ export class FinanceView extends ItemView {
 		return VIEW_TYPE_FINANCE;
 	}
 	getDisplayText(): string {
-		return "Finance";
+		return "ManageMyFinance";
 	}
 	getIcon(): string {
 		return "wallet";
@@ -79,7 +80,9 @@ export class FinanceView extends ItemView {
 		this.renderBrandTitle();
 
 		this.navItemsEl = nav.createDiv({ cls: "fp-nav-items" });
+		this.navFooterEl = nav.createDiv({ cls: "fp-nav-footer" });
 		this.renderNav();
+		this.renderNavFooter();
 		this.renderBody();
 		this.maybeShowCardsIntro();
 	}
@@ -138,6 +141,7 @@ export class FinanceView extends ItemView {
 		this.applyMobileClass();
 		this.renderBrandTitle();
 		this.renderNav();
+		this.renderNavFooter();
 		this.renderBody();
 	}
 
@@ -348,6 +352,8 @@ export class FinanceView extends ItemView {
 			this.wireDrag(item, acc.id, (draggedId, targetId) => void this.reorderAccounts(draggedId, targetId));
 		});
 
+		this.navItemsEl.createDiv({ cls: "fp-nav-divider" });
+
 		const addItem = this.navItemsEl.createDiv({ cls: "fp-nav-item fp-nav-item-ghost" });
 		icon(addItem, "plus", "fp-nav-icon");
 		addItem.createSpan({ cls: "fp-nav-label", text: "Add account" });
@@ -363,6 +369,36 @@ export class FinanceView extends ItemView {
 				this.renderNav();
 				this.renderBody();
 			}).open();
+		});
+	}
+
+	/** Pinned below the scrollable nav list: a "set a budget" nudge (shown until at least one category
+	 *  has a budget planned for the current month) and a link into Obsidian's own settings modal, which
+	 *  is otherwise only reachable via the app-wide settings icon. */
+	private renderNavFooter(): void {
+		this.navFooterEl.empty();
+
+		const hasAnyBudget = this.plugin.store.categories.some((c) => Object.values(c.budgetHistory ?? {}).some((v) => v > 0));
+		if (!hasAnyBudget) {
+			const tip = this.navFooterEl.createDiv({ cls: "fp-nav-tip" });
+			const tipHead = tip.createDiv({ cls: "fp-nav-tip-head" });
+			icon(tipHead, "sparkles", "fp-nav-tip-icon");
+			tipHead.createSpan({ cls: "fp-nav-tip-title", text: "Pro tip" });
+			tip.createDiv({ cls: "fp-nav-tip-desc", text: "Set budgets for upcoming months to stay ahead." });
+			const suggestBtn = tip.createEl("button", { cls: "fp-btn fp-btn-primary fp-nav-tip-btn" });
+			icon(suggestBtn, "wand-2");
+			suggestBtn.createSpan({ text: "Suggest budget" });
+			suggestBtn.addEventListener("click", () => void this.selectView("budgets"));
+		}
+
+		const settingsItem = this.navFooterEl.createDiv({ cls: "fp-nav-item fp-nav-item-settings" });
+		icon(settingsItem, "settings", "fp-nav-icon");
+		settingsItem.createSpan({ cls: "fp-nav-label", text: "Settings" });
+		icon(settingsItem, "chevron-right", "fp-nav-item-chevron");
+		settingsItem.addEventListener("click", () => {
+			const appWithSetting = this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } };
+			appWithSetting.setting.open();
+			appWithSetting.setting.openTabById(this.plugin.manifest.id);
 		});
 	}
 

@@ -1,7 +1,8 @@
 import { App, FuzzySuggestModal, Modal, Notice, TFile } from "obsidian";
+import { categoryChain } from "../categories";
 import type FinancePlugin from "../main";
 import type { Transaction } from "../types";
-import { categoryChip, icon } from "../ui/dom";
+import { categoryChainChip, icon, renderCategoryPicker } from "../ui/dom";
 
 function formatAmount(tx: Transaction): string {
 	return new Intl.NumberFormat("en-IE", { style: "currency", currency: tx.currency || "EUR" }).format(tx.amount);
@@ -48,7 +49,6 @@ export class TransactionDetailModal extends Modal {
 
 		const store = this.plugin.store;
 		const account = store.accounts.find((a) => a.id === this.tx.accountId);
-		const category = this.tx.categoryId ? store.categories.find((cat) => cat.id === this.tx.categoryId) : undefined;
 
 		const head = c.createDiv({ cls: "fp-detail-header" });
 		head.createDiv({ cls: "fp-detail-desc fp-sensitive", text: this.tx.description || "(no description)" });
@@ -65,19 +65,24 @@ export class TransactionDetailModal extends Modal {
 		const catRow = body.createDiv({ cls: "fp-detail-row" });
 		catRow.createDiv({ cls: "fp-detail-label", text: "Category" });
 		const catValue = catRow.createDiv({ cls: "fp-detail-value" });
-		if (category) categoryChip(catValue, category.name, category.color, category.icon);
-		const select = catValue.createEl("select", { cls: "fp-setup-select" });
-		select.createEl("option", { text: category ? "Change category…" : "Set category…", value: "" });
-		store.categories.forEach((cat) => {
-			const opt = select.createEl("option", { text: cat.name, value: cat.id });
-			if (cat.id === this.tx.categoryId) opt.selected = true;
-		});
-		select.addEventListener("change", async () => {
-			if (!select.value) return;
-			await store.updateTransaction(this.tx.id, { categoryId: select.value });
-			this.plugin.refreshViews();
-			new Notice("Category updated");
-			this.close();
+		const chipHolder = catValue.createDiv();
+		const chain = categoryChain(store.categories, this.tx.categoryId);
+		categoryChainChip(chipHolder, chain.primary, chain.secondary);
+		renderCategoryPicker(catValue, {
+			categories: store.categories,
+			value: { primaryId: chain.primary?.id, secondaryId: chain.secondary?.id },
+			primaryPlaceholder: chain.primary ? "Change category…" : "Set category…",
+			onChange: async ({ primaryId, secondaryId }) => {
+				if (!primaryId) return;
+				const categoryId = secondaryId ?? primaryId;
+				this.tx.categoryId = categoryId;
+				await store.updateTransaction(this.tx.id, { categoryId });
+				const newChain = categoryChain(store.categories, categoryId);
+				chipHolder.empty();
+				categoryChainChip(chipHolder, newChain.primary, newChain.secondary);
+				this.plugin.refreshViews();
+				new Notice("Category updated");
+			},
 		});
 
 		row(body, "Type", this.tx.type || "—");

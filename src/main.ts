@@ -99,6 +99,7 @@ export default class FinancePlugin extends Plugin {
 			store.categories.push(...missing);
 			await store.saveCategories();
 		}
+		await store.seedDefaultSecondaryCategories();
 
 		const newRules = buildDefaultRules(store.categories).filter(
 			(rule) => !store.rules.some((existing) => existing.pattern === rule.pattern && existing.categoryId === rule.categoryId)

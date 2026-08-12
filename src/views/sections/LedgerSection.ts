@@ -1,7 +1,8 @@
+import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import type FinancePlugin from "../../main";
 import type { Transaction } from "../../types";
-import { badge, categoryChip, emptyState, icon } from "../../ui/dom";
+import { categoryChainChip, emptyState, icon } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
 
 type LedgerSortColumn = "date" | "description" | "account" | "category" | "amount";
@@ -10,7 +11,10 @@ type LedgerSortDirection = "asc" | "desc";
 interface LedgerFilterState {
 	search: string;
 	accountId: string;
-	categoryId: string;
+	/** A primary category id, "__uncategorized", or "" for all. */
+	categoryPrimaryId: string;
+	/** A secondary category id nested under `categoryPrimaryId`, or "" for all of that primary's transactions. */
+	categorySecondaryId: string;
 	dateFrom: string;
 	dateTo: string;
 }
@@ -29,7 +33,8 @@ interface LedgerSortState {
 const filterState: LedgerFilterState = {
 	search: "",
 	accountId: "",
-	categoryId: "",
+	categoryPrimaryId: "",
+	categorySecondaryId: "",
 	dateFrom: "",
 	dateTo: "",
 };
@@ -89,12 +94,30 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		accountSelect.value = accountById.has(filterState.accountId) ? filterState.accountId : "";
 	}
 
-	const categorySelect = filterRow.createEl("select", { cls: "fp-filter-select" });
-	categorySelect.createEl("option", { text: "All categories", value: "" });
-	categorySelect.createEl("option", { text: "Uncategorized", value: "__uncategorized" });
-	store.categories.forEach((c) => categorySelect.createEl("option", { text: c.name, value: c.id }));
-	categorySelect.value =
-		filterState.categoryId === "__uncategorized" || categoryById.has(filterState.categoryId) ? filterState.categoryId : "";
+	const categoryFilterGroup = filterRow.createDiv({ cls: "fp-ledger-category-filter" });
+	const primaries = primaryCategories(store.categories);
+	const primarySelect = categoryFilterGroup.createEl("select", { cls: "fp-filter-select" });
+	primarySelect.createEl("option", { text: "All categories", value: "" });
+	primarySelect.createEl("option", { text: "Uncategorized", value: "__uncategorized" });
+	primaries.forEach((c) => primarySelect.createEl("option", { text: c.name, value: c.id }));
+	primarySelect.value =
+		filterState.categoryPrimaryId === "__uncategorized" || primaries.some((c) => c.id === filterState.categoryPrimaryId)
+			? filterState.categoryPrimaryId
+			: "";
+
+	const secondarySelect = categoryFilterGroup.createEl("select", { cls: "fp-filter-select" });
+	function populateSecondaryFilter(primaryId: string, selectedSecondaryId: string): void {
+		secondarySelect.empty();
+		const primary = primaries.find((c) => c.id === primaryId);
+		const secondaries = primary ? secondaryCategoriesOf(store.categories, primary.id) : [];
+		secondarySelect.disabled = secondaries.length === 0;
+		secondarySelect.createEl("option", { text: primary ? `All ${primary.name}` : "All subcategories", value: "" });
+		secondaries.forEach((c) => {
+			const opt = secondarySelect.createEl("option", { text: c.name, value: c.id });
+			if (c.id === selectedSecondaryId) opt.selected = true;
+		});
+	}
+	populateSecondaryFilter(primarySelect.value, filterState.categorySecondaryId);
 
 	const dateFrom = filterRow.createEl("input", { type: "date", cls: "fp-filter-date" });
 	dateFrom.value = filterState.dateFrom;
@@ -185,9 +208,8 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		tr.createEl("td", { text: t.description, cls: "fp-sensitive" });
 		if (showAccountColumn) tr.createEl("td", { text: accountById.get(t.accountId)?.name ?? "—" });
 		const catCell = tr.createEl("td");
-		const cat = t.categoryId ? categoryById.get(t.categoryId) : undefined;
-		if (cat) categoryChip(catCell, cat.name, cat.color, cat.icon);
-		else badge(catCell, "Uncategorized", "warn");
+		const chain = categoryChain(store.categories, t.categoryId);
+		categoryChainChip(catCell, chain.primary, chain.secondary);
 		const amtCell = tr.createEl("td", { cls: "fp-cell-amount fp-money " + (t.amount < 0 ? "is-negative" : "is-positive") });
 		amtCell.setText(new Intl.NumberFormat("en-IE", { style: "currency", currency: t.currency || "EUR" }).format(t.amount));
 	}
@@ -196,13 +218,15 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		tbody.empty();
 		filterState.search = search.value;
 		filterState.accountId = accountSelect ? accountSelect.value : "";
-		filterState.categoryId = categorySelect.value;
+		filterState.categoryPrimaryId = primarySelect.value;
+		filterState.categorySecondaryId = secondarySelect.value;
 		filterState.dateFrom = dateFrom.value;
 		filterState.dateTo = dateTo.value;
 
 		const needle = filterState.search.toLowerCase();
 		const accountFilter = filterState.accountId;
-		const categoryFilter = filterState.categoryId;
+		const primaryFilter = filterState.categoryPrimaryId;
+		const secondaryFilter = filterState.categorySecondaryId;
 		const from = filterState.dateFrom;
 		const to = filterState.dateTo;
 
@@ -210,9 +234,10 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 			.filter((t) => !needle || `${t.description} ${t.counterparty ?? ""}`.toLowerCase().includes(needle))
 			.filter((t) => !accountFilter || t.accountId === accountFilter)
 			.filter((t) => {
-				if (!categoryFilter) return true;
-				if (categoryFilter === "__uncategorized") return !t.categoryId;
-				return t.categoryId === categoryFilter;
+				if (!primaryFilter) return true;
+				if (primaryFilter === "__uncategorized") return !t.categoryId;
+				if (resolvePrimaryId(store.categories, t.categoryId) !== primaryFilter) return false;
+				return !secondaryFilter || t.categoryId === secondaryFilter;
 			})
 			.filter((t) => !from || t.date >= from)
 			.filter((t) => !to || t.date <= to)
@@ -237,13 +262,18 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	draw();
 	search.addEventListener("input", draw);
 	accountSelect?.addEventListener("change", draw);
-	categorySelect.addEventListener("change", draw);
+	primarySelect.addEventListener("change", () => {
+		populateSecondaryFilter(primarySelect.value, "");
+		draw();
+	});
+	secondarySelect.addEventListener("change", draw);
 	dateFrom.addEventListener("change", draw);
 	dateTo.addEventListener("change", draw);
 	clearBtn.addEventListener("click", () => {
 		search.value = "";
 		if (accountSelect) accountSelect.value = "";
-		categorySelect.value = "";
+		primarySelect.value = "";
+		populateSecondaryFilter("", "");
 		dateFrom.value = "";
 		dateTo.value = "";
 		draw();

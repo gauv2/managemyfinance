@@ -1,6 +1,6 @@
 import { App, normalizePath } from "obsidian";
 import { parseCSV, toCSV } from "./csv";
-import { DEFAULT_DATA_FOLDER, defaultCategories } from "./constants";
+import { DEFAULT_DATA_FOLDER, defaultCategories, defaultSecondaryCategories } from "./constants";
 import type { Account, Card, Category, CategoryRule, Portfolio, Subscription, Transaction } from "./types";
 
 export interface FinanceSettings {
@@ -100,6 +100,7 @@ export class FinanceStore {
 
 		this.categories = await this.readJson<Category[]>(this.path("data", "categories.json"), defaultCategories());
 		await this.migrateLegacyCategoryBudgets();
+		await this.seedDefaultSecondaryCategories();
 		this.accounts = await this.readJson<Account[]>(this.path("data", "accounts.json"), []);
 		this.rules = await this.readJson<CategoryRule[]>(this.path("data", "rules.json"), []);
 		this.subscriptions = await this.readJson<Subscription[]>(this.path("data", "subscriptions.json"), []);
@@ -125,6 +126,18 @@ export class FinanceStore {
 			changed = true;
 		}
 		if (changed) await this.saveCategories();
+	}
+
+	/** One-time (but safe to re-run) seed: adds the default secondary categories for any primary
+	 *  category that hasn't been seeded yet — additive only, never touches existing categories, and
+	 *  never resurrects secondaries the user deliberately deleted (tracked via `defaultSecondariesSeeded`). */
+	async seedDefaultSecondaryCategories(): Promise<void> {
+		const unseeded = this.categories.filter((c) => !c.parentId && !c.defaultSecondariesSeeded);
+		if (unseeded.length === 0) return;
+		const seeded = defaultSecondaryCategories(unseeded);
+		this.categories.push(...seeded);
+		for (const primary of unseeded) primary.defaultSecondariesSeeded = true;
+		await this.saveCategories();
 	}
 
 	/** One-time migration: pre-history installs stored expiry as a single "MM/YY" string. Split it into

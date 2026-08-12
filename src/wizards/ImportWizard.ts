@@ -8,7 +8,7 @@ import { parseTradeRepublicRows } from "../import/tradeRepublicParser";
 import { extractTransactionTables, DetectedTable } from "../import/xlsxWorkbook";
 import type FinancePlugin from "../main";
 import type { Transaction } from "../types";
-import { badge, icon } from "../ui/dom";
+import { badge, icon, renderCategoryPicker } from "../ui/dom";
 import { WizardModal, WizardStep } from "./WizardModal";
 
 const FORMAT_LABEL: Record<DetectedTable["format"], string> = {
@@ -321,10 +321,13 @@ export function openImportWizard(plugin: FinancePlugin): void {
 						cls: "fp-review-desc",
 						text: `${tx.date}  ·  ${tx.description}  ·  € ${tx.amount.toFixed(2)}`,
 					});
-					const select = row.createEl("select");
-					select.createEl("option", { text: "Uncategorized", value: "" });
-					store.categories.forEach((cat) => select.createEl("option", { text: cat.name, value: cat.id }));
-					select.addEventListener("change", () => (tx.categoryId = select.value || undefined));
+					renderCategoryPicker(row, {
+						categories: store.categories,
+						primaryPlaceholder: "Uncategorized",
+						onChange: ({ primaryId, secondaryId }) => {
+							tx.categoryId = secondaryId ?? primaryId;
+						},
+					});
 				});
 				if (uncategorized.length > shown.length) {
 					c.createEl("p", {

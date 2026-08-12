@@ -30,6 +30,14 @@ export interface Category {
 	 *  plans survive for year-end budget-planning review (did you over- or under-budget, and where). */
 	budgetHistory?: Record<string, number>;
 	archived?: boolean;
+	/** Id of the primary category this one is nested under. Unset means this is itself a primary category. */
+	parentId?: string;
+	/** Primary categories only. "breakdown" means the budget is the sum of this category's secondary
+	 *  categories' own budgetHistory rather than a number set directly on this category. Defaults to "total". */
+	budgetMode?: "total" | "breakdown";
+	/** Primary categories only. Set once the default secondary categories have been seeded for this
+	 *  category, so deleting them all doesn't cause them to reappear on the next load. */
+	defaultSecondariesSeeded?: boolean;
 }
 
 export interface CategoryRule {

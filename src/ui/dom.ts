@@ -1,4 +1,6 @@
 import { setIcon } from "obsidian";
+import { primaryCategories, secondaryCategoriesOf } from "../categories";
+import type { Category } from "../types";
 
 export type Tone = "good" | "warn" | "bad" | "neutral";
 
@@ -39,6 +41,105 @@ export function categoryChip(parent: HTMLElement, name: string, color: string, i
 	if (iconName) icon(chip, iconName, "fp-chip-icon");
 	chip.createSpan({ text: name });
 	return chip;
+}
+
+/** A category's icon in its own soft-tinted square, plus its name set in that same color — the
+ *  "icon badge + colored label" pairing used by the budgets table (as opposed to categoryChip's
+ *  pill, which is for compact inline mentions elsewhere). The icon sits in its own flex column
+ *  vertically centered against whatever the caller stacks into the returned column (e.g. the name
+ *  plus a progress bar beneath it), rather than only against the name's own line. */
+export function categoryIconLabel(parent: HTMLElement, name: string, color: string, iconName?: string): HTMLElement {
+	const wrap = parent.createDiv({ cls: "fp-cat-label" });
+	wrap.style.setProperty("--fp-cat-color", color);
+	if (iconName) icon(wrap.createDiv({ cls: "fp-cat-icon-box" }), iconName);
+	const col = wrap.createDiv({ cls: "fp-cat-col" });
+	col.createSpan({ cls: "fp-cat-name", text: name });
+	return col;
+}
+
+/** A small donut gauge (percentage as a conic-gradient ring) with the percentage centered inside —
+ *  used wherever a single ratio needs a compact, at-a-glance visual (budget KPI cards, per-row "% met"). */
+export function ringGauge(parent: HTMLElement, opts: { pct: number; tone?: Tone; size?: number }): HTMLElement {
+	const size = opts.size ?? 56;
+	const clamped = Math.max(0, Math.min(1, opts.pct));
+	const ring = parent.createDiv({ cls: `fp-ring fp-tone-${opts.tone ?? "neutral"}` });
+	ring.style.setProperty("--fp-ring-size", `${size}px`);
+	ring.style.setProperty("--fp-ring-pct", `${clamped * 100}`);
+	ring.createSpan({ cls: "fp-ring-value", text: `${Math.round(opts.pct * 100)}%` });
+	return ring;
+}
+
+/** The primary category's chip, plus a small "› Secondary" suffix when the transaction is tagged at
+ *  the secondary level — the compact display used anywhere a transaction's category is shown. */
+export function categoryChainChip(parent: HTMLElement, primary?: Category, secondary?: Category): HTMLElement {
+	const wrap = parent.createSpan({ cls: "fp-chip-chain" });
+	if (!primary) {
+		badge(wrap, "Uncategorized", "warn");
+		return wrap;
+	}
+	categoryChip(wrap, primary.name, primary.color, primary.icon);
+	if (secondary) {
+		wrap.createSpan({ cls: "fp-chip-chain-sep", text: "›" });
+		categoryChip(wrap, secondary.name, secondary.color, secondary.icon);
+	}
+	return wrap;
+}
+
+export interface CategoryPickerValue {
+	primaryId?: string;
+	secondaryId?: string;
+}
+
+/**
+ * A primary + secondary category select pair: the secondary select's options are always scoped to
+ * whichever primary is currently chosen, and reset whenever the primary changes. Used anywhere a
+ * transaction's category is set (transaction detail, import review) — for filtering UI with its own
+ * "All"/"Uncategorized" sentinels, wire the two selects directly instead (see LedgerSection).
+ */
+export function renderCategoryPicker(
+	container: HTMLElement,
+	opts: {
+		categories: Category[];
+		value?: CategoryPickerValue;
+		primaryPlaceholder: string;
+		secondaryPlaceholder?: string;
+		onChange: (value: CategoryPickerValue) => void;
+	}
+): { primarySelect: HTMLSelectElement; secondarySelect: HTMLSelectElement } {
+	const wrap = container.createDiv({ cls: "fp-category-picker" });
+	const primarySelect = wrap.createEl("select", { cls: "fp-setup-select" });
+	const secondarySelect = wrap.createEl("select", { cls: "fp-setup-select" });
+
+	const primaries = primaryCategories(opts.categories);
+
+	function populateSecondary(primaryId: string | undefined, selectedSecondaryId: string | undefined): void {
+		secondarySelect.empty();
+		const secondaries = primaryId ? secondaryCategoriesOf(opts.categories, primaryId) : [];
+		secondarySelect.disabled = secondaries.length === 0;
+		secondarySelect.createEl("option", { text: opts.secondaryPlaceholder ?? "— none —", value: "" });
+		secondaries.forEach((cat) => {
+			const o = secondarySelect.createEl("option", { text: cat.name, value: cat.id });
+			if (cat.id === selectedSecondaryId) o.selected = true;
+		});
+	}
+
+	primarySelect.createEl("option", { text: opts.primaryPlaceholder, value: "" });
+	primaries.forEach((cat) => {
+		const o = primarySelect.createEl("option", { text: cat.name, value: cat.id });
+		if (cat.id === opts.value?.primaryId) o.selected = true;
+	});
+	populateSecondary(opts.value?.primaryId, opts.value?.secondaryId);
+
+	primarySelect.addEventListener("change", () => {
+		const primaryId = primarySelect.value || undefined;
+		populateSecondary(primaryId, undefined);
+		opts.onChange({ primaryId, secondaryId: undefined });
+	});
+	secondarySelect.addEventListener("change", () => {
+		opts.onChange({ primaryId: primarySelect.value || undefined, secondaryId: secondarySelect.value || undefined });
+	});
+
+	return { primarySelect, secondarySelect };
 }
 
 /** A small tab strip switching between panels rendered into the same container — first tab active by default. */

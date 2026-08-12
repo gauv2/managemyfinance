@@ -5,6 +5,8 @@ import {
 	yearSummaryFor,
 	netWorth,
 	categoryTotals,
+	primaryCategoryTotals,
+	categoryTransactions,
 	accountStats,
 	averageMonthlyExpenses,
 	investingHoldings,
@@ -289,6 +291,58 @@ describe("categoryTotals", () => {
 			],
 		});
 		expect(categoryTotals(s, "2024").get(catFood.id)).toBe(10);
+	});
+});
+
+// ---------- primaryCategoryTotals & secondary-category rollup ----------
+
+const catGroceries: Category = { id: "cat-groceries", name: "Groceries", color: "#000", icon: "shopping-cart", aliases: [], parentId: catFood.id };
+const catTransfersSecondary: Category = {
+	id: "cat-savings-transfer",
+	name: "Savings Transfer",
+	color: "#000",
+	icon: "repeat",
+	aliases: [],
+	parentId: catTransfers.id,
+};
+
+describe("primaryCategoryTotals", () => {
+	it("rolls a secondary category's spend up into its primary", () => {
+		const s = store({
+			categories: [catFood, catGroceries],
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+				tx({ date: "2024-01-02", accountId: checking.id, amount: -30, categoryId: catGroceries.id }),
+			],
+		});
+		expect(primaryCategoryTotals(s).get(catFood.id)).toBe(50);
+		expect(primaryCategoryTotals(s).has(catGroceries.id)).toBe(false);
+	});
+});
+
+describe("categoryTransactions", () => {
+	it("includes transactions tagged with a descendant secondary category when queried by the primary", () => {
+		const s = store({
+			categories: [catFood, catGroceries],
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+				tx({ date: "2024-01-02", accountId: checking.id, amount: -30, categoryId: catGroceries.id }),
+			],
+		});
+		const txs = categoryTransactions(s, catFood.id, "2024-01");
+		expect(txs).toHaveLength(2);
+	});
+});
+
+describe("transfer detection through a secondary category", () => {
+	it("excludes a transaction tagged with a secondary nested under Transfers", () => {
+		const s = store({
+			categories: [catTransfers, catTransfersSecondary],
+			transactions: [tx({ date: "2024-01-01", accountId: checking.id, amount: -50, categoryId: catTransfersSecondary.id })],
+		});
+		const [year] = summarizeByYear(s);
+		expect(year.income).toBe(0);
+		expect(year.expenses).toBe(0);
 	});
 });
 

@@ -1,15 +1,21 @@
 import { CATEGORY_ALIAS_SEED } from "../constants";
 import type { Category, CategoryRule, Transaction } from "../types";
 
+/**
+ * Legacy aliases are applied first and real categories second, so that when a secondary category's
+ * own name matches one of eMoney's subcategory alias keys (e.g. a "Public Transport" secondary vs.
+ * the `CATEGORY_ALIAS_SEED["public transport"]` entry, which points at the flat "Auto & Transport"
+ * primary), the actual category wins and the match lands at the correct, more specific level.
+ */
 export function buildAliasLookup(categories: Category[]): Map<string, string> {
 	const map = new Map<string, string>();
-	for (const cat of categories) {
-		map.set(cat.name.toLowerCase(), cat.id);
-		for (const alias of cat.aliases) map.set(alias.toLowerCase(), cat.id);
-	}
 	for (const [alias, name] of Object.entries(CATEGORY_ALIAS_SEED)) {
 		const cat = categories.find((c) => c.name === name);
 		if (cat) map.set(alias, cat.id);
+	}
+	for (const cat of categories) {
+		map.set(cat.name.toLowerCase(), cat.id);
+		for (const alias of cat.aliases) map.set(alias.toLowerCase(), cat.id);
 	}
 	return map;
 }
