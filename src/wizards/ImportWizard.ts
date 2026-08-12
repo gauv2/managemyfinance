@@ -5,21 +5,44 @@ import { autoCategorize, effectiveRules } from "../import/autoCategorize";
 import { applyMemory, applyPendingSuggestions, learnFromHistory, unknownMerchants } from "../import/merchantMemory";
 import { buildAliasLookup } from "../import/categorize";
 import { applyColumnMapping, COLUMN_MAPPING_FIELDS, emptyColumnMapping, guessColumnMapping } from "../import/columnMapping";
-import { detectFormat } from "../import/detect";
+import { matchBankProfile } from "../import/bankProfiles";
+import { parseCamt053 } from "../import/camt053";
+import { countRepeatedIds, withOccurrenceSuffixes } from "../import/dedupe";
+import { canonicalColumnMapping } from "../import/canonical";
+import { detectFileFormat, detectFormat, IBAN_BEARING_FORMATS, type DetectedFormat } from "../import/detect";
+import { parseMt940 } from "../import/mt940";
+import { parseOfx } from "../import/ofx";
+import { parseQif } from "../import/qif";
 import { ingAccountIbans, parseIngRows } from "../import/ingParser";
 import { parseTradeRepublicRows } from "../import/tradeRepublicParser";
 import { extractTransactionTables, DetectedTable } from "../import/xlsxWorkbook";
 import type FinancePlugin from "../main";
 import { formatMoney } from "../money";
-import type { Transaction } from "../types";
+import type { Transaction, TransactionSource } from "../types";
 import { badge, icon, renderCategoryPicker } from "../ui/dom";
 import { WizardModal, type WizardControls, WizardStep } from "./WizardModal";
 
-const FORMAT_LABEL: Record<DetectedTable["format"], string> = {
+const FORMAT_LABEL: Record<DetectedFormat, string> = {
 	ing: "ING bank",
 	"trade-republic": "Trade Republic",
+	revolut: "Revolut",
+	bunq: "bunq",
+	n26: "N26",
+	camt: "CAMT.053 statement",
+	mt940: "MT940 statement",
+	ofx: "OFX / QFX",
+	qif: "QIF",
 	unknown: "Unrecognized",
 };
+
+/** Every format the wizard can name, in the order the preview lists them. */
+const KNOWN_FORMATS: DetectedFormat[] = ["ing", "trade-republic", "revolut", "bunq", "n26", "camt", "mt940", "ofx", "qif"];
+
+/** A detected format is also the transaction's source, except for the formats that share the flat
+ *  generic reader without being a named bank ("unknown" is a file whose columns you mapped by hand). */
+function sourceFor(format: DetectedFormat): TransactionSource {
+	return format === "unknown" ? "generic" : (format as TransactionSource);
+}
 
 /** Bank/broker CSV or Excel import: pick file → detect & preview → review categorization → confirm. */
 export function openImportWizard(plugin: FinancePlugin): void {
@@ -43,15 +66,24 @@ export function openImportWizard(plugin: FinancePlugin): void {
 	/** Set once the Categorize step has auto-run the AI, so re-rendering it doesn't fire again. */
 	let aiAutoRun = false;
 	let loadError: string | null = null;
+	/** How many parsed rows needed an occurrence suffix to stay distinct — reported before importing. */
+	let repeatedRows = 0;
 
 	function setTables(name: string, newTables: DetectedTable[]): void {
 		selectedFile = name;
 		tables = newTables;
-		const ingTables = tables.filter((t) => t.format === "ing");
-		ibans = Array.from(new Set(ingTables.flatMap((t) => ingAccountIbans(t.headers, t.rows))));
+		// Any format that carries an account identifier per row can be split across your accounts, not
+		// just ING — a CAMT or MT940 file covering two accounts is exactly the same problem.
+		const ibanTables = tables.filter((t) => IBAN_BEARING_FORMATS.includes(t.format));
+		ibans = Array.from(new Set(ibanTables.flatMap((t) => ingAccountIbans(t.headers, t.rows))));
 		ibanAccountMap = new Map(
 			ibans.filter((iban) => store.accounts.some((a) => a.iban === iban)).map((iban) => [iban, store.accounts.find((a) => a.iban === iban)!.id])
 		);
+	}
+
+	/** Formats with no per-row account identifier: they can only be told which account they belong to. */
+	function tablesNeedingGenericAccount(): DetectedTable[] {
+		return tables.filter((t) => t.format !== "trade-republic" && !IBAN_BEARING_FORMATS.includes(t.format));
 	}
 
 	/** The mapping grid is shown (and used) for any table whose columns fit the flat ledger shape —
@@ -61,16 +93,43 @@ export function openImportWizard(plugin: FinancePlugin): void {
 		return tables.find((t) => t.format !== "trade-republic")?.headers ?? [];
 	}
 
-	function loadCsvText(name: string, text: string): void {
+	/**
+	 * Reads any text file: a statement format (CAMT.053, MT940, OFX, QIF) is converted into the same
+	 * table shape a CSV produces, so from here on every format shares one preview, one column-mapping
+	 * step and one parser. That's deliberate — a statement format that bypassed the field selector
+	 * would be the one kind of file you couldn't correct when a bank changed something.
+	 */
+	function loadTextFile(name: string, text: string): void {
 		loadError = null;
-		const rows = parseCSV(text);
-		const headers = rows[0] ?? [];
-		const dataRows = rows.slice(1);
-		const format = detectFormat(headers);
-		// Unlike xlsx (which just skips unrecognized sheets — a workbook has plenty of other sheets to
-		// fall back on), a single unrecognized CSV is kept so the mapping UI below has something to map.
-		setTables(name, [{ sheetName: name, format, headers, rows: dataRows }]);
-		mapping = guessColumnMapping(mappableHeaders());
+		try {
+			const kind = detectFileFormat(text, name);
+			if (kind !== "csv") {
+				const table =
+					kind === "camt053" ? parseCamt053(text) : kind === "mt940" ? parseMt940(text) : kind === "ofx" ? parseOfx(text) : parseQif(text);
+				// "xlsx" never reaches here — it's routed to loadXlsx before any text is read.
+				const format: DetectedFormat = kind === "camt053" ? "camt" : (kind as Exclude<typeof kind, "camt053" | "xlsx" | "csv">);
+				setTables(name, [{ sheetName: name, format, headers: table.headers, rows: table.rows }]);
+				// Set exactly, not guessed: these are our own headers. See canonicalColumnMapping.
+				mapping = canonicalColumnMapping();
+				return;
+			}
+
+			const rows = parseCSV(text);
+			const headers = rows[0] ?? [];
+			const dataRows = rows.slice(1);
+			const format = detectFormat(headers);
+			// Unlike xlsx (which just skips unrecognized sheets — a workbook has plenty of other sheets to
+			// fall back on), a single unrecognized CSV is kept so the mapping UI below has something to map.
+			setTables(name, [{ sheetName: name, format, headers, rows: dataRows }]);
+
+			// A recognized bank profile pre-fills the mapping with that bank's real columns instead of
+			// the generic name-similarity guess. Still shown, still editable.
+			const profile = matchBankProfile(headers);
+			mapping = profile ? profile.mapping(headers) : guessColumnMapping(mappableHeaders());
+		} catch (err) {
+			setTables(name, []);
+			loadError = err instanceof Error ? err.message : String(err);
+		}
 	}
 
 	async function loadXlsx(name: string, data: ArrayBuffer): Promise<void> {
@@ -192,11 +251,11 @@ export function openImportWizard(plugin: FinancePlugin): void {
 					text: selectedFile ? "Click, or drop another file, to replace it" : "or click to browse",
 				});
 
-				const fileInput = c.createEl("input", { cls: "fp-file-input-hidden", attr: { type: "file", accept: ".csv,.xlsx" } });
+				const fileInput = c.createEl("input", { cls: "fp-file-input-hidden", attr: { type: "file", accept: ".csv,.xlsx,.xml,.sta,.940,.mt940,.ofx,.qfx,.qif,.txt" } });
 
 				async function handleFile(file: File): Promise<void> {
 					if (file.name.toLowerCase().endsWith(".xlsx")) await loadXlsx(file.name, await file.arrayBuffer());
-					else loadCsvText(file.name, await file.text());
+					else loadTextFile(file.name, await file.text());
 					refresh();
 				}
 
@@ -361,7 +420,7 @@ export function openImportWizard(plugin: FinancePlugin): void {
 					if (ibans.length > 1) {
 						c.createEl("p", {
 							cls: "fp-step-desc",
-							text: "This export covers multiple ING accounts — map each IBAN to one of your Finance accounts.",
+							text: "This export covers multiple accounts — map each account identifier to one of your Finance accounts.",
 						});
 						const mapWrap = c.createDiv({ cls: "fp-iban-map" });
 						ibans.forEach((iban) => {
@@ -384,7 +443,7 @@ export function openImportWizard(plugin: FinancePlugin): void {
 						});
 					} else {
 						const accountRow = c.createDiv({ cls: "fp-setting-row" });
-						accountRow.createSpan({ text: "ING account: " });
+						accountRow.createSpan({ text: "Bank account: " });
 						const select = accountRow.createEl("select");
 						store.accounts.forEach((acc) => {
 							const opt = select.createEl("option", { text: acc.name, value: acc.id });
@@ -431,8 +490,8 @@ export function openImportWizard(plugin: FinancePlugin): void {
 				if (mappableHeaders().length > 0 && missing.length > 0) {
 					return `Map ${missing.map((f) => f.label).join(", ")} first.`;
 				}
-				if (tables.some((t) => t.format === "unknown") && !genericAccountId) return "Choose an account to import into.";
-				if (tables.some((t) => t.format === "ing") && ibans.length > 1 && !ibans.every((i) => ibanAccountMap.has(i))) {
+				if (tablesNeedingGenericAccount().length > 0 && !genericAccountId) return "Choose an account to import into.";
+				if (tables.some((t) => IBAN_BEARING_FORMATS.includes(t.format)) && ibans.length > 1 && !ibans.every((i) => ibanAccountMap.has(i))) {
 					return "Map every IBAN to an account first.";
 				}
 				return undefined;
@@ -440,8 +499,10 @@ export function openImportWizard(plugin: FinancePlugin): void {
 			canGoNext: () => {
 				if (tables.length === 0) return false;
 				const mappingOk = mappableHeaders().length === 0 || (!!mapping.date && !!mapping.description && !!mapping.amount);
-				const genericOk = !tables.some((t) => t.format === "unknown") || !!genericAccountId;
-				const ingOk = !tables.some((t) => t.format === "ing") || (ibans.length > 1 ? ibans.every((i) => ibanAccountMap.has(i)) : !!ingAccountId);
+				const genericOk = tablesNeedingGenericAccount().length === 0 || !!genericAccountId;
+				const ingOk =
+					!tables.some((t) => IBAN_BEARING_FORMATS.includes(t.format)) ||
+					(ibans.length > 1 ? ibans.every((i) => ibanAccountMap.has(i)) : !!ingAccountId);
 				const trOk = !tables.some((t) => t.format === "trade-republic") || !!tradeRepublicAccountId;
 				return mappingOk && genericOk && ingOk && trOk;
 			},
@@ -449,30 +510,32 @@ export function openImportWizard(plugin: FinancePlugin): void {
 				const categoryLookup = buildAliasLookup(store.categories);
 				parsed = [];
 				for (const t of tables) {
-					if (t.format === "ing") {
-						const mappedHeaders = applyColumnMapping(t.headers, mapping);
-						parsed.push(
-							...parseIngRows(mappedHeaders, t.rows, {
-								defaultAccountId: ingAccountId,
-								accountByIban: ibanAccountMap,
-								categoryLookup,
-								debitValues: mapping.debitCredit && mapping.debitValue ? [mapping.debitValue] : undefined,
-							})
-						);
-					} else if (t.format === "trade-republic") {
+					if (t.format === "trade-republic") {
 						parsed.push(...parseTradeRepublicRows(t.headers, t.rows, tradeRepublicAccountId));
-					} else if (t.format === "unknown") {
-						const mappedHeaders = applyColumnMapping(t.headers, mapping);
-						parsed.push(
-							...parseIngRows(mappedHeaders, t.rows, {
-								defaultAccountId: genericAccountId,
-								categoryLookup,
-								debitValues: mapping.debitCredit && mapping.debitValue ? [mapping.debitValue] : undefined,
-								source: "generic",
-							})
-						);
+						continue;
 					}
+					// Every other format — recognized bank CSV, statement file, or a table you mapped by
+					// hand — is a flat ledger table by this point, so they all read through one parser with
+					// the mapping applied. The only difference between them is which account the rows land
+					// in and what source they're filed under.
+					const carriesIban = IBAN_BEARING_FORMATS.includes(t.format);
+					const mappedHeaders = applyColumnMapping(t.headers, mapping);
+					parsed.push(
+						...parseIngRows(mappedHeaders, t.rows, {
+							defaultAccountId: carriesIban ? ingAccountId : genericAccountId,
+							accountByIban: carriesIban ? ibanAccountMap : undefined,
+							categoryLookup,
+							debitValues: mapping.debitCredit && mapping.debitValue ? [mapping.debitValue] : undefined,
+							source: sourceFor(t.format),
+						})
+					);
 				}
+
+				// Two genuinely separate payments that agree on account, date, amount and description hash
+				// to one id; without this the second one is mistaken for a duplicate of the first and never
+				// arrives. See src/import/dedupe.ts for why the suffix is still re-import safe.
+				repeatedRows = countRepeatedIds(parsed);
+				parsed = withOccurrenceSuffixes(parsed);
 				// Rows the export categorized itself, via its own Main Cat./Sub Cat. columns — counted
 				// before anything else runs, since the parser has already applied them.
 				fileHits = parsed.filter((tx) => tx.categoryId).length;
@@ -601,10 +664,23 @@ export function openImportWizard(plugin: FinancePlugin): void {
 				stats.createDiv({ cls: "fp-import-stat", text: `${parsed.length} rows parsed` });
 				stats.createDiv({ cls: "fp-import-stat", text: `${parsed.length - dupes} new` });
 				stats.createDiv({ cls: "fp-import-stat", text: `${dupes} duplicate — will be skipped` });
+				if (repeatedRows > 0) {
+					c.createEl("p", {
+						cls: "fp-step-desc",
+						text: `${repeatedRows} row${repeatedRows === 1 ? " is" : "s are"} identical to another row in this file (same date, amount and description). They're kept as separate transactions rather than treated as duplicates — two coffees at the same shop on the same day really are two coffees.`,
+					});
+				}
+				c.createEl("p", {
+					cls: "fp-step-desc",
+					text: "This import is recorded as one batch, so it can be undone in one go from Vault settings → Import.",
+				});
 			},
 			nextLabel: "Import",
 			onNext: async () => {
-				const result = await store.importTransactions(parsed);
+				const result = await store.importTransactions(parsed, {
+					fileName: selectedFile ?? undefined,
+					format: tables[0] ? FORMAT_LABEL[tables[0].format] : undefined,
+				});
 				new Notice(`Imported ${result.added} new transactions (${result.skipped} duplicates skipped)`);
 				plugin.refreshViews();
 			},

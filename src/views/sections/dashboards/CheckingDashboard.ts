@@ -1,5 +1,6 @@
 import { netWorth, primaryCategoryTotals, summarizeByYear, yearSummaryFor } from "../../../kpi";
 import type FinancePlugin from "../../../main";
+import { CategoryDrilldownModal } from "../../../modals/CategoryDrilldownModal";
 import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
 import type { Account } from "../../../types";
 import { barChart } from "../../../ui/charts";
@@ -73,6 +74,14 @@ export function renderCheckingDashboard(container: HTMLElement, plugin: FinanceP
 					value: amount,
 					color: cat?.color ?? "#6b7280",
 					iconName: cat?.icon ?? "help-circle",
+					// Scoped to this account, so the drill-down's total matches the bar exactly.
+					onClick: () =>
+						new CategoryDrilldownModal(plugin.app, plugin, {
+							categoryId: catId,
+							period: currentYear?.year,
+							accountId: account.id,
+							scopeLabel: account.name,
+						}).open(),
 				};
 			});
 		barChart(catCard, rows);

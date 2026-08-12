@@ -1,5 +1,5 @@
 import { ItemView, Menu, Platform, WorkspaceLeaf } from "obsidian";
-import { ACCOUNT_TYPE_META, VIEW_TYPE_FINANCE } from "../constants";
+import { ACCOUNT_TYPE_META, ACCOUNT_TYPE_ORDER, VIEW_TYPE_FINANCE } from "../constants";
 import type FinancePlugin from "../main";
 import { CreateAccountModal } from "../modals/CreateAccountModal";
 import { ManageAccountsModal } from "../modals/ManageAccountsModal";
@@ -7,6 +7,7 @@ import { ManagePortfoliosModal } from "../modals/ManagePortfoliosModal";
 import type { FinanceViewId } from "../store";
 import type { Account } from "../types";
 import { icon } from "../ui/dom";
+import { availableTips, dismissTip } from "../ui/tips";
 import { openCardWizard } from "../wizards/CardWizard";
 import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { renderAccountPage } from "./sections/AccountPage";
@@ -16,8 +17,10 @@ import { renderReviewSection } from "./sections/ReviewSection";
 import { renderSettingsSection } from "./sections/SettingsSection";
 import { renderSubscriptionsSection } from "./sections/SubscriptionsSection";
 
-/** Checking-like accounts first, then savings, then investing/crypto, then everything else (e.g. cash). */
-const TYPE_ORDER: Account["type"][] = ["debit", "credit", "saving", "investing", "crypto", "cash"];
+/** Checking-like accounts first, then savings, investments, cash, and finally the balance-only
+ *  accounts (property, pension) and what you owe. Shared with the account-type picker, so the sidebar
+ *  and the "add account" list agree on what order these things come in. */
+const TYPE_ORDER: Account["type"][] = ACCOUNT_TYPE_ORDER;
 
 interface NavTabDef {
 	id: string;
@@ -48,6 +51,9 @@ export class FinanceView extends ItemView {
 	private bodyEl!: HTMLElement;
 	private brandEl!: HTMLElement;
 	private brandTitleEl!: HTMLElement;
+	private privacyToggleEl!: HTMLElement;
+	/** Which tip the footer card is currently showing. View state, not settings — it resets per session. */
+	private tipIndex = 0;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: FinancePlugin) {
 		super(leaf);
@@ -81,8 +87,10 @@ export class FinanceView extends ItemView {
 		icon(this.brandEl, "wallet", "fp-nav-brand-icon");
 		const brandText = this.brandEl.createDiv({ cls: "fp-nav-brand-text" });
 		this.brandTitleEl = brandText.createDiv({ cls: "fp-nav-brand-title" });
+		this.privacyToggleEl = this.brandEl.createDiv({ cls: "fp-nav-brand-actions" });
 		this.brandEl.addEventListener("click", () => this.openPortfolioMenu());
 		this.renderBrandTitle();
+		this.renderPrivacyToggle();
 
 		this.navItemsEl = nav.createDiv({ cls: "fp-nav-items" });
 		this.navFooterEl = nav.createDiv({ cls: "fp-nav-footer" });
@@ -146,6 +154,7 @@ export class FinanceView extends ItemView {
 		this.applyPrivacyClass();
 		this.applyMobileClass();
 		this.renderBrandTitle();
+		this.renderPrivacyToggle();
 		this.renderNav();
 		this.renderNavFooter();
 		this.renderBody();
@@ -157,6 +166,30 @@ export class FinanceView extends ItemView {
 		const mode = this.plugin.settings.mobileLayout ?? "auto";
 		const isMobile = mode === "on" || (mode !== "off" && Platform.isMobile);
 		this.contentEl.toggleClass("fp-mobile", isMobile);
+	}
+
+	/**
+	 * The eye button: privacy mode, one click away, wherever you are.
+	 *
+	 * It lived only in the settings page before, which is the wrong place for it — you reach for this
+	 * when someone walks up to your desk or a screen-share starts, and "open settings, find the
+	 * Appearance card, flip the toggle" is not a thing you can do in that moment. Small, quiet and
+	 * next to the portfolio name, where it's out of the way but always to hand.
+	 */
+	private renderPrivacyToggle(): void {
+		this.privacyToggleEl.empty();
+		const on = !!this.plugin.settings.privacyMode;
+		const btn = this.privacyToggleEl.createDiv({ cls: "fp-nav-privacy" + (on ? " is-on" : "") });
+		icon(btn, on ? "eye-off" : "eye");
+		btn.setAttribute("role", "switch");
+		btn.setAttribute("aria-checked", String(on));
+		btn.setAttribute("aria-label", on ? "Show amounts" : "Hide amounts");
+		btn.setAttribute("title", on ? "Amounts are hidden — click to show them" : "Hide every amount, IBAN and card number");
+		btn.addEventListener("click", async (ev) => {
+			// The button sits inside the brand row, which opens the portfolio menu on click.
+			ev.stopPropagation();
+			await this.plugin.togglePrivacyMode();
+		});
 	}
 
 	private renderBrandTitle(): void {
@@ -376,21 +409,68 @@ export class FinanceView extends ItemView {
 	/** Pinned below the scrollable nav list: a "set a budget" nudge (shown until at least one category
 	 *  has a budget planned for the current month) and a link into Obsidian's own settings modal, which
 	 *  is otherwise only reachable via the app-wide settings icon. */
+	/**
+	 * The tip card: one tip at a time, with arrows to page through the rest and an × that retires the
+	 * current one for good. Which tips are in the deck depends on the state of the vault — see
+	 * src/ui/tips.ts. The whole card disappears once there's nothing relevant left to say.
+	 */
+	private renderTip(): void {
+		const tips = availableTips(this.plugin);
+		if (tips.length === 0) return;
+
+		// Clamped rather than stored back: dismissing the last tip in the deck should land on the new
+		// last one, not on an index that no longer exists.
+		if (this.tipIndex >= tips.length) this.tipIndex = 0;
+		const tip = tips[this.tipIndex];
+
+		const card = this.navFooterEl.createDiv({ cls: "fp-nav-tip" });
+		const tipHead = card.createDiv({ cls: "fp-nav-tip-head" });
+		icon(tipHead, "sparkles", "fp-nav-tip-icon");
+		tipHead.createSpan({ cls: "fp-nav-tip-title", text: tip.title });
+
+		const dismissBtn = tipHead.createEl("button", { cls: "fp-nav-tip-dismiss" });
+		icon(dismissBtn, "x");
+		dismissBtn.setAttribute("aria-label", "Dismiss this tip");
+		dismissBtn.setAttribute("title", "Dismiss this tip — it won't come back");
+		dismissBtn.addEventListener("click", async () => {
+			this.plugin.settings.dismissedTips = dismissTip(this.plugin, tip.id);
+			await this.plugin.saveSettings();
+			this.renderNavFooter();
+		});
+
+		card.createDiv({ cls: "fp-nav-tip-desc", text: tip.body });
+
+		const actions = card.createDiv({ cls: "fp-nav-tip-actions" });
+		if (tip.action) {
+			const actionBtn = actions.createEl("button", { cls: "fp-btn fp-btn-primary fp-nav-tip-btn" });
+			icon(actionBtn, tip.action.icon);
+			actionBtn.createSpan({ text: tip.action.label });
+			actionBtn.addEventListener("click", () => tip.action!.run(this.plugin));
+		}
+
+		if (tips.length > 1) {
+			const pager = actions.createDiv({ cls: "fp-nav-tip-pager" });
+			const step = (delta: number): void => {
+				this.tipIndex = (this.tipIndex + delta + tips.length) % tips.length;
+				this.renderNavFooter();
+			};
+			const prevBtn = pager.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+			icon(prevBtn, "chevron-left");
+			prevBtn.setAttribute("aria-label", "Previous tip");
+			prevBtn.addEventListener("click", () => step(-1));
+
+			pager.createSpan({ cls: "fp-nav-tip-count", text: `${this.tipIndex + 1}/${tips.length}` });
+
+			const nextBtn = pager.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+			icon(nextBtn, "chevron-right");
+			nextBtn.setAttribute("aria-label", "Next tip");
+			nextBtn.addEventListener("click", () => step(1));
+		}
+	}
+
 	private renderNavFooter(): void {
 		this.navFooterEl.empty();
-
-		const hasAnyBudget = this.plugin.store.categories.some((c) => Object.values(c.budgetHistory ?? {}).some((v) => v > 0));
-		if (!hasAnyBudget) {
-			const tip = this.navFooterEl.createDiv({ cls: "fp-nav-tip" });
-			const tipHead = tip.createDiv({ cls: "fp-nav-tip-head" });
-			icon(tipHead, "sparkles", "fp-nav-tip-icon");
-			tipHead.createSpan({ cls: "fp-nav-tip-title", text: "Pro tip" });
-			tip.createDiv({ cls: "fp-nav-tip-desc", text: "Set budgets for upcoming months to stay ahead." });
-			const suggestBtn = tip.createEl("button", { cls: "fp-btn fp-btn-primary fp-nav-tip-btn" });
-			icon(suggestBtn, "wand-2");
-			suggestBtn.createSpan({ text: "Suggest budget" });
-			suggestBtn.addEventListener("click", () => void this.selectView("budgets"));
-		}
+		this.renderTip();
 
 		// Two entries on purpose: this plugin has two distinct settings surfaces, and the footer is where
 		// both are found. "Settings" is the app's own display preferences (a page in this workspace);

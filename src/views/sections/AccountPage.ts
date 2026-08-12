@@ -4,8 +4,11 @@ import { EditAccountModal } from "../../modals/EditAccountModal";
 import type { Account } from "../../types";
 import { emptyState, icon } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
+import { renderBalanceDashboard } from "./dashboards/BalanceDashboard";
 import { renderCashDashboard } from "./dashboards/CashDashboard";
 import { renderCheckingDashboard } from "./dashboards/CheckingDashboard";
+import { renderCreditDashboard } from "./dashboards/CreditDashboard";
+import { renderCryptoDashboard } from "./dashboards/CryptoDashboard";
 import { renderInvestingDashboard } from "./dashboards/InvestingDashboard";
 import { renderSavingsDashboard } from "./dashboards/SavingsDashboard";
 import { renderAllAccountsDashboard } from "./DashboardSection";
@@ -14,18 +17,29 @@ import { renderLedger } from "./LedgerSection";
 function renderAccountDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account): void {
 	switch (account.type) {
 		case "debit":
-		case "credit":
 			renderCheckingDashboard(container, plugin, account);
+			break;
+		case "credit":
+			renderCreditDashboard(container, plugin, account);
 			break;
 		case "saving":
 			renderSavingsDashboard(container, plugin, account);
 			break;
 		case "investing":
-		case "crypto":
 			renderInvestingDashboard(container, plugin, account);
+			break;
+		case "crypto":
+			renderCryptoDashboard(container, plugin, account);
 			break;
 		case "cash":
 			renderCashDashboard(container, plugin, account);
+			break;
+		// Everything with a balance but no transaction feed — a house, a pension, a mortgage, a loan.
+		case "property":
+		case "pension":
+		case "loan":
+		case "mortgage":
+			renderBalanceDashboard(container, plugin, account);
 			break;
 	}
 }
@@ -59,6 +73,12 @@ export function renderAccountPage(container: HTMLElement, plugin: FinancePlugin)
 		icon(editBtn, "pencil");
 		editBtn.createSpan({ text: "Edit account" });
 		editBtn.addEventListener("click", () => new EditAccountModal(plugin.app, plugin, account, () => plugin.refreshViews()).open());
+		const addBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(addBtn, "plus");
+		addBtn.createSpan({ text: "Add transaction" });
+		addBtn.setAttribute("title", "Record something by hand — cash spending, or anything no export carries");
+		addBtn.addEventListener("click", () => plugin.openTransactionEditor(account.id));
+
 		const importBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary", text: "Import" });
 		importBtn.addEventListener("click", () => openImportWizard(plugin));
 	}

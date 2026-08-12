@@ -1,5 +1,6 @@
 import { descendantIds, resolvePrimaryId } from "./categories";
-import type { Account, Category, Transaction } from "./types";
+import { convert, type FxContext } from "./currency";
+import { isLiabilityType, type Account, type BalanceSnapshot, type Category, type Transaction } from "./types";
 
 /**
  * The slice of FinanceStore these calculations actually read. Kept structural (not `FinanceStore`
@@ -11,6 +12,24 @@ export interface KpiStore {
 	accounts: Account[];
 	categories: Category[];
 	transactions: Transaction[];
+	/** Hand-recorded balances — see BalanceSnapshot. Absent behaves exactly as before they existed. */
+	snapshots?: BalanceSnapshot[];
+	/** Base currency + rate table. Absent means "everything is already in one currency", which is the
+	 *  1:1 passthrough these calculations did unconditionally before multi-currency support. */
+	fx?: FxContext;
+}
+
+/**
+ * A transaction's amount in the store's base currency. Every sum in this file goes through here —
+ * adding a dollar row straight into a euro total is the kind of wrong that still looks like money.
+ */
+function amountIn(store: KpiStore, tx: Transaction): number {
+	return store.fx ? convert(tx.amount, tx.currency, store.fx) : tx.amount;
+}
+
+/** An account-denominated figure (opening balance, snapshot) in the store's base currency. */
+function accountAmountIn(store: KpiStore, account: Account, amount: number): number {
+	return store.fx ? convert(amount, account.currency, store.fx) : amount;
 }
 
 export interface YearSummary {
@@ -35,13 +54,18 @@ const TRANSFER_CATEGORY_NAMES = new Set(["transfers", "savings", "savings & tran
  *  fields against this vocabulary catches the transfer regardless of which importer or category it got. */
 const TRANSFER_ACCOUNT_MARKERS = new Set(["deposit", "withdraw", "withdrawal"]);
 /**
- * A transaction is a transfer if it's explicitly categorized as one, OR if it's cash moving into/out of a
- * savings or investing account per its own `action`/`type` (see TRANSFER_ACCOUNT_MARKERS) — both signals
- * the current data model actually supports. There is no account-to-account link on Transaction (no
- * "destination account" field, and `counterparty` is free text, not an account id), so a genuinely
- * uncategorized transfer between two everyday (debit/credit/cash) accounts cannot be detected here.
+ * A transaction is a transfer if its two legs have been linked to each other (`transferGroupId` — the
+ * only signal that's actually *knowable* rather than inferred, see src/transfers.ts), if it's
+ * explicitly categorized as one, or if it's cash moving into/out of a savings or investing account
+ * per its own `action`/`type` (see TRANSFER_ACCOUNT_MARKERS).
+ *
+ * The linked case is checked first and on purpose: matching the two halves of a movement is the thing
+ * that lets a transfer between two everyday (debit/credit/cash) accounts be recognized at all. The
+ * category and broker-marker heuristics below remain for the many rows whose sibling leg was never
+ * imported — a transfer to an account this vault doesn't track has only one half to go on.
  */
 function isTransfer(store: KpiStore, tx: Transaction): boolean {
+	if (tx.transferGroupId) return true;
 	if (tx.categoryId) {
 		// Resolve through a secondary category to its primary first, so e.g. a "Savings Transfer"
 		// secondary nested under "Transfers" is still recognized as a transfer.
@@ -88,23 +112,44 @@ export function summarizeByYear(store: KpiStore, accountId?: string): YearSummar
 		if (!year) continue;
 		if (!map.has(year)) map.set(year, { income: 0, expenses: 0, passiveIncome: 0, netChange: 0, transferAmount: 0 });
 		const bucket = map.get(year)!;
-		bucket.netChange += tx.amount;
+		const amount = amountIn(store, tx);
+		bucket.netChange += amount;
 		if (isTransfer(store, tx)) {
-			bucket.transferAmount += tx.amount;
+			bucket.transferAmount += amount;
 			continue;
 		}
-		if (tx.amount >= 0) {
-			bucket.income += tx.amount;
-			if (isPassiveIncome(tx)) bucket.passiveIncome += tx.amount;
+		if (amount >= 0) {
+			bucket.income += amount;
+			if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
 		} else {
-			bucket.expenses += -tx.amount;
+			bucket.expenses += -amount;
 		}
 	}
 
 	const years = Array.from(map.keys()).sort((a, b) => a.localeCompare(b));
+
+	// With hand-recorded balances on file, each year's closing net worth is simply what the accounts
+	// were actually worth at that date — no walking, no inference. That's strictly better than the
+	// reconstruction below, which only exists because an untracked account's balance is otherwise a
+	// single flat number that never moves. See netWorthAsOf.
+	if (hasSnapshots(store)) {
+		return years.map((year) => {
+			const { income, expenses, passiveIncome } = map.get(year)!;
+			return {
+				year,
+				income,
+				expenses,
+				net: income - expenses,
+				savingsRate: savingsRateOf(income, expenses),
+				netWorthEOY: netWorthAsOf(store, `${year}-12-31`, accountId),
+				passiveIncome,
+			};
+		});
+	}
+
 	let cumulative = store.accounts
 		.filter((a) => !accountId || a.id === accountId)
-		.reduce((sum, a) => sum + (a.openingBalance ?? 0), 0);
+		.reduce((sum, a) => sum + signedOpeningBalance(store, a), 0);
 
 	// Aggregate ("All Accounts") mode only: a transfer between your own accounts must never move
 	// combined net worth. But an account with no transaction history of its own carries its
@@ -167,11 +212,12 @@ export function summarizeByMonth(store: KpiStore, year: string, accountId?: stri
 		if (isNaN(monthIdx) || monthIdx < 0 || monthIdx > 11) continue;
 		const bucket = buckets[monthIdx];
 		if (isTransfer(store, tx)) continue;
-		if (tx.amount >= 0) {
-			bucket.income += tx.amount;
-			if (isPassiveIncome(tx)) bucket.passiveIncome += tx.amount;
+		const amount = amountIn(store, tx);
+		if (amount >= 0) {
+			bucket.income += amount;
+			if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
 		} else {
-			bucket.expenses += -tx.amount;
+			bucket.expenses += -amount;
 		}
 	}
 	return buckets.map((b, i) => ({
@@ -184,17 +230,75 @@ export function summarizeByMonth(store: KpiStore, year: string, accountId?: stri
 	}));
 }
 
-export function netWorth(store: KpiStore, accountId?: string): number {
-	let total = 0;
-	for (const acc of store.accounts) {
-		if (accountId && acc.id !== accountId) continue;
-		total += acc.openingBalance ?? 0;
+function hasSnapshots(store: KpiStore): boolean {
+	return (store.snapshots?.length ?? 0) > 0;
+}
+
+/**
+ * An account's opening balance as a contribution to net worth, in base currency.
+ *
+ * Liability accounts (a loan, a mortgage) are entered as the amount *owed* — a positive number, the
+ * way anyone would say it out loud ("€240,000 left on the mortgage") — and negated here. Transactions
+ * on such an account keep ordinary ledger signs, so a repayment lands as a positive amount and
+ * correctly moves the account's value toward zero.
+ */
+function signedOpeningBalance(store: KpiStore, account: Account): number {
+	const raw = account.openingBalance ?? 0;
+	return accountAmountIn(store, account, isLiabilityType(account.type) ? -raw : raw);
+}
+
+function signedSnapshotBalance(store: KpiStore, account: Account, snapshot: BalanceSnapshot): number {
+	return accountAmountIn(store, account, isLiabilityType(account.type) ? -snapshot.balance : snapshot.balance);
+}
+
+/** The most recent snapshot for `accountId` dated on or before `asOf`, if any. */
+export function snapshotAsOf(store: KpiStore, accountId: string, asOf: string): BalanceSnapshot | undefined {
+	let best: BalanceSnapshot | undefined;
+	for (const snap of store.snapshots ?? []) {
+		if (snap.accountId !== accountId) continue;
+		if (snap.date > asOf) continue;
+		if (!best || snap.date > best.date) best = snap;
 	}
+	return best;
+}
+
+/**
+ * What everything was worth on a given date, in base currency.
+ *
+ * Each account starts from the best evidence available on that date — a balance you recorded by hand
+ * if there is one, its opening balance otherwise — and then applies only the transactions that
+ * happened *after* that evidence and up to the date asked about. A snapshot therefore supersedes
+ * every assumption before it without discarding the activity since, which is what makes an account
+ * you don't import (a pension, a house, a savings account you check twice a year) carry a real value
+ * that moves over time instead of one flat number applied to every year alike.
+ */
+export function netWorthAsOf(store: KpiStore, asOf: string, accountId?: string): number {
+	const byAccount = new Map<string, Transaction[]>();
 	for (const tx of store.transactions) {
 		if (accountId && tx.accountId !== accountId) continue;
-		total += tx.amount;
+		const bucket = byAccount.get(tx.accountId);
+		if (bucket) bucket.push(tx);
+		else byAccount.set(tx.accountId, [tx]);
+	}
+
+	let total = 0;
+	for (const account of store.accounts) {
+		if (accountId && account.id !== accountId) continue;
+		const snapshot = snapshotAsOf(store, account.id, asOf);
+		total += snapshot ? signedSnapshotBalance(store, account, snapshot) : signedOpeningBalance(store, account);
+		for (const tx of byAccount.get(account.id) ?? []) {
+			const date = (tx.date || "").slice(0, 10);
+			if (!date || date > asOf) continue;
+			if (snapshot && date <= snapshot.date) continue;
+			total += amountIn(store, tx);
+		}
 	}
 	return total;
+}
+
+/** Everything's worth right now — the headline number. See netWorthAsOf for how each account is valued. */
+export function netWorth(store: KpiStore, accountId?: string): number {
+	return netWorthAsOf(store, "9999-12-31", accountId);
 }
 
 /** Simulates monthly compounding to estimate years until `netWorthNow` reaches `target`. */
@@ -227,7 +331,7 @@ export function categoryTotals(store: KpiStore, year?: string, accountId?: strin
 		if (accountId && tx.accountId !== accountId) continue;
 		if (isTransfer(store, tx)) continue;
 		const key = tx.categoryId ?? "uncategorized";
-		totals.set(key, (totals.get(key) ?? 0) + -tx.amount);
+		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
 	}
 	return totals;
 }
@@ -243,9 +347,30 @@ export function primaryCategoryTotals(store: KpiStore, year?: string, accountId?
 		if (accountId && tx.accountId !== accountId) continue;
 		if (isTransfer(store, tx)) continue;
 		const key = resolvePrimaryId(store.categories, tx.categoryId) ?? "uncategorized";
-		totals.set(key, (totals.get(key) ?? 0) + -tx.amount);
+		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
 	}
 	return totals;
+}
+
+/**
+ * One category's spend for many months in a single pass — same filters as `primaryCategoryTotals`
+ * (expenses only, transfers excluded, converted to base currency), keyed by "YYYY-MM".
+ *
+ * Exists because walking a rollover chain month by month would otherwise re-read the entire ledger
+ * once per month walked, for every rollover category, on every render of the budgets page.
+ */
+export function monthlySpendFor(store: KpiStore, categoryId: string): Map<string, number> {
+	const ids = new Set(descendantIds(store.categories, categoryId));
+	const byMonth = new Map<string, number>();
+	for (const tx of store.transactions) {
+		if (tx.amount >= 0) continue;
+		if (!tx.categoryId || !ids.has(tx.categoryId)) continue;
+		if (isTransfer(store, tx)) continue;
+		const month = tx.date?.slice(0, 7);
+		if (!month) continue;
+		byMonth.set(month, (byMonth.get(month) ?? 0) + -amountIn(store, tx));
+	}
+	return byMonth;
 }
 
 /** The individual expense transactions behind one category's total for a given month — same filters
@@ -273,7 +398,7 @@ export function averageMonthlyExpenses(store: KpiStore, accountIds?: string[]): 
 		if (isTransfer(store, tx)) continue;
 		const month = tx.date?.slice(0, 7);
 		if (!month) continue;
-		byMonth.set(month, (byMonth.get(month) ?? 0) + -tx.amount);
+		byMonth.set(month, (byMonth.get(month) ?? 0) + -amountIn(store, tx));
 	}
 	const months = Array.from(byMonth.values());
 	if (months.length === 0) return 0;
@@ -302,12 +427,13 @@ export function investingHoldings(store: KpiStore, accountId: string): Holding[]
 		if (action !== "buy" && action !== "sell") continue;
 		const bucket = byTicker.get(tx.ticker) ?? { shares: 0, net: 0, assetClass: tx.assetClass };
 		const shares = tx.shares ?? 0;
+		const cash = Math.abs(amountIn(store, tx));
 		if (action === "buy") {
 			bucket.shares += shares;
-			bucket.net += Math.abs(tx.amount);
+			bucket.net += cash;
 		} else {
 			bucket.shares -= shares;
-			bucket.net -= Math.abs(tx.amount);
+			bucket.net -= cash;
 		}
 		if (tx.assetClass) bucket.assetClass = tx.assetClass;
 		byTicker.set(tx.ticker, bucket);
@@ -342,9 +468,10 @@ export function investingActivityByYear(store: KpiStore, accountId: string): Inv
 		if (!map.has(year)) map.set(year, { year, deposits: 0, withdrawals: 0, dividends: 0, fees: 0 });
 		const bucket = map.get(year)!;
 		const action = (tx.action ?? "").toLowerCase();
-		if (action === "deposit") bucket.deposits += Math.abs(tx.amount);
-		else if (action === "withdraw") bucket.withdrawals += Math.abs(tx.amount);
-		else if (action === "dividend" || action.startsWith("interest")) bucket.dividends += Math.abs(tx.amount);
+		const cash = Math.abs(amountIn(store, tx));
+		if (action === "deposit") bucket.deposits += cash;
+		else if (action === "withdraw") bucket.withdrawals += cash;
+		else if (action === "dividend" || action.startsWith("interest")) bucket.dividends += cash;
 		if (tx.fee) bucket.fees += Math.abs(tx.fee);
 	}
 	return Array.from(map.values()).sort((a, b) => a.year.localeCompare(b.year));

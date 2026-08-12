@@ -1,6 +1,7 @@
 import { Notice } from "obsidian";
 import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
 import { ManageRulesModal } from "../../modals/ManageRulesModal";
+import { TransactionEditModal } from "../../modals/TransactionEditModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import { formatMoney } from "../../money";
 import type FinancePlugin from "../../main";
@@ -73,13 +74,23 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 
 	const scopedTransactions = activeAccountId ? store.transactions.filter((t) => t.accountId === activeAccountId) : store.transactions;
 	if (scopedTransactions.length === 0) {
-		emptyState(container, {
+		const empty = emptyState(container, {
 			iconName: "inbox",
 			title: activeAccount ? `No transactions yet for ${activeAccount.name}` : "No transactions yet",
-			description: "Import a bank or broker CSV/Excel export to populate the ledger.",
+			description:
+				activeAccount?.type === "cash"
+					? "Nothing exports your wallet — add cash spending by hand as it happens."
+					: "Import a bank or broker export (CSV, Excel, CAMT.053, MT940, OFX or QIF), or add a transaction by hand.",
 			actionLabel: "Import transactions",
 			onAction: () => openImportWizard(plugin),
 		});
+		// A second way out of the empty state, because for a cash account the first one is useless.
+		const addBtn = empty.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(addBtn, "plus");
+		addBtn.createSpan({ text: "Add a transaction" });
+		addBtn.addEventListener("click", () =>
+			new TransactionEditModal(plugin.app, plugin, { defaultAccountId: activeAccountId, onSaved: () => plugin.refreshViews() }).open()
+		);
 		return;
 	}
 
@@ -94,6 +105,14 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		cls: "fp-search",
 	});
 	search.value = filterState.search;
+
+	const addBtn = controls.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+	icon(addBtn, "plus");
+	addBtn.createSpan({ text: "Add" });
+	addBtn.setAttribute("title", "Add a transaction by hand");
+	addBtn.addEventListener("click", () =>
+		new TransactionEditModal(plugin.app, plugin, { defaultAccountId: activeAccountId, onSaved: () => plugin.refreshViews() }).open()
+	);
 
 	const rulesBtn = controls.createEl("button", { cls: "fp-btn fp-btn-secondary fp-ledger-rules-btn" });
 	icon(rulesBtn, "list-filter");

@@ -864,7 +864,27 @@ export class FinanceSettingTab extends PluginSettingTab {
 			});
 		}
 
-		// 6 — delete
+		// 6 — kind. Only offered on primaries: a budget's direction is a property of the whole
+		// envelope, and a subcategory that disagreed with its parent would make the rollup nonsense.
+		// Income categories read their budget as a target to reach rather than a ceiling to stay under.
+		if (!isSub) {
+			const kindBtn = row.createEl("button", { cls: "fp-cat-kind" + (cat.kind === "income" ? " is-income" : "") });
+			icon(kindBtn, cat.kind === "income" ? "trending-up" : "trending-down");
+			kindBtn.setAttribute(
+				"title",
+				cat.kind === "income"
+					? "Income category — its budget is a target to reach. Click to make it an expense category."
+					: "Expense category — its budget is a limit to stay under. Click to make it an income category."
+			);
+			kindBtn.addEventListener("click", async () => {
+				cat.kind = cat.kind === "income" ? undefined : "income";
+				await store.saveCategories();
+				this.plugin.refreshViews();
+				this.renderBody();
+			});
+		}
+
+		// 7 — delete
 		const del = row.createEl("button", { cls: "fp-cat-delete", attr: { "aria-label": `Delete ${cat.name}` } });
 		icon(del, "trash-2");
 		del.setAttribute("title", "Delete");
@@ -875,7 +895,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 			}).open()
 		);
 
-		// 7 — subcategory count
+		// 8 — subcategory count
 		const count = row.createDiv({ cls: "fp-cat-cell fp-cat-count" });
 		if (childCount > 0) count.createSpan({ cls: "fp-chip", text: String(childCount) });
 	}
@@ -989,7 +1009,93 @@ export class FinanceSettingTab extends PluginSettingTab {
 		});
 	}
 
+	/** Budget warnings, renewal reminders, and writing reports into the vault. */
+	private renderNotificationsAndReports(content: HTMLElement): void {
+		const settings = this.plugin.settings;
+
+		const alerts = this.group(content, {
+			icon: "bell",
+			title: "Alerts",
+			subtitle: "What this plugin will interrupt you about, and when.",
+			chip: settings.budgetAlerts === false ? { text: "budget alerts off", tone: "pending" } : { text: "on", tone: "ok" },
+		});
+
+		new Setting(alerts.content)
+			.setName("Warn about budgets")
+			.setDesc("One notice when you open the vault, listing the categories closest to (or past) their limit this month.")
+			.addToggle((t) =>
+				t.setValue(settings.budgetAlerts !== false).onChange(async (value) => {
+					settings.budgetAlerts = value;
+					await this.plugin.saveSettings();
+					this.renderBody();
+				})
+			);
+
+		new Setting(alerts.content)
+			.setName("Warn at")
+			.setDesc("How much of a budget has to be spent before it's worth mentioning. 0.9 means 90%.")
+			.addText((t) =>
+				t.setValue(String(settings.budgetAlertThreshold ?? 0.9)).onChange(async (v) => {
+					const n = parseMoney(v);
+					if (n !== undefined && n > 0 && n <= 2) {
+						settings.budgetAlertThreshold = n;
+						await this.plugin.saveSettings();
+					}
+				})
+			);
+
+		new Setting(alerts.content)
+			.setName("Remind about renewals")
+			.setDesc("Notifies about subscriptions renewing in the next few days — the whole point of tracking a due date.")
+			.addToggle((t) =>
+				t.setValue(settings.subscriptionReminders !== false).onChange(async (value) => {
+					settings.subscriptionReminders = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(alerts.content)
+			.setName("Days ahead")
+			.setDesc("How far in advance a renewal reminder fires.")
+			.addText((t) =>
+				t.setValue(String(settings.subscriptionReminderDays ?? 3)).onChange(async (v) => {
+					const n = parseMoney(v);
+					if (n !== undefined && n >= 0) {
+						settings.subscriptionReminderDays = n;
+						await this.plugin.saveSettings();
+					}
+				})
+			);
+
+		const reports = this.group(content, {
+			icon: "file-text",
+			title: "Reports",
+			subtitle: "Write your figures into the vault as ordinary notes.",
+		});
+
+		new Setting(reports.content)
+			.setName("This month")
+			.setDesc("Income, expenses, spending by category and budget performance, with frontmatter Dataview can query.")
+			.addButton((b) => b.setButtonText("Write it").setCta().onClick(() => void this.plugin.writeMonthlyReport()));
+
+		new Setting(reports.content)
+			.setName("This year")
+			.setDesc("The same figures for the year, month by month, plus planned-vs-actual for every category.")
+			.addButton((b) => b.setButtonText("Write it").onClick(() => void this.plugin.writeYearlyReport()));
+
+		new Setting(reports.content)
+			.setName("Net worth")
+			.setDesc("Current net worth, the year-by-year walk behind it, and every account's balance.")
+			.addButton((b) => b.setButtonText("Write it").onClick(() => void this.plugin.writeNetWorthReport()));
+
+		this.note(
+			reports.content,
+			"Reports are written to the reports/ folder inside this portfolio's data folder, one note per period, overwritten on regeneration. To embed live figures in a note of your own instead, use a ```finance code block — see the README."
+		);
+	}
+
 	private renderProjections(content: HTMLElement): void {
+		this.renderNotificationsAndReports(content);
 		const fi = this.group(content, {
 			icon: "trending-up",
 			title: "FI projections",
@@ -1036,6 +1142,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 	}
 
 	private renderCurrency(content: HTMLElement): void {
+		this.renderBaseCurrency(content);
 		const rates = this.plugin.settings.exchangeRates ?? {};
 		const setCount = Object.keys(rates).filter((code) => CURRENCIES.includes(code) && rates[code] && rates[code] !== 1).length;
 		const rateGroup = this.group(content, {
@@ -1108,6 +1215,57 @@ export class FinanceSettingTab extends PluginSettingTab {
 		});
 	}
 
+	/**
+	 * Which currency every total is expressed in.
+	 *
+	 * Until this existed, EUR wasn't a setting so much as an assumption baked through the whole app —
+	 * and worse, transactions in other currencies were summed into euro totals unconverted, as if a
+	 * dollar were a euro. Both halves are fixed together: this picks the currency you read everything
+	 * in, and the rate table below converts everything else into it.
+	 */
+	private renderBaseCurrency(content: HTMLElement): void {
+		const settings = this.plugin.settings;
+		const current = settings.baseCurrency ?? BASE_CURRENCY;
+		const foreign = new Set(
+			this.plugin.store.transactions.map((t) => (t.currency || current).toUpperCase()).filter((code) => code !== current)
+		);
+
+		const group = this.group(content, {
+			icon: "globe",
+			title: "Base currency",
+			subtitle: "The currency net worth, budgets and every total are shown in.",
+			chip: { text: current, tone: "ok" },
+		});
+
+		new Setting(group.content)
+			.setName("Base currency")
+			.setDesc("Amounts in any other currency are converted into this one using the rates below.")
+			.addDropdown((d) => {
+				CURRENCIES.forEach((code) => d.addOption(code, code));
+				d.setValue(current).onChange(async (value) => {
+					settings.baseCurrency = value;
+					await this.plugin.saveSettings();
+					this.plugin.refreshViews();
+					this.renderBody();
+				});
+			});
+
+		if (foreign.size > 0) {
+			const missing = Array.from(foreign).filter((code) => {
+				const rate = settings.exchangeRates?.[code];
+				return !(typeof rate === "number" && rate > 0);
+			});
+			this.note(
+				group.content,
+				missing.length > 0
+					? `Your ledger holds transactions in ${Array.from(foreign).join(", ")}. No rate is set for ${missing.join(
+							", "
+					  )}, so those amounts are currently counted one-for-one — set a rate below to convert them properly.`
+					: `Your ledger holds transactions in ${Array.from(foreign).join(", ")}, all of which have a rate set.`
+			);
+		}
+	}
+
 	private renderImport(content: HTMLElement): void {
 		const imports = this.group(content, {
 			icon: "download",
@@ -1125,7 +1283,60 @@ export class FinanceSettingTab extends PluginSettingTab {
 			);
 		this.note(
 			imports.content,
-			"ING and Trade Republic exports are recognised automatically. Anything else gets a column-mapping step with auto-guessed defaults, so it imports without needing a dedicated parser. Rows already in the ledger are skipped, so re-importing an overlapping export is safe."
+			"ING, Trade Republic, Revolut, bunq and N26 exports are recognised automatically, as are CAMT.053, MT940, OFX/QFX and QIF statement files. Anything else gets a column-mapping step with auto-guessed defaults, so it imports without needing a dedicated parser. Rows already in the ledger are skipped, so re-importing an overlapping export is safe."
+		);
+
+		this.renderImportHistory(content);
+	}
+
+	/**
+	 * Every import run, newest first, each undoable.
+	 *
+	 * Importing the wrong file used to be permanent: the rows landed in the ledger indistinguishable
+	 * from everything else, and unpicking them meant finding them by hand. Each run now carries a
+	 * batch id, which makes "undo that" a single, exact operation.
+	 */
+	private renderImportHistory(content: HTMLElement): void {
+		const store = this.plugin.store;
+		const batches = [...store.batches].sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+
+		const group = this.group(content, {
+			icon: "history",
+			title: "Import history",
+			subtitle: "Every import, and a way to undo one.",
+			chip: batches.length > 0 ? { text: `${batches.length} run${batches.length === 1 ? "" : "s"}`, tone: "ok" } : { text: "none yet", tone: "pending" },
+			collapsibleId: "import-history",
+			defaultExpanded: batches.length > 0,
+		});
+
+		if (batches.length === 0) {
+			this.note(group.content, "Imports run before this version aren't listed — batches are only recorded from now on.");
+			return;
+		}
+
+		batches.forEach((batch) => {
+			const remaining = store.transactionsInBatch(batch.id).length;
+			const when = batch.importedAt.slice(0, 16).replace("T", " ");
+			const setting = new Setting(group.content)
+				.setName(batch.fileName || batch.format || batch.source)
+				.setDesc(`${when} · ${batch.count} imported · ${remaining} still in the ledger`);
+
+			setting.addButton((b) =>
+				b
+					.setButtonText(remaining === 0 ? "Forget" : "Undo import")
+					.setWarning()
+					.onClick(async () => {
+						const removed = await store.undoImportBatch(batch.id);
+						new Notice(removed > 0 ? `Removed ${removed} transaction${removed === 1 ? "" : "s"} from that import` : "That import had nothing left to remove");
+						this.plugin.refreshViews();
+						this.renderBody();
+					})
+			);
+		});
+
+		this.note(
+			group.content,
+			"Undoing an import deletes every transaction it created — including any you've since edited or categorized. Re-importing the same file brings them back, minus those edits."
 		);
 	}
 

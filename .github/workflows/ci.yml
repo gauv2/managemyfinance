@@ -1,0 +1,33 @@
+name: CI
+
+# The release workflow only runs on a tag, which means nothing checked this repo on the way in —
+# a broken build or a failing test could sit on main until release day. This is the gate.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # npm install, not ci: same reason as the release workflow — a transitive dep (vitest -> vite)
+      # wants a newer esbuild than the plugin's own direct pin, needing two nested esbuild installs.
+      - run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Catches anything that typechecks but can't actually be bundled for the plugin (e.g. a Node
+      # built-in that has no place in Obsidian's renderer).
+      - name: Build
+        run: npm run build

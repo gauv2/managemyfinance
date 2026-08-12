@@ -1,6 +1,7 @@
 import { ACCOUNT_TYPE_META } from "../../constants";
 import { fiProjection, netWorth, primaryCategoryTotals, summarizeByYear, yearSummaryFor, YearSummary } from "../../kpi";
 import type FinancePlugin from "../../main";
+import { CategoryDrilldownModal } from "../../modals/CategoryDrilldownModal";
 import { MonthDrilldownModal } from "../../modals/MonthDrilldownModal";
 import { barChart, lineChart, stackedShareBar } from "../../ui/charts";
 import { icon, tabSwitcher } from "../../ui/dom";
@@ -33,6 +34,13 @@ function renderExpenseCategoriesOverview(container: HTMLElement, plugin: Finance
 				value: amount,
 				color: cat?.color ?? "#6b7280",
 				iconName: cat?.icon ?? "help-circle",
+				// Every bar is a way into the transactions behind it, across all accounts.
+				onClick: () =>
+					new CategoryDrilldownModal(plugin.app, plugin, {
+						categoryId: catId,
+						period: year,
+						scopeLabel: "All accounts",
+					}).open(),
 			};
 		});
 	barChart(card, rows);

@@ -13,8 +13,10 @@ import {
 	type ExchangeRates,
 	formatSubMoney,
 	isActive,
+	latestPriceIncrease,
 	monthlyCostInBase,
 	nextOccurrence,
+	spendOn,
 	scaleMonthly,
 	subCurrency,
 	subscriptionTotals,
@@ -24,6 +26,7 @@ import {
 	upcomingPayments,
 } from "../../subscriptions";
 import { formatMoney } from "../../money";
+import { DetectedSubscriptionsModal, SubscriptionPaymentsModal } from "../../modals/SubscriptionLinkModal";
 import type { Subscription } from "../../types";
 import { barChart, stackedShareBar } from "../../ui/charts";
 import { badge, emptyState, icon, initialsAvatar, statTile } from "../../ui/dom";
@@ -127,6 +130,12 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 		icon(refreshBtn, "refresh-cw");
 		refreshBtn.createSpan({ text: "Refresh" });
 		refreshBtn.addEventListener("click", () => render());
+
+		const detectBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(detectBtn, "search");
+		detectBtn.createSpan({ text: "Find recurring" });
+		detectBtn.setAttribute("title", "Scan the ledger for regular charges that aren't tracked as subscriptions yet");
+		detectBtn.addEventListener("click", () => new DetectedSubscriptionsModal(plugin.app, plugin, () => render()).open());
 
 		const addBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-primary" });
 		icon(addBtn, "plus");
@@ -327,7 +336,24 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 
 		if (sub.notes) card.createDiv({ cls: "fp-sub-card-notes", text: sub.notes });
 
+		// What this subscription has *actually* cost, from the ledger — and a quiet warning when those
+		// payments disagree with the cost on record, which is how a price rise gets noticed at all.
+		const spend = spendOn(plugin.store.transactions, sub, plugin.settings.exchangeRates, plugin.settings.baseCurrency);
+		const increase = latestPriceIncrease(plugin.store.transactions, sub);
+		if (spend.count > 0) {
+			const paidLine = card.createDiv({ cls: "fp-sub-card-paid" });
+			paidLine.setText(`${spend.count} payment${spend.count === 1 ? "" : "s"} mapped · ${formatSubMoney(spend.total, subCurrency(sub))} paid`);
+			if (increase) badge(paidLine, `+${Math.round(increase.delta * 100)}% on ${increase.date}`, "warn");
+			else if (spend.lastAmount !== undefined && Math.abs(spend.lastAmount - sub.cost) / Math.max(sub.cost, 0.01) > 0.02) {
+				badge(paidLine, `last charge ${formatSubMoney(spend.lastAmount, subCurrency(sub))}`, "warn");
+			}
+		}
+
 		const actions = card.createDiv({ cls: "fp-sub-card-actions" });
+		const paymentsBtn = actions.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+		icon(paymentsBtn, "receipt");
+		paymentsBtn.setAttribute("title", "Map ledger transactions to this subscription and see what it has really cost");
+		paymentsBtn.addEventListener("click", () => new SubscriptionPaymentsModal(plugin.app, plugin, sub, () => render()).open());
 		if (sub.cancelUrl) {
 			const linkBtn = actions.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
 			icon(linkBtn, "external-link");

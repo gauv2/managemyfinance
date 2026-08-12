@@ -1,5 +1,6 @@
+import { convert } from "./currency";
 import { formatMoney } from "./money";
-import type { Subscription, SubscriptionBillingCycle } from "./types";
+import type { Subscription, SubscriptionBillingCycle, Transaction } from "./types";
 
 export const SUBSCRIPTION_CATEGORIES = [
 	"AI",
@@ -88,11 +89,11 @@ export function scaleMonthly(monthlyAmount: number, cycle: DisplayCycle): number
 /** Manual, user-maintained rate table (Settings → Currency) — 1 unit of the key currency = that many EUR. No network calls, ever. */
 export type ExchangeRates = Record<string, number>;
 
-/** Converts an amount from `currency` into the app's base currency (EUR). Missing/invalid rates pass through unconverted (1:1), same as before rates existed. */
-export function toBaseCurrency(amount: number, currency: string, rates: ExchangeRates | undefined): number {
-	if (currency === "EUR") return amount;
-	const rate = rates?.[currency];
-	return rate && rate > 0 ? amount * rate : amount;
+/** Converts an amount from `currency` into the app's base currency. Missing/invalid rates pass through
+ *  unconverted (1:1), same as before rates existed. `baseCurrency` defaults to EUR, which is what every
+ *  caller meant before the base currency became a setting. */
+export function toBaseCurrency(amount: number, currency: string, rates: ExchangeRates | undefined, baseCurrency?: string): number {
+	return convert(amount, currency, { baseCurrency, rates });
 }
 
 /** monthlyCost(), converted into EUR for cross-currency aggregation — use this for totals/comparisons, monthlyCost() for a subscription's own display. */
@@ -241,4 +242,242 @@ export function upcomingPayments(subs: Subscription[], today: Date = new Date())
 		})
 		.filter((x): x is { sub: Subscription; date: string; daysUntil: number } => x !== undefined)
 		.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+// ---------------------------------------------------------------------------
+// Subscriptions ↔ the ledger
+//
+// A subscription tracker that never meets the transactions is a list of what you *think* you pay.
+// Linking the two closes that gap: what actually left the account, whether a price quietly went up,
+// and which recurring payments you're not tracking at all.
+// ---------------------------------------------------------------------------
+
+/** Searchable text for a transaction — the same pairing rules and merchant matching use. */
+function matchText(tx: Transaction): string {
+	return `${tx.description ?? ""} ${tx.counterparty ?? ""}`.toLowerCase();
+}
+
+/**
+ * The text a subscription recognizes its own payments by. A match pattern set when you first linked a
+ * payment is the reliable signal; the subscription's name is a reasonable fallback, since "Netflix"
+ * really does appear in a Netflix charge.
+ */
+export function subscriptionPattern(sub: Subscription): string {
+	return (sub.matchPattern || sub.name || "").trim().toLowerCase();
+}
+
+/** Whether a transaction looks like a payment for this subscription (ignoring any explicit link). */
+export function looksLikePaymentFor(tx: Transaction, sub: Subscription): boolean {
+	if (tx.amount >= 0) return false;
+	const pattern = subscriptionPattern(sub);
+	if (!pattern) return false;
+	return matchText(tx).includes(pattern);
+}
+
+export interface SubscriptionPayment {
+	transaction: Transaction;
+	/** Positive magnitude actually paid, in the transaction's own currency. */
+	amount: number;
+	date: string;
+}
+
+/**
+ * Payments explicitly linked to this subscription, newest first.
+ *
+ * Only explicit links count here, never a text match: what a subscription *has cost you* is a claim
+ * that shouldn't rest on a substring. Text matching's job is to suggest links (see
+ * `suggestPaymentsFor`), and confirming one is what makes it real.
+ */
+export function paymentsFor(transactions: Transaction[], sub: Subscription): SubscriptionPayment[] {
+	return transactions
+		.filter((tx) => tx.subscriptionId === sub.id)
+		.map((tx) => ({ transaction: tx, amount: Math.abs(tx.amount), date: tx.date }))
+		.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+/** Unlinked transactions that look like they belong to this subscription — the "map records" candidates. */
+export function suggestPaymentsFor(transactions: Transaction[], sub: Subscription, limit = 50): Transaction[] {
+	return transactions
+		.filter((tx) => !tx.subscriptionId && looksLikePaymentFor(tx, sub))
+		.sort((a, b) => b.date.localeCompare(a.date))
+		.slice(0, limit);
+}
+
+export interface SubscriptionSpend {
+	/** Total actually paid, summed in base currency. */
+	total: number;
+	count: number;
+	firstDate?: string;
+	lastDate?: string;
+	/** Most recent payment amount, for comparing against what the subscription claims to cost. */
+	lastAmount?: number;
+	/** Mean payment — a fairer "what does this really cost" than the last one alone. */
+	average: number;
+}
+
+export function spendOn(transactions: Transaction[], sub: Subscription, rates?: ExchangeRates, baseCurrency?: string): SubscriptionSpend {
+	const payments = paymentsFor(transactions, sub);
+	if (payments.length === 0) return { total: 0, count: 0, average: 0 };
+	const total = payments.reduce((sum, p) => sum + toBaseCurrency(p.amount, p.transaction.currency || "EUR", rates, baseCurrency), 0);
+	return {
+		total,
+		count: payments.length,
+		firstDate: payments[payments.length - 1].date,
+		lastDate: payments[0].date,
+		lastAmount: payments[0].amount,
+		average: total / payments.length,
+	};
+}
+
+export interface PriceChange {
+	from: number;
+	to: number;
+	/** Fraction: 0.2 is a 20% rise. Negative for a price cut. */
+	delta: number;
+	date: string;
+}
+
+/**
+ * Price changes across a subscription's linked payments, oldest first.
+ *
+ * Only changes above `tolerance` count, because real charges wobble for reasons that aren't price
+ * rises: a foreign-currency subscription moves with the exchange rate every month, and VAT rounding
+ * shifts the odd cent. A 1% floor keeps the answer to "did this get more expensive" honest.
+ */
+export function priceChanges(transactions: Transaction[], sub: Subscription, tolerance = 0.01): PriceChange[] {
+	const payments = paymentsFor(transactions, sub).slice().reverse();
+	const changes: PriceChange[] = [];
+	for (let i = 1; i < payments.length; i++) {
+		const from = payments[i - 1].amount;
+		const to = payments[i].amount;
+		if (from <= 0) continue;
+		const delta = (to - from) / from;
+		if (Math.abs(delta) < tolerance) continue;
+		changes.push({ from, to, delta, date: payments[i].date });
+	}
+	return changes;
+}
+
+/** The latest price rise, if the most recent change was one — what a "price went up" badge needs. */
+export function latestPriceIncrease(transactions: Transaction[], sub: Subscription, tolerance = 0.01): PriceChange | undefined {
+	const changes = priceChanges(transactions, sub, tolerance);
+	const last = changes[changes.length - 1];
+	return last && last.delta > 0 ? last : undefined;
+}
+
+export interface RecurringCandidate {
+	/** The merchant text the run was grouped by. */
+	key: string;
+	label: string;
+	occurrences: number;
+	/** Typical (median) amount, positive magnitude. */
+	amount: number;
+	currency: string;
+	/** Median gap between payments, in days — what the billing cycle is inferred from. */
+	medianGapDays: number;
+	billingCycle: SubscriptionBillingCycle;
+	lastDate: string;
+	accountId: string;
+	transactionIds: string[];
+}
+
+const CYCLE_BY_GAP: [number, number, SubscriptionBillingCycle][] = [
+	[5, 10, "weekly"],
+	[25, 38, "monthly"],
+	[80, 100, "quarterly"],
+	[330, 400, "yearly"],
+];
+
+function median(values: number[]): number {
+	if (values.length === 0) return 0;
+	const sorted = [...values].sort((a, b) => a - b);
+	const mid = Math.floor(sorted.length / 2);
+	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function dayNumber(date: string): number {
+	const ms = Date.parse(`${(date || "").slice(0, 10)}T00:00:00Z`);
+	return isNaN(ms) ? 0 : Math.round(ms / 86_400_000);
+}
+
+/** Normalizes a merchant string enough to group repeat charges that carry a varying reference number. */
+function groupKey(tx: Transaction): string {
+	const raw = (tx.counterparty || tx.description || "").toLowerCase();
+	return raw
+		.replace(/\d{4,}/g, " ")
+		.replace(/[^a-z ]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 28);
+}
+
+/**
+ * Recurring payments in the ledger that aren't tracked as subscriptions yet.
+ *
+ * The test for "recurring" is regular spacing, not merely repeated: a supermarket you visit three
+ * times a week is repetitive and is not a subscription, whereas three charges 30 days apart almost
+ * always are. Grouping by merchant, then requiring both a consistent gap and a stable amount, is what
+ * separates the two — and it's why the gap has to fall inside one of the known billing cycles rather
+ * than just being "roughly even".
+ */
+export function detectRecurring(
+	transactions: Transaction[],
+	subs: Subscription[],
+	opts: { minOccurrences?: number; amountTolerance?: number } = {}
+): RecurringCandidate[] {
+	const minOccurrences = opts.minOccurrences ?? 3;
+	const amountTolerance = opts.amountTolerance ?? 0.15;
+	const alreadyTracked = subs.map((s) => subscriptionPattern(s)).filter(Boolean);
+
+	const groups = new Map<string, Transaction[]>();
+	for (const tx of transactions) {
+		if (tx.amount >= 0 || tx.subscriptionId) continue;
+		const key = groupKey(tx);
+		if (key.length < 3) continue;
+		const bucket = groups.get(key);
+		if (bucket) bucket.push(tx);
+		else groups.set(key, [tx]);
+	}
+
+	const out: RecurringCandidate[] = [];
+	for (const [key, group] of groups) {
+		if (group.length < minOccurrences) continue;
+		if (alreadyTracked.some((pattern) => key.includes(pattern) || pattern.includes(key))) continue;
+
+		const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
+		const gaps: number[] = [];
+		for (let i = 1; i < sorted.length; i++) gaps.push(dayNumber(sorted[i].date) - dayNumber(sorted[i - 1].date));
+		const medianGapDays = median(gaps);
+		const cycle = CYCLE_BY_GAP.find(([min, max]) => medianGapDays >= min && medianGapDays <= max)?.[2];
+		if (!cycle) continue;
+
+		// Every gap has to look like the same cycle, or a merchant you happen to pay at irregular
+		// intervals sneaks in on the strength of its median alone.
+		const [minGap, maxGap] = CYCLE_BY_GAP.find(([, , c]) => c === cycle)!;
+		if (!gaps.every((gap) => gap >= minGap * 0.6 && gap <= maxGap * 1.4)) continue;
+
+		const amounts = sorted.map((tx) => Math.abs(tx.amount));
+		const typical = median(amounts);
+		if (typical <= 0) continue;
+		// A charge that swings wildly month to month is a bill, not a subscription — the amounts have
+		// to be recognizably the same payment. (A price rise is a step change, and survives this.)
+		const withinTolerance = amounts.filter((a) => Math.abs(a - typical) / typical <= amountTolerance).length;
+		if (withinTolerance < Math.ceil(amounts.length * 0.6)) continue;
+
+		const last = sorted[sorted.length - 1];
+		out.push({
+			key,
+			label: (last.counterparty || last.description || key).trim(),
+			occurrences: sorted.length,
+			amount: typical,
+			currency: last.currency || "EUR",
+			medianGapDays,
+			billingCycle: cycle,
+			lastDate: last.date,
+			accountId: last.accountId,
+			transactionIds: sorted.map((tx) => tx.id),
+		});
+	}
+
+	return out.sort((a, b) => b.amount * b.occurrences - a.amount * a.occurrences);
 }

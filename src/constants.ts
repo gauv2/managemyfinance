@@ -6,14 +6,37 @@ export const DEFAULT_DATA_FOLDER = "Manage My Finance";
 
 export const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "PLN", "INR"];
 
-export const ACCOUNT_TYPE_META: Record<AccountType, { label: string; icon: string }> = {
-	debit: { label: "Debit", icon: "landmark" },
-	credit: { label: "Credit", icon: "credit-card" },
-	investing: { label: "Investing", icon: "trending-up" },
-	saving: { label: "Saving", icon: "piggy-bank" },
-	cash: { label: "Cash", icon: "banknote" },
-	crypto: { label: "Crypto", icon: "bitcoin" },
+/**
+ * Every account type, with the blurb shown wherever one is chosen. The last four don't have money
+ * flowing through them in any export — they're the balances that make net worth true rather than
+ * merely bank-shaped, and they're kept up to date with hand-recorded balance snapshots instead.
+ */
+export const ACCOUNT_TYPE_META: Record<AccountType, { label: string; icon: string; desc: string }> = {
+	debit: { label: "Debit", icon: "landmark", desc: "An everyday current/checking account." },
+	credit: { label: "Credit", icon: "credit-card", desc: "A credit card — utilization, statement and due dates." },
+	investing: { label: "Investing", icon: "trending-up", desc: "A brokerage or fund account holding positions." },
+	saving: { label: "Saving", icon: "piggy-bank", desc: "A savings or deposit account." },
+	cash: { label: "Cash", icon: "banknote", desc: "Physical cash in your pocket or a jar." },
+	crypto: { label: "Crypto", icon: "bitcoin", desc: "A crypto wallet or exchange balance." },
+	loan: { label: "Loan", icon: "hand-coins", desc: "Money you owe — the balance counts against net worth." },
+	mortgage: { label: "Mortgage", icon: "key", desc: "A home loan — the balance counts against net worth." },
+	property: { label: "Property", icon: "home", desc: "A house, a car, anything you own that holds value." },
+	pension: { label: "Pension", icon: "umbrella", desc: "A retirement pot you can't spend yet but do own." },
 };
+
+/** The order account types are offered in, grouped by what they are rather than alphabetically. */
+export const ACCOUNT_TYPE_ORDER: AccountType[] = [
+	"debit",
+	"credit",
+	"saving",
+	"investing",
+	"crypto",
+	"cash",
+	"property",
+	"pension",
+	"loan",
+	"mortgage",
+];
 
 type AccountType = Account["type"];
 

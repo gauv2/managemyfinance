@@ -1,0 +1,289 @@
+import { describe, expect, it } from "vitest";
+import { App } from "obsidian";
+import { parseCSV } from "./csv";
+import { DEFAULT_SETTINGS, FinanceStore, type FinanceSettings } from "./store";
+import type { Transaction } from "./types";
+
+/**
+ * The ledger's persistence layer: schema migration, per-source/year filing, dedupe, edits and
+ * deletes. This is the code that can quietly eat someone's data — a stale header read against
+ * newly-shaped rows shifts every field by one and still parses — so it's the code most worth
+ * pinning down.
+ */
+
+const FOLDER = "TestFinance";
+
+function newStore(settings: Partial<FinanceSettings> = {}): { store: FinanceStore; app: App } {
+	const app = new App();
+	const store = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER, ...settings });
+	return { store, app };
+}
+
+function tx(overrides: Partial<Transaction> = {}): Transaction {
+	return {
+		id: overrides.id ?? `tx-${Math.random().toString(36).slice(2)}`,
+		date: "2024-03-15",
+		accountId: "acc-1",
+		description: "Groceries",
+		amount: -12.5,
+		currency: "EUR",
+		source: "manual",
+		...overrides,
+	};
+}
+
+function ledgerPath(source: string, year: string): string {
+	return `${FOLDER}/data/ledger/${source}/${year}.csv`;
+}
+
+describe("FinanceStore — ledger round-trip", () => {
+	it("writes an imported transaction and reads back exactly what went in", async () => {
+		const { store, app } = newStore();
+		await store.load();
+
+		await store.importTransactions([tx({ id: "a", amount: -12.5, counterparty: "Albert Heijn" })]);
+
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+
+		expect(reloaded.transactions).toHaveLength(1);
+		expect(reloaded.transactions[0]).toMatchObject({
+			id: "a",
+			amount: -12.5,
+			counterparty: "Albert Heijn",
+			date: "2024-03-15",
+		});
+	});
+
+	it("files transactions by source and year, one file each", async () => {
+		const { store, app } = newStore();
+		await store.load();
+
+		await store.importTransactions([
+			tx({ id: "a", date: "2023-01-01", source: "ing" }),
+			tx({ id: "b", date: "2024-01-01", source: "ing" }),
+			tx({ id: "c", date: "2024-01-01", source: "revolut" }),
+		]);
+
+		expect(await app.vault.adapter.exists(ledgerPath("ing", "2023"))).toBe(true);
+		expect(await app.vault.adapter.exists(ledgerPath("ing", "2024"))).toBe(true);
+		expect(await app.vault.adapter.exists(ledgerPath("revolut", "2024"))).toBe(true);
+	});
+
+	it("skips transactions whose id is already in the ledger, so re-importing an overlap is a no-op", async () => {
+		const { store } = newStore();
+		await store.load();
+
+		const first = await store.importTransactions([tx({ id: "a" }), tx({ id: "b" })]);
+		const second = await store.importTransactions([tx({ id: "b" }), tx({ id: "c" })]);
+
+		expect(first).toMatchObject({ added: 2, skipped: 0 });
+		expect(second).toMatchObject({ added: 1, skipped: 1 });
+		expect(store.transactions.map((t) => t.id).sort()).toEqual(["a", "b", "c"]);
+	});
+
+	it("preserves values containing commas and quotes through the CSV round-trip", async () => {
+		const { store, app } = newStore();
+		await store.load();
+		const nasty = 'Payment for "goods", misc';
+
+		await store.importTransactions([tx({ id: "a", description: nasty })]);
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+
+		expect(reloaded.transactions[0].description).toBe(nasty);
+	});
+});
+
+describe("FinanceStore — schema migration", () => {
+	it("reads a file written before a column existed, without shifting every field", async () => {
+		const { store, app } = newStore();
+		await store.load();
+
+		// A ledger file from an older build: the current schema has more columns than this.
+		await app.vault.adapter.write(
+			ledgerPath("ing", "2024"),
+			"id,date,accountId,description,counterparty,amount,currency,categoryId\n" + "old-1,2024-05-01,acc-1,Rent,Landlord,-900,EUR,cat-home\n"
+		);
+
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+
+		expect(reloaded.transactions[0]).toMatchObject({
+			id: "old-1",
+			description: "Rent",
+			counterparty: "Landlord",
+			amount: -900,
+			categoryId: "cat-home",
+		});
+	});
+
+	it("rewrites a stale file onto the current schema when anything is appended to it", async () => {
+		const { store, app } = newStore();
+		await store.load();
+		await app.vault.adapter.write(
+			ledgerPath("ing", "2024"),
+			"id,date,accountId,description,amount,currency,source\n" + "old-1,2024-05-01,acc-1,Rent,-900,EUR,ing\n"
+		);
+
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+		await reloaded.importTransactions([tx({ id: "new-1", date: "2024-06-01", source: "ing" })]);
+
+		const rows = parseCSV(await app.vault.adapter.read(ledgerPath("ing", "2024")));
+		expect(rows[0]).toContain("transferGroupId");
+		// The old row survived the rewrite with its fields still in the right places.
+		const oldRow = rows.find((r) => r[0] === "old-1")!;
+		expect(oldRow[rows[0].indexOf("description")]).toBe("Rent");
+		expect(oldRow[rows[0].indexOf("amount")]).toBe("-900");
+	});
+});
+
+describe("FinanceStore — editing and deleting", () => {
+	it("adds a manual transaction straight into the ledger file", async () => {
+		const { store, app } = newStore();
+		await store.load();
+
+		await store.addTransaction(tx({ id: "m1", source: "manual", date: "2024-07-04" }));
+
+		expect(await app.vault.adapter.exists(ledgerPath("manual", "2024"))).toBe(true);
+		expect(store.transactions).toHaveLength(1);
+	});
+
+	it("deletes a transaction from memory and from its file", async () => {
+		const { store, app } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" }), tx({ id: "b" })]);
+
+		const removed = await store.deleteTransactions(["a"]);
+
+		expect(removed).toBe(1);
+		expect(store.transactions.map((t) => t.id)).toEqual(["b"]);
+		const rows = parseCSV(await app.vault.adapter.read(ledgerPath("manual", "2024")));
+		expect(rows.map((r) => r[0])).not.toContain("a");
+	});
+
+	it("leaves a header-only file behind when the last transaction in it is deleted", async () => {
+		const { store, app } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+
+		await store.deleteTransactions(["a"]);
+
+		const rows = parseCSV(await app.vault.adapter.read(ledgerPath("manual", "2024")));
+		expect(rows).toHaveLength(1);
+		expect(rows[0][0]).toBe("id");
+	});
+
+	it("moves a transaction between ledger files when an edit changes its year", async () => {
+		const { store, app } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a", date: "2023-12-31" })]);
+
+		await store.editTransaction("a", { date: "2024-01-01" });
+
+		const oldRows = parseCSV(await app.vault.adapter.read(ledgerPath("manual", "2023")));
+		const newRows = parseCSV(await app.vault.adapter.read(ledgerPath("manual", "2024")));
+		// The row must not exist in both places — that's a duplicated transaction in every total.
+		expect(oldRows.map((r) => r[0])).not.toContain("a");
+		expect(newRows.map((r) => r[0])).toContain("a");
+	});
+
+	it("rewrites each affected file exactly once for a bulk patch", async () => {
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" }), tx({ id: "b" }), tx({ id: "c" })]);
+
+		const changed = await store.updateTransactions(
+			new Map([
+				["a", { categoryId: "cat-food" }],
+				["b", { categoryId: "cat-food" }],
+				// Already unset, so this one isn't a change at all and shouldn't be counted.
+				["c", { categoryId: undefined }],
+			])
+		);
+
+		expect(changed).toBe(2);
+		expect(store.transactions.filter((t) => t.categoryId === "cat-food")).toHaveLength(2);
+	});
+});
+
+describe("FinanceStore — import batches", () => {
+	it("stamps every row of one import with the same batch id and records the batch", async () => {
+		const { store } = newStore();
+		await store.load();
+
+		const result = await store.importTransactions([tx({ id: "a" }), tx({ id: "b" })], { fileName: "march.csv" });
+
+		expect(result.batchId).toBeDefined();
+		expect(store.transactions.every((t) => t.importBatchId === result.batchId)).toBe(true);
+		expect(store.batches).toHaveLength(1);
+		expect(store.batches[0]).toMatchObject({ count: 2, fileName: "march.csv" });
+	});
+
+	it("undoing an import removes exactly that import's rows and nothing else", async () => {
+		const { store } = newStore();
+		await store.load();
+		const first = await store.importTransactions([tx({ id: "a" }), tx({ id: "b" })]);
+		await store.importTransactions([tx({ id: "c" })]);
+
+		const removed = await store.undoImportBatch(first.batchId!);
+
+		expect(removed).toBe(2);
+		expect(store.transactions.map((t) => t.id)).toEqual(["c"]);
+		expect(store.batches).toHaveLength(1);
+	});
+
+	it("records no batch when every row was a duplicate", async () => {
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+
+		const second = await store.importTransactions([tx({ id: "a" })]);
+
+		expect(second).toMatchObject({ added: 0, skipped: 1, batchId: undefined });
+		expect(store.batches).toHaveLength(1);
+	});
+});
+
+describe("FinanceStore — collections", () => {
+	it("persists snapshots, one-off budgets and batches across a reload", async () => {
+		const { store, app } = newStore();
+		await store.load();
+
+		store.snapshots.push({ id: "s1", accountId: "acc-1", date: "2024-01-01", balance: 1000 });
+		store.oneOffBudgets.push({ id: "o1", name: "Japan", amount: 3000, startDate: "2024-01-01", endDate: "2024-06-30" });
+		await store.saveSnapshots();
+		await store.saveOneOffBudgets();
+
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+
+		expect(reloaded.snapshots).toHaveLength(1);
+		expect(reloaded.oneOffBudgets[0]).toMatchObject({ name: "Japan", amount: 3000 });
+	});
+
+	it("deleteAllData empties every collection but re-seeds categories", async () => {
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+		store.snapshots.push({ id: "s1", accountId: "acc-1", date: "2024-01-01", balance: 1 });
+		store.accounts.push({ id: "acc-1", name: "Checking", type: "debit", currency: "EUR" });
+
+		await store.deleteAllData();
+
+		expect(store.transactions).toHaveLength(0);
+		expect(store.accounts).toHaveLength(0);
+		expect(store.snapshots).toHaveLength(0);
+		expect(store.batches).toHaveLength(0);
+		// A portfolio with no categories can't classify anything and would look broken, not reset.
+		expect(store.categories.length).toBeGreaterThan(0);
+	});
+
+	it("exposes base currency and rates as an fx context for the calculation modules", async () => {
+		const { store } = newStore({ baseCurrency: "USD", exchangeRates: { USD: 0.9 } });
+		await store.load();
+
+		expect(store.fx).toEqual({ baseCurrency: "USD", rates: { USD: 0.9 } });
+	});
+});
