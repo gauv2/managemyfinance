@@ -168,6 +168,16 @@ describe("formatMoney", () => {
 		expect(formatMoney(10, { plain: true, signed: true })).toBe("+10.00");
 		expect(formatMoney(-10, { plain: true, signed: true })).toBe("-10.00");
 	});
+
+	it("never renders a negative sign on a value that rounds to zero", () => {
+		setNumberFormatPreference("dot");
+		expect(formatMoney(-0.003, { plain: true, minimumFractionDigits: 0, maximumFractionDigits: 0 })).toBe("0");
+		expect(formatMoney(-0, { plain: true, minimumFractionDigits: 0, maximumFractionDigits: 0 })).toBe("0");
+		expect(formatMoney(-0.001, { plain: true })).toBe("0.00");
+		// A value that actually rounds to a non-zero amount at that precision still keeps its sign.
+		expect(formatMoney(-0.6, { plain: true, minimumFractionDigits: 0, maximumFractionDigits: 0 })).toBe("-1");
+		expect(formatMoney(-0.006, { plain: true })).toBe("-0.01");
+	});
 });
 
 describe("formatMoneyForInput", () => {

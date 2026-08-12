@@ -1251,7 +1251,7 @@
 }
 
 .fp-table-num {
-	text-align: right;
+	text-align: left;
 	font-variant-numeric: tabular-nums;
 }
 .fp-table-metrics {
@@ -2538,12 +2538,6 @@
 .fp-card-head-row h3 {
 	margin: 0;
 }
-.fp-flags-head-right {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-shrink: 0;
-}
 .fp-card-head-label {
 	font-size: var(--font-ui-smaller);
 	font-weight: 700;
@@ -3331,63 +3325,6 @@
 	cursor: default;
 }
 
-/* ---------- Categorization flags ---------- */
-
-.fp-flags-card {
-	border-color: color-mix(in srgb, var(--fp-warn) 40%, var(--background-modifier-border));
-}
-.fp-flags-card .fp-card-head-label {
-	color: var(--fp-warn);
-	background: var(--fp-warn-bg);
-	padding: 2px 8px;
-	border-radius: 999px;
-}
-.fp-flags-desc {
-	color: var(--text-muted);
-	font-size: var(--font-ui-small);
-	margin: 0 0 12px;
-}
-.fp-flags-list {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-.fp-flag-row {
-	padding: 10px 12px;
-	border-radius: var(--fp-radius-md);
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-}
-.fp-flag-row-top {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 10px;
-	margin-bottom: 6px;
-}
-.fp-flag-row-name {
-	font-weight: 700;
-	color: var(--text-normal);
-}
-.fp-flag-row-meta {
-	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
-	white-space: nowrap;
-}
-.fp-flag-row-outliers {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px 14px;
-}
-.fp-flag-outlier {
-	font-size: var(--font-ui-smaller);
-	color: var(--fp-warn);
-}
-.fp-flag-outlier-more {
-	font-size: var(--font-ui-smaller);
-	color: var(--text-faint);
-}
-
 /* ---------- Budgets ---------- */
 
 .fp-month-nav {
@@ -3502,7 +3439,6 @@
 .fp-budget-table th.fp-table-num,
 .fp-budget-table td.fp-table-num {
 	width: 130px;
-	text-align: center;
 }
 .fp-budget-table th.fp-budget-pct-col,
 .fp-budget-table td.fp-budget-pct-col {

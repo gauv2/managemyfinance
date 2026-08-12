@@ -1,20 +1,13 @@
-import { findCategorizationInconsistencies, type CategorizationFlag } from "../../categorization";
 import { ACCOUNT_TYPE_META } from "../../constants";
-import { fiProjection, netWorth, summarizeByYear, yearSummaryFor, YearSummary } from "../../kpi";
+import { fiProjection, netWorth, primaryCategoryTotals, summarizeByYear, yearSummaryFor, YearSummary } from "../../kpi";
 import type FinancePlugin from "../../main";
 import { MonthDrilldownModal } from "../../modals/MonthDrilldownModal";
-import { lineChart, stackedShareBar } from "../../ui/charts";
+import { barChart, lineChart, stackedShareBar } from "../../ui/charts";
 import { icon, tabSwitcher } from "../../ui/dom";
 import { renderKpiCard, renderMeter } from "../../ui/kpiCard";
 import { deltaRow, formatEUR, formatPct, metricRow, yearHeaderRow, yoy } from "../../ui/metricsTable";
 
 const CAT_COLORS = ["var(--fp-cat-1)", "var(--fp-cat-2)", "var(--fp-cat-3)", "var(--fp-cat-4)", "var(--fp-cat-5)"];
-
-const IBAN_PATTERN = /^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/;
-/** Counterparty is sometimes a raw IBAN rather than a resolved merchant/person name (e.g. bank transfers) — worth blurring under privacy mode same as any other account number. */
-function looksLikeIban(s: string): boolean {
-	return IBAN_PATTERN.test(s.replace(/\s+/g, "").toUpperCase());
-}
 
 async function switchToAccount(plugin: FinancePlugin, accountId: string): Promise<void> {
 	plugin.settings.activeAccountId = accountId;
@@ -22,60 +15,27 @@ async function switchToAccount(plugin: FinancePlugin, accountId: string): Promis
 	plugin.refreshViews();
 }
 
-/**
- * Self-hiding data-quality nudge: recurring counterparties that are mostly tagged one category but
- * have a few outlier transactions tagged differently — the exact pattern that silently hid real
- * income inside a "Transfers" category in practice. Renders nothing when there's nothing to flag.
- */
-function renderCategorizationFlags(container: HTMLElement, plugin: FinancePlugin): void {
-	const wrap = container.createDiv();
+/** Where this year's spending actually went, combined across every account — the "All Accounts" analogue of each account's own "Spending by category" card. */
+function renderExpenseCategoriesOverview(container: HTMLElement, plugin: FinancePlugin, year: string | undefined): void {
+	const store = plugin.store;
+	const totals = primaryCategoryTotals(store, year);
+	if (totals.size === 0) return;
 
-	function render(): void {
-		wrap.empty();
-		const flags = findCategorizationInconsistencies(plugin.store);
-		if (flags.length === 0) return;
-
-		const card = wrap.createDiv({ cls: "fp-card fp-flags-card" });
-		const head = card.createDiv({ cls: "fp-card-head-row" });
-		head.createEl("h3", { text: "Possible categorization issues" });
-		const headRight = head.createDiv({ cls: "fp-flags-head-right" });
-		const refreshBtn = headRight.createEl("button", { cls: "fp-btn-icon fp-btn-ghost" });
-		icon(refreshBtn, "refresh-cw");
-		refreshBtn.setAttr("aria-label", "Refresh");
-		refreshBtn.addEventListener("click", () => render());
-		headRight.createDiv({ cls: "fp-card-head-label", text: `${flags.length} FOUND` });
-		card.createEl("p", {
-			cls: "fp-flags-desc",
-			text: "These counterparties are mostly tagged one way, but a few transactions ended up in a different category — worth a quick check.",
+	const card = container.createDiv({ cls: "fp-card" });
+	card.createEl("h3", { text: `Spending by category — ${year}` });
+	const categoryById = new Map(store.categories.map((c) => [c.id, c]));
+	const rows = Array.from(totals.entries())
+		.sort((a, b) => b[1] - a[1])
+		.map(([catId, amount]) => {
+			const cat = categoryById.get(catId);
+			return {
+				label: cat?.name ?? "Uncategorized",
+				value: amount,
+				color: cat?.color ?? "#6b7280",
+				iconName: cat?.icon ?? "help-circle",
+			};
 		});
-
-		const list = card.createDiv({ cls: "fp-flags-list" });
-		flags.slice(0, 8).forEach((flag) => renderFlagRow(list, flag));
-	}
-
-	render();
-}
-
-function renderFlagRow(parent: HTMLElement, flag: CategorizationFlag): void {
-	const row = parent.createDiv({ cls: "fp-flag-row" });
-	const top = row.createDiv({ cls: "fp-flag-row-top" });
-	top.createSpan({ cls: "fp-flag-row-name" + (looksLikeIban(flag.key) ? " fp-iban" : ""), text: flag.key });
-	top.createSpan({
-		cls: "fp-flag-row-meta",
-		text: `${flag.majorityCount}/${flag.totalCount} tagged "${flag.majorityCategoryName}"`,
-	});
-
-	const outliersLine = row.createDiv({ cls: "fp-flag-row-outliers" });
-	const shown = flag.outliers.slice(0, 3);
-	shown.forEach((o) => {
-		const chip = outliersLine.createSpan({ cls: "fp-flag-outlier" });
-		chip.createSpan({ text: `${o.transaction.date} · ` });
-		chip.createSpan({ cls: "fp-money", text: formatEUR(o.transaction.amount) });
-		chip.createSpan({ text: ` → "${o.categoryName}"` });
-	});
-	if (flag.outliers.length > shown.length) {
-		outliersLine.createSpan({ cls: "fp-flag-outlier-more", text: `+${flag.outliers.length - shown.length} more` });
-	}
+	barChart(card, rows);
 }
 
 /**
@@ -240,7 +200,7 @@ export function renderAllAccountsDashboard(container: HTMLElement, plugin: Finan
 		sparklineColor: "var(--fp-chart-expenses)",
 	});
 
-	renderCategorizationFlags(container, plugin);
+	renderExpenseCategoriesOverview(container, plugin, currentYear?.year);
 
 	const fiTail =
 		yearsToFi === undefined ? "" : ` · ${yearsToFi.toFixed(1)} years at current pace (${(plugin.settings.expectedReturn * 100).toFixed(0)}% return)`;

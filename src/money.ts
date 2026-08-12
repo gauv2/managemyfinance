@@ -177,12 +177,16 @@ export interface FormatMoneyOptions {
  * setting flips every amount at once, instead of each section hard-coding its own locale.
  */
 export function formatMoney(amount: number, opts: FormatMoneyOptions = {}): string {
-	const value = isFinite(amount) ? amount : 0;
+	const maximumFractionDigits = opts.maximumFractionDigits ?? 2;
+	let value = isFinite(amount) ? amount : 0;
+	// Intl checks the sign before rounding, so floating-point noise or a genuinely tiny balance (e.g.
+	// -0.003) would otherwise print as "-€0" instead of "€0" once rounded to the display precision.
+	if (Math.round(value * 10 ** maximumFractionDigits) === 0) value = 0;
 	const formatter = new Intl.NumberFormat(activeLocale(), {
 		style: opts.plain ? "decimal" : "currency",
 		currency: opts.plain ? undefined : opts.currency || "EUR",
 		minimumFractionDigits: opts.minimumFractionDigits ?? 2,
-		maximumFractionDigits: opts.maximumFractionDigits ?? 2,
+		maximumFractionDigits,
 	});
 	const text = formatter.format(value);
 	return opts.signed && value >= 0 ? `+${text}` : text;
