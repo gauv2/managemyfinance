@@ -5,9 +5,10 @@ import type FinancePlugin from "../main";
 import type { Category, Transaction } from "../types";
 import { categoryChainChip, icon } from "../ui/dom";
 import { TransactionDetailModal } from "./TransactionDetailModal";
+import { formatMoney } from "../money";
 
 function formatEUR(n: number): string {
-	return new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" }).format(n);
+	return formatMoney(n);
 }
 
 function monthLabel(month: string): string {

@@ -1,6 +1,7 @@
 import type FinancePlugin from "../../main";
+import { EditAccountModal } from "../../modals/EditAccountModal";
 import type { Account } from "../../types";
-import { emptyState } from "../../ui/dom";
+import { emptyState, icon } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
 import { renderCashDashboard } from "./dashboards/CashDashboard";
 import { renderCheckingDashboard } from "./dashboards/CheckingDashboard";
@@ -48,7 +49,12 @@ export function renderAccountPage(container: HTMLElement, plugin: FinancePlugin)
 	const header = container.createDiv({ cls: "fp-section-header" });
 	header.createEl("h2", { text: account ? account.name : "All Accounts" });
 	if (account) {
-		const importBtn = header.createEl("button", { cls: "fp-btn fp-btn-secondary", text: "Import" });
+		const headerActions = header.createDiv({ cls: "fp-section-header-actions" });
+		const editBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-ghost" });
+		icon(editBtn, "pencil");
+		editBtn.createSpan({ text: "Edit account" });
+		editBtn.addEventListener("click", () => new EditAccountModal(plugin.app, plugin, account, () => plugin.refreshViews()).open());
+		const importBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary", text: "Import" });
 		importBtn.addEventListener("click", () => openImportWizard(plugin));
 	}
 

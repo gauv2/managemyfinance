@@ -70,6 +70,10 @@ export interface Subscription {
 	cancelUrl?: string;
 	notes?: string;
 	archived?: boolean;
+	/** How this one subscription prefers to be quoted, independent of how often it's actually billed —
+	 *  a yearly-billed domain renewal you think of as "€15/yr", a monthly SaaS you think of as "€20/mo".
+	 *  Unset follows the Subscriptions page's own toggle. Never affects any total, only the wording. */
+	displayCycle?: "monthly" | "yearly";
 }
 
 export type CardType = "debit" | "credit" | "prepaid" | "secured" | "charge";
@@ -106,6 +110,16 @@ export interface Card {
 
 export type TransactionSource = "ing" | "trade-republic" | "generic" | "manual";
 
+/**
+ * How far a transaction has got through your own review pass. "new" is the implicit state of anything
+ * that arrived from an import and hasn't been looked at — it's stored as an absent value rather than
+ * the literal string, so an existing ledger doesn't need rewriting to gain the concept.
+ *
+ * "flagged" is deliberately not a failure state: it's the parking space for a row you can't decide
+ * about yet, so the review queue can be driven to empty without forcing a wrong category on anything.
+ */
+export type ReviewStatus = "new" | "approved" | "flagged";
+
 export interface Transaction {
 	id: string;
 	date: string;
@@ -130,4 +144,9 @@ export interface Transaction {
 	action?: string;
 	/** Vault-relative path to a linked receipt/invoice file, e.g. "Finance/attachments/receipt.pdf". */
 	attachmentPath?: string;
+	/** Absent means "new" (never reviewed) — see ReviewStatus. */
+	review?: ReviewStatus;
+	/** Free-text note left while reviewing, e.g. why a row was flagged. Separate from `notes`, which
+	 *  describes the transaction itself rather than your handling of it. */
+	reviewNote?: string;
 }

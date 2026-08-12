@@ -1,7 +1,13 @@
 import { App, normalizePath } from "obsidian";
 import { parseCSV, toCSV } from "./csv";
 import { DEFAULT_DATA_FOLDER, defaultCategories, defaultSecondaryCategories } from "./constants";
+import type { MerchantMap } from "./import/merchantMemory";
+import type { NumberFormatPreference } from "./money";
+import type { AiSettings } from "./ai/provider";
 import type { Account, Card, Category, CategoryRule, Portfolio, Subscription, Transaction } from "./types";
+
+/** The workspace pages that aren't scoped to a single account. */
+export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "settings";
 
 export interface FinanceSettings {
 	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */
@@ -11,7 +17,7 @@ export interface FinanceSettings {
 	/** Scopes the whole workspace to one account's transactions; undefined means "All Accounts". */
 	activeAccountId?: string;
 	/** Selects a workspace page that isn't account-scoped, e.g. the subscriptions tracker. */
-	activeView?: "budgets" | "subscriptions" | "cards";
+	activeView?: FinanceViewId;
 	/** Blurs every displayed amount (hover to reveal) — for demoing the plugin without exposing real numbers. */
 	privacyMode?: boolean;
 	/** Every portfolio the vault knows about — each is a fully separate set of accounts/transactions/subscriptions. */
@@ -30,6 +36,18 @@ export interface FinanceSettings {
 	exchangeRates?: Record<string, number>;
 	/** User-dragged width of the sidebar, in pixels — undefined means the default (268px, set in CSS). */
 	navWidth?: number;
+	/** Which separators amounts are written with throughout the app — "1.234,56" vs "1,234.56".
+	 *  Only affects display and how editable fields are pre-filled; parsing always accepts both. */
+	numberFormat?: NumberFormatPreference;
+	/** Whether the Subscriptions page quotes everything per month or per year. Individual subscriptions
+	 *  can carry their own preference (Subscription.displayCycle), which this overrides when set to
+	 *  something other than "per-subscription". */
+	subscriptionView?: "monthly" | "yearly" | "per-subscription";
+	/** Hides transactions you've already approved from the Review queue (the default) — turn off to
+	 *  browse everything, approved rows included. */
+	reviewHideApproved?: boolean;
+	/** AI-assisted categorization. Disabled unless explicitly turned on — see src/ai/provider.ts. */
+	ai?: AiSettings;
 }
 
 export const DEFAULT_SETTINGS: FinanceSettings = {
@@ -37,6 +55,9 @@ export const DEFAULT_SETTINGS: FinanceSettings = {
 	fiMultiplier: 25,
 	expectedReturn: 0.07,
 	mobileLayout: "auto",
+	numberFormat: "auto",
+	subscriptionView: "monthly",
+	reviewHideApproved: true,
 };
 
 const TX_COLUMNS: (keyof Transaction)[] = [
@@ -61,6 +82,11 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 	"tax",
 	"action",
 	"attachmentPath",
+	// Appended, never inserted: rows written before these columns existed are shorter than the current
+	// schema, which is exactly the case rowHeader()/migrateLedgerRows() already handle by rewriting the
+	// file onto the current shape on next write. Inserting mid-list instead would misalign old rows.
+	"review",
+	"reviewNote",
 ];
 
 const NUMERIC_COLUMNS: (keyof Transaction)[] = ["amount", "shares", "price", "fee", "tax"];
@@ -77,6 +103,8 @@ export class FinanceStore {
 	transactions: Transaction[] = [];
 	subscriptions: Subscription[] = [];
 	cards: Card[] = [];
+	/** merchant key → what this portfolio has learned about it. See import/merchantMemory.ts. */
+	merchants: MerchantMap = {};
 
 	constructor(private app: App, public settings: FinanceSettings) {}
 
@@ -105,6 +133,7 @@ export class FinanceStore {
 		this.rules = await this.readJson<CategoryRule[]>(this.path("data", "rules.json"), []);
 		this.subscriptions = await this.readJson<Subscription[]>(this.path("data", "subscriptions.json"), []);
 		this.cards = await this.readJson<Card[]>(this.path("data", "cards.json"), []);
+		this.merchants = await this.readJson<MerchantMap>(this.path("data", "merchants.json"), {});
 		await this.migrateLegacyCardExpiry();
 
 		this.transactions = await this.readLedger();
@@ -239,6 +268,10 @@ export class FinanceStore {
 		await this.app.vault.adapter.write(this.path("data", "cards.json"), JSON.stringify(this.cards, null, "\t"));
 	}
 
+	async saveMerchants(): Promise<void> {
+		await this.app.vault.adapter.write(this.path("data", "merchants.json"), JSON.stringify(this.merchants, null, "\t"));
+	}
+
 	existingIds(): Set<string> {
 		return new Set(this.transactions.map((t) => t.id));
 	}
@@ -336,27 +369,98 @@ export class FinanceStore {
 	 * loop, each affected (source, year) ledger file is only read/rewritten once, not once per row.
 	 */
 	async recategorize(patches: Map<string, string>): Promise<number> {
+		const asPatches = new Map<string, Partial<Transaction>>();
+		for (const [id, categoryId] of patches) asPatches.set(id, { categoryId });
+		return this.updateTransactions(asPatches);
+	}
+
+	/**
+	 * The general form of the above: an arbitrary partial patch per transaction id, with each affected
+	 * (source, year) ledger file read and rewritten exactly once regardless of how many rows changed.
+	 * This is what bulk re-categorizing and bulk approving from the Review page run through — doing it
+	 * one updateTransaction() call at a time would rewrite the same CSV once per row.
+	 */
+	async updateTransactions(patches: Map<string, Partial<Transaction>>): Promise<number> {
 		const touchedFiles = new Set<string>();
 		let count = 0;
 		for (const tx of this.transactions) {
-			const newCategoryId = patches.get(tx.id);
-			if (newCategoryId === undefined || tx.categoryId === newCategoryId) continue;
-			tx.categoryId = newCategoryId;
-			touchedFiles.add(`${tx.source}::${(tx.date || "").slice(0, 4) || "unknown"}`);
+			const patch = patches.get(tx.id);
+			if (!patch) continue;
+			const keys = Object.keys(patch) as (keyof Transaction)[];
+			if (keys.every((k) => tx[k] === patch[k])) continue;
+			Object.assign(tx, patch);
+			touchedFiles.add(this.ledgerKey(tx));
 			count++;
 		}
-
-		for (const key of touchedFiles) {
-			const [source, year] = key.split("::");
-			const folder = this.path("data", "ledger", source);
-			await this.ensureFolder(folder);
-			const file = normalizePath(`${folder}/${year}.csv`);
-			const rows: (string | number | undefined)[][] = [TX_COLUMNS];
-			for (const t of this.transactions) {
-				if (t.source === source && (t.date || "").slice(0, 4) === year) rows.push(this.serializeTx(t));
-			}
-			await this.app.vault.adapter.write(file, toCSV(rows));
-		}
+		for (const key of touchedFiles) await this.rewriteLedgerFile(key);
 		return count;
+	}
+
+	private ledgerKey(tx: Transaction): string {
+		return `${tx.source}::${(tx.date || "").slice(0, 4) || "unknown"}`;
+	}
+
+	/** Rewrites one "<source>::<year>" ledger file from whatever is currently in memory for it. */
+	private async rewriteLedgerFile(key: string): Promise<void> {
+		const [source, year] = key.split("::");
+		const folder = this.path("data", "ledger", source);
+		await this.ensureFolder(folder);
+		const file = normalizePath(`${folder}/${year}.csv`);
+		const rows: (string | number | undefined)[][] = [TX_COLUMNS];
+		for (const t of this.transactions) {
+			if (this.ledgerKey(t) === key) rows.push(this.serializeTx(t));
+		}
+		await this.app.vault.adapter.write(file, toCSV(rows));
+	}
+
+	/**
+	 * Writes every in-memory transaction back out, one file per (source, year), after first deleting
+	 * the existing ledger tree — used by a "replace" restore, where files belonging to a source/year
+	 * combination that no longer has any transactions must disappear rather than linger with stale rows.
+	 */
+	async rewriteAllLedgers(): Promise<void> {
+		const adapter = this.app.vault.adapter;
+		const ledgerRoot = this.path("data", "ledger");
+		if (await adapter.exists(ledgerRoot)) {
+			const { folders } = await adapter.list(ledgerRoot);
+			for (const sourceFolder of folders) {
+				const { files } = await adapter.list(sourceFolder);
+				for (const file of files) {
+					if (file.toLowerCase().endsWith(".csv")) await adapter.remove(file);
+				}
+			}
+		}
+		await this.ensureFolder(ledgerRoot);
+		const keys = new Set(this.transactions.map((t) => this.ledgerKey(t)));
+		for (const key of keys) await this.rewriteLedgerFile(key);
+	}
+
+	/** Persists every JSON collection at once — the counterpart to a bulk in-memory replacement. */
+	async saveAll(): Promise<void> {
+		await this.saveAccounts();
+		await this.saveCategories();
+		await this.saveRules();
+		await this.saveSubscriptions();
+		await this.saveCards();
+		await this.saveMerchants();
+		await this.rewriteAllLedgers();
+	}
+
+	/**
+	 * Empties this portfolio: every account, category, rule, subscription, card and transaction.
+	 * Categories are re-seeded from the defaults rather than left empty, because a portfolio with zero
+	 * categories can't classify anything and the app would look broken rather than reset. The data
+	 * folder itself and its structure are kept — this is "start over", not "uninstall".
+	 */
+	async deleteAllData(): Promise<void> {
+		this.accounts = [];
+		this.rules = [];
+		this.subscriptions = [];
+		this.cards = [];
+		this.transactions = [];
+		this.merchants = {};
+		this.categories = defaultCategories();
+		await this.saveAll();
+		await this.seedDefaultSecondaryCategories();
 	}
 }

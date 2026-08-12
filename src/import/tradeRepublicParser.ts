@@ -1,4 +1,5 @@
 import { stableHash } from "../hash";
+import { parseDecimal, parseMoneyOr } from "../money";
 import type { Transaction } from "../types";
 import { parseFlexibleDate } from "../utils/dates";
 
@@ -11,22 +12,14 @@ function col(headers: string[], ...names: string[]): number {
 	return -1;
 }
 
+/** Currency symbols, parentheses negatives and either separator convention — see money.ts. */
 function parseAmount(raw: string): number {
-	if (!raw) return 0;
-	let s = raw.trim();
-	let negative = false;
-	if (s.startsWith("(") && s.endsWith(")")) {
-		negative = true;
-		s = s.slice(1, -1);
-	}
-	s = s.replace(/[€\s]/g, "");
-	if (s.startsWith("-")) {
-		negative = true;
-		s = s.slice(1);
-	}
-	const n = parseFloat(s.replace(",", "."));
-	if (isNaN(n)) return 0;
-	return negative ? -n : n;
+	return parseMoneyOr(raw, 0);
+}
+
+/** Share counts aren't currency but arrive with the same separator ambiguity; undefined when absent. */
+function parseShares(raw: string | undefined): number | undefined {
+	return parseDecimal(raw);
 }
 
 // Trade Republic's own export reports every "Amount" as an unsigned magnitude — direction lives
@@ -83,7 +76,7 @@ function parseTradeRepublicTransactionExport(headers: string[], rows: string[][]
 		const name = iName !== -1 ? (r[iName] ?? "").trim() : "";
 		const description = (iDesc !== -1 ? (r[iDesc] ?? "").trim() : "") || name || type;
 		const amount = iAmount !== -1 ? parseAmount(r[iAmount] ?? "") : 0;
-		const sharesRaw = iShares !== -1 ? parseFloat((r[iShares] ?? "").replace(",", ".")) : NaN;
+		const shares = iShares !== -1 ? parseShares(r[iShares]) : undefined;
 		const price = iPrice !== -1 ? parseAmount(r[iPrice] ?? "") : undefined;
 		const fee = iFee !== -1 ? parseAmount(r[iFee] ?? "") : undefined;
 		const tax = iTax !== -1 ? parseAmount(r[iTax] ?? "") : undefined;
@@ -103,7 +96,7 @@ function parseTradeRepublicTransactionExport(headers: string[], rows: string[][]
 			assetClass: isTrade ? category : undefined,
 			// Trade Republic reports a sell's own shares as a negative magnitude; the rest of the app
 			// (investingHoldings) expects a plain positive count and uses buy/sell action to net it out.
-			shares: isNaN(sharesRaw) ? undefined : Math.abs(sharesRaw),
+			shares: shares === undefined ? undefined : Math.abs(shares),
 			price,
 			fee,
 			tax,
@@ -144,7 +137,7 @@ export function parseTradeRepublicRows(headers: string[], rows: string[][], acco
 		const type = iType !== -1 ? (r[iType] ?? "").trim() : "";
 		const description = (iDesc !== -1 ? (r[iDesc] ?? "").trim() : "") || action;
 		const amount = iAmount !== -1 ? signedAmount(parseAmount(r[iAmount] ?? ""), action) : 0;
-		const sharesRaw = iShares !== -1 ? parseFloat((r[iShares] ?? "").replace(",", ".")) : NaN;
+		const shares = iShares !== -1 ? parseShares(r[iShares]) : undefined;
 		const price = iPrice !== -1 ? parseAmount(r[iPrice] ?? "") : undefined;
 		const fee = iFee !== -1 ? parseAmount(r[iFee] ?? "") : undefined;
 		const tax = iTax !== -1 ? parseAmount(r[iTax] ?? "") : undefined;
@@ -163,7 +156,7 @@ export function parseTradeRepublicRows(headers: string[], rows: string[][], acco
 			source: "trade-republic",
 			ticker: ticker || undefined,
 			assetClass: assetClass || undefined,
-			shares: isNaN(sharesRaw) ? undefined : sharesRaw,
+			shares,
 			price,
 			fee,
 			tax,

@@ -1,5 +1,7 @@
+import { formatMoneyRounded } from "../money";
+
 export function formatEUR(n: number): string {
-	return new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n);
+	return formatMoneyRounded(n);
 }
 
 export function formatPct(n: number, digits = 0): string {

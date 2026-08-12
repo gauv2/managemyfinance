@@ -1,12 +1,14 @@
 import { App, Modal, Notice } from "obsidian";
 import { ACCOUNT_TYPE_META } from "../constants";
+import { formatMoneyRounded } from "../money";
 import { accountStats } from "../kpi";
 import type FinancePlugin from "../main";
 import { icon } from "../ui/dom";
 import { CreateAccountModal } from "./CreateAccountModal";
+import { EditAccountModal } from "./EditAccountModal";
 
 function formatEUR(n: number): string {
-	return new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n);
+	return formatMoneyRounded(n);
 }
 
 /** Full account roster: per-account transaction count and net total, plus add/remove — the "exact numbers per account" view. */
@@ -56,8 +58,18 @@ export class ManageAccountsModal extends Modal {
 				}
 				meta.createSpan({ text: ` · ${stats.count} transaction${stats.count === 1 ? "" : "s"}` });
 				row.createDiv({ cls: "fp-account-row-balance fp-money", text: formatEUR(stats.netWorth) });
+				const editBtn = row.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+				icon(editBtn, "pencil");
+				editBtn.setAttribute("aria-label", "Edit account");
+				editBtn.addEventListener("click", () => {
+					new EditAccountModal(this.app, this.plugin, acc, () => {
+						this.render();
+						this.onChange?.();
+					}).open();
+				});
 				const removeBtn = row.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
 				icon(removeBtn, "x");
+				removeBtn.setAttribute("aria-label", "Remove account");
 				removeBtn.addEventListener("click", () => void this.remove(acc.id, acc.name));
 			});
 		}

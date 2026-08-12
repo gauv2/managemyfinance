@@ -1,4 +1,5 @@
 import { stableHash } from "../hash";
+import { parseMoneyOr } from "../money";
 import type { Transaction, TransactionSource } from "../types";
 import { parseFlexibleDate } from "../utils/dates";
 
@@ -11,11 +12,10 @@ function col(headers: string[], ...names: string[]): number {
 	return -1;
 }
 
+/** An unreadable or empty amount cell is 0, same as it has always been — but "1.234,56" now reads as
+ *  1234.56 rather than 1.234, which is what a naive comma-to-dot swap turned it into. */
 function parseAmount(raw: string): number {
-	if (!raw) return 0;
-	const cleaned = raw.replace(/[€\s]/g, "").replace(",", ".");
-	const n = parseFloat(cleaned);
-	return isNaN(n) ? 0 : n;
+	return parseMoneyOr(raw, 0);
 }
 
 /** Distinct IBANs found in the CSV's "Account" column, in file order — empty when the column is absent. */
