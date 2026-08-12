@@ -15,8 +15,11 @@ export function renderCardsSection(container: HTMLElement, plugin: FinancePlugin
 		const cards = store.cards;
 
 		const header = container.createDiv({ cls: "fp-section-header" });
-		const headText = header.createDiv();
-		headText.createEl("h2", { text: "Cards" });
+		const headText = header.createDiv({ cls: "fp-section-header-text" });
+		const titleRow = headText.createDiv({ cls: "fp-section-title-row" });
+		const headIcon = titleRow.createDiv({ cls: "fp-section-icon-badge" });
+		icon(headIcon, "credit-card");
+		titleRow.createEl("h2", { text: "Cards" });
 		headText.createDiv({
 			cls: "fp-section-subtitle",
 			text: "Every payment card you carry, linked to the account it actually draws money from or borrows against.",

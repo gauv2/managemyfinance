@@ -1,3 +1,4 @@
+import { ACCOUNT_TYPE_META } from "../../constants";
 import type FinancePlugin from "../../main";
 import { EditAccountModal } from "../../modals/EditAccountModal";
 import type { Account } from "../../types";
@@ -47,7 +48,11 @@ export function renderAccountPage(container: HTMLElement, plugin: FinancePlugin)
 	const account = activeAccountId ? store.accounts.find((a) => a.id === activeAccountId) : undefined;
 
 	const header = container.createDiv({ cls: "fp-section-header" });
-	header.createEl("h2", { text: account ? account.name : "All Accounts" });
+	const headText = header.createDiv({ cls: "fp-section-header-text" });
+	const titleRow = headText.createDiv({ cls: "fp-section-title-row" });
+	const headIcon = titleRow.createDiv({ cls: "fp-section-icon-badge" });
+	icon(headIcon, account ? ACCOUNT_TYPE_META[account.type].icon : "layers");
+	titleRow.createEl("h2", { text: account ? account.name : "All Accounts" });
 	if (account) {
 		const headerActions = header.createDiv({ cls: "fp-section-header-actions" });
 		const editBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-ghost" });
