@@ -28,19 +28,19 @@ function niceTicks(min: number, max: number, count = 4): number[] {
 
 /**
  * Renders a multi-series SVG line chart: hairline gridlines, ring-marked data points,
- * an always-on legend, an end-of-line label for the last point of each series, and a
- * hover crosshair + tooltip. Colors come from the categorical palette via CSS variables
- * so light/dark stay in sync with Obsidian's theme.
+ * a legend that doubles as a (de)select toggle per series, an end-of-line label for the
+ * last point of each series, and a hover crosshair + tooltip. Colors come from the
+ * categorical palette via CSS variables so light/dark stay in sync with Obsidian's theme.
  */
 export function lineChart(
 	container: HTMLElement,
 	categories: string[],
 	series: ChartSeries[],
-	opts?: { height?: number; formatValue?: (n: number) => string; money?: boolean }
+	opts?: { height?: number; width?: number; formatValue?: (n: number) => string; money?: boolean }
 ): void {
 	const height = opts?.height ?? 220;
 	const money = opts?.money !== false;
-	const width = 640;
+	const width = opts?.width ?? 640;
 	const padLeft = 52;
 	const padRight = 16;
 	const padTop = 16;
@@ -61,12 +61,41 @@ export function lineChart(
 
 	const wrap = container.createDiv({ cls: "fp-chart" + (money ? " fp-chart-money" : "") });
 
+	// One entry per series, toggled by clicking (or Enter/Space on) its legend item. The
+	// mark elements themselves are created further down; these arrays are filled in as
+	// they're built and read back here once the toggle actually fires (always after the
+	// whole chart has finished its synchronous render, so the arrays are never read empty).
+	const visible = series.map(() => true);
+	const lineEls: SVGPolylineElement[] = [];
+	const dotEls: SVGCircleElement[][] = [];
+	const endLabelEls: (SVGTextElement | undefined)[] = [];
+
 	const legend = wrap.createDiv({ cls: "fp-chart-legend" });
-	series.forEach((s) => {
+	series.forEach((s, i) => {
 		const item = legend.createDiv({ cls: "fp-chart-legend-item" });
+		item.setAttribute("role", "button");
+		item.setAttribute("tabindex", "0");
+		item.setAttribute("aria-pressed", "true");
 		const swatch = item.createSpan({ cls: "fp-chart-swatch" });
 		swatch.style.setProperty("--fp-swatch-color", s.color);
 		item.createSpan({ text: s.label });
+
+		const toggle = () => {
+			visible[i] = !visible[i];
+			item.toggleClass("is-off", !visible[i]);
+			item.setAttribute("aria-pressed", String(visible[i]));
+			const display = visible[i] ? "" : "none";
+			lineEls[i].style.display = display;
+			dotEls[i].forEach((dot) => (dot.style.display = display));
+			if (endLabelEls[i]) endLabelEls[i]!.style.display = display;
+		};
+		item.addEventListener("click", toggle);
+		item.addEventListener("keydown", (ev: KeyboardEvent) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				toggle();
+			}
+		});
 	});
 
 	const svgWrap = wrap.createDiv({ cls: "fp-chart-svg-wrap" });
@@ -86,6 +115,7 @@ export function lineChart(
 		line.setAttribute("y1", String(y));
 		line.setAttribute("y2", String(y));
 		line.setAttribute("class", t === 0 ? "fp-chart-baseline" : "fp-chart-grid");
+		line.setAttribute("vector-effect", "non-scaling-stroke");
 		svg.appendChild(line);
 
 		const label = document.createElementNS(NS, "text");
@@ -115,18 +145,24 @@ export function lineChart(
 		const polyline = document.createElementNS(NS, "polyline");
 		polyline.setAttribute("points", points);
 		polyline.setAttribute("class", "fp-chart-line");
+		polyline.setAttribute("vector-effect", "non-scaling-stroke");
 		polyline.style.setProperty("--fp-line-color", s.color);
 		svg.appendChild(polyline);
+		lineEls.push(polyline);
 
+		const dots: SVGCircleElement[] = [];
 		s.values.forEach((v, i) => {
 			const dot = document.createElementNS(NS, "circle");
 			dot.setAttribute("cx", String(scaleX(i)));
 			dot.setAttribute("cy", String(scaleY(v)));
 			dot.setAttribute("r", "4");
 			dot.setAttribute("class", "fp-chart-dot");
+			dot.setAttribute("vector-effect", "non-scaling-stroke");
 			dot.style.setProperty("--fp-line-color", s.color);
 			svg.appendChild(dot);
+			dots.push(dot);
 		});
+		dotEls.push(dots);
 	});
 
 	// End-of-line labels — series whose last value lands within a text-height of each other would
@@ -136,13 +172,13 @@ export function lineChart(
 	if (lastIdx >= 0) {
 		const MIN_GAP = 14;
 		const endLabels = series
-			.map((s) => ({ y: scaleY(s.values[lastIdx]), text: formatLabel(s.values[lastIdx]) }))
+			.map((s, i) => ({ i, y: scaleY(s.values[lastIdx]), text: formatLabel(s.values[lastIdx]) }))
 			.sort((a, b) => a.y - b.y);
 		for (let i = 1; i < endLabels.length; i++) {
 			const min = endLabels[i - 1].y + MIN_GAP;
 			if (endLabels[i].y < min) endLabels[i].y = min;
 		}
-		endLabels.forEach(({ y, text }) => {
+		endLabels.forEach(({ i, y, text }) => {
 			const endLabel = document.createElementNS(NS, "text");
 			endLabel.setAttribute("x", String(scaleX(lastIdx) + 6));
 			endLabel.setAttribute("y", String(y));
@@ -150,6 +186,7 @@ export function lineChart(
 			endLabel.setAttribute("dominant-baseline", "middle");
 			endLabel.textContent = text;
 			svg.appendChild(endLabel);
+			endLabelEls[i] = endLabel;
 		});
 	}
 
@@ -158,6 +195,7 @@ export function lineChart(
 	crosshair.setAttribute("y1", String(padTop));
 	crosshair.setAttribute("y2", String(padTop + plotH));
 	crosshair.setAttribute("class", "fp-chart-crosshair");
+	crosshair.setAttribute("vector-effect", "non-scaling-stroke");
 	crosshair.style.display = "none";
 	svg.appendChild(crosshair);
 
@@ -186,7 +224,8 @@ export function lineChart(
 		tooltip.style.display = "";
 		tooltip.empty();
 		tooltip.createDiv({ cls: "fp-chart-tooltip-title", text: categories[clamped] });
-		series.forEach((s) => {
+		series.forEach((s, i) => {
+			if (!visible[i]) return;
 			const row = tooltip.createDiv({ cls: "fp-chart-tooltip-row" });
 			const swatch = row.createSpan({ cls: "fp-chart-swatch" });
 			swatch.style.setProperty("--fp-swatch-color", s.color);

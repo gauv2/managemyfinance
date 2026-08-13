@@ -1802,6 +1802,22 @@
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);
 	font-weight: 600;
+	cursor: pointer;
+	user-select: none;
+	border-radius: var(--fp-radius-sm);
+	padding: 2px 4px;
+	margin: -2px -4px;
+	transition: opacity 0.12s ease;
+}
+.fp-chart-legend-item:hover {
+	color: var(--text-normal);
+}
+.fp-chart-legend-item:focus-visible {
+	outline: 2px solid var(--fp-neutral);
+	outline-offset: 1px;
+}
+.fp-chart-legend-item.is-off {
+	opacity: 0.45;
 }
 .fp-chart-swatch {
 	--fp-swatch-color: var(--fp-neutral);

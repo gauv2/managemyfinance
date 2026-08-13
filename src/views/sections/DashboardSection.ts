@@ -122,17 +122,22 @@ function renderHistoryTable(panel: HTMLElement, plugin: FinancePlugin, years: Ye
  * Every metric from the table as lines, split across two charts since they don't share a scale:
  * EUR amounts (income/expenses/net worth/...) on one, rate-based indicators (%) on the other.
  */
-function renderHistoryChart(panel: HTMLElement, years: YearSummary[], fiMultiplier: number): void {
+function renderHistoryChart(panel: HTMLElement, years: YearSummary[], fiMultiplier: number, chartWidth: number): void {
 	const categories = years.map((y) => y.year);
 
 	panel.createEl("h4", { text: "Amounts" });
-	lineChart(panel, categories, [
-		{ label: "Total income", color: "var(--fp-chart-income)", values: years.map((y) => y.income) },
-		{ label: "Total expenses", color: "var(--fp-chart-expenses)", values: years.map((y) => y.expenses) },
-		{ label: "Net savings", color: "var(--fp-chart-net)", values: years.map((y) => y.net) },
-		{ label: "Net worth (EOY)", color: "var(--fp-neutral)", values: years.map((y) => y.netWorthEOY) },
-		{ label: "Passive income", color: "var(--fp-good)", values: years.map((y) => y.passiveIncome) },
-	]);
+	lineChart(
+		panel,
+		categories,
+		[
+			{ label: "Total income", color: "var(--fp-chart-income)", values: years.map((y) => y.income) },
+			{ label: "Total expenses", color: "var(--fp-chart-expenses)", values: years.map((y) => y.expenses) },
+			{ label: "Net savings", color: "var(--fp-chart-net)", values: years.map((y) => y.net) },
+			{ label: "Net worth (EOY)", color: "var(--fp-neutral)", values: years.map((y) => y.netWorthEOY) },
+			{ label: "Passive income", color: "var(--fp-good)", values: years.map((y) => y.passiveIncome) },
+		],
+		{ width: chartWidth }
+	);
 
 	panel.createEl("h4", { text: "Rates" });
 	lineChart(
@@ -151,7 +156,7 @@ function renderHistoryChart(panel: HTMLElement, years: YearSummary[], fiMultipli
 				values: years.map((y, i) => (i === 0 || years[i - 1].expenses === 0 ? 0 : ((y.expenses - years[i - 1].expenses) / years[i - 1].expenses) * 100)),
 			},
 		],
-		{ formatValue: (n) => `${n.toFixed(1)}%`, money: false }
+		{ formatValue: (n) => `${n.toFixed(1)}%`, money: false, width: chartWidth }
 	);
 }
 
@@ -227,8 +232,12 @@ export function renderAllAccountsDashboard(container: HTMLElement, plugin: Finan
 	const fiMultiplier = plugin.settings.fiMultiplier;
 	const historyCard = container.createDiv({ cls: "fp-card" });
 	historyCard.createEl("h3", { text: "Historical performance" });
+	// The Chart tab panel starts display:none (only "Table" is active), so it can't be measured
+	// directly — its clientWidth would read 0. Measure the card itself instead, whose padding
+	// (18px 20px in styles.css) is the same inset the chart should sit at on every side.
+	const chartWidth = historyCard.clientWidth > 0 ? historyCard.clientWidth - 40 : 640;
 	tabSwitcher(historyCard, [
 		{ label: "Table", render: (panel) => renderHistoryTable(panel, plugin, years, fiMultiplier) },
-		{ label: "Chart", render: (panel) => renderHistoryChart(panel, years, fiMultiplier) },
+		{ label: "Chart", render: (panel) => renderHistoryChart(panel, years, fiMultiplier, chartWidth) },
 	]);
 }
