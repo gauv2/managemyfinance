@@ -6,12 +6,14 @@ import { autoCategorize, buildDefaultRules, effectiveRules } from "./import/auto
 import { merchantKey } from "./import/merchantKey";
 import { applyMemory, applyPendingSuggestions, learnFromHistory, pruneMemory, remember, siblingsOf } from "./import/merchantMemory";
 import { BalanceSnapshotModal } from "./modals/BalanceSnapshotModal";
+import { RecheckModal } from "./modals/RecheckModal";
 import { DetectedSubscriptionsModal, dueSoon } from "./modals/SubscriptionLinkModal";
 import { TransactionEditModal } from "./modals/TransactionEditModal";
 import { TransferMatchModal } from "./modals/TransferMatchModal";
 import { formatMoney, setNumberFormatPreference } from "./money";
 import { registerFinanceCodeBlock } from "./reports/codeblock";
 import { buildMonthlyReport, buildNetWorthReport, buildYearlyReport, type ReportContext } from "./reports/markdown";
+import { runDueSchedules } from "./reports/scheduleRunner";
 import { openNote, writeReportNote } from "./reports/write";
 import { FinanceSettingTab } from "./settings/SettingsTab";
 import { DEFAULT_SETTINGS, FinanceSettings, FinanceStore } from "./store";
@@ -80,6 +82,12 @@ export default class FinancePlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "recheck-categories",
+			name: "Recheck existing categories with Claude",
+			callback: () => new RecheckModal(this.app, this).open(),
+		});
+
+		this.addCommand({
 			id: "auto-categorize-transactions",
 			name: "Auto-categorize uncategorized transactions",
 			callback: () => void this.autoCategorizeExisting(),
@@ -133,6 +141,12 @@ export default class FinancePlugin extends Plugin {
 			callback: () => void this.writeNetWorthReport(),
 		});
 
+		this.addCommand({
+			id: "open-reports",
+			name: "Build a report (categories, period, PDF/CSV/Excel)",
+			callback: () => void this.openView("reports"),
+		});
+
 		// Figures can be embedded in any note via a ```finance block — see reports/codeblock.ts.
 		registerFinanceCodeBlock(this);
 
@@ -141,6 +155,12 @@ export default class FinancePlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			this.notifyBudgetAlerts();
 			this.notifyUpcomingRenewals();
+			// Scheduled reports are checked here rather than on a timer: a plugin has no background
+			// process, so "every Monday" can only mean "on the first launch on or after Monday". A
+			// failure is reported and leaves the period due, so the next launch retries it.
+			void runDueSchedules(this).catch((e) => {
+				new Notice(`Couldn't check scheduled reports: ${e instanceof Error ? e.message : String(e)}`);
+			});
 		});
 	}
 
@@ -260,10 +280,12 @@ export default class FinancePlugin extends Plugin {
 	// declared as data, not as UI. These are the verbs they call — also useful anywhere else that
 	// wants to open one of these without importing the modal itself.
 
-	/** Switches the workspace to one of its non-account pages. */
+	/** Switches the workspace to one of its non-account pages, opening it first if it isn't already
+	 *  on screen — a command that names a page is otherwise silent when the workspace is closed. */
 	async openView(view: NonNullable<FinanceSettings["activeView"]>): Promise<void> {
 		this.settings.activeView = view;
 		await this.saveSettings();
+		await this.activateView();
 		this.refreshViews();
 	}
 
@@ -347,6 +369,27 @@ export default class FinancePlugin extends Plugin {
 		if (siblings.length === 0) return 0;
 		const patches = new Map(siblings.map((t) => [t.id, { categoryId }] as const));
 		return store.updateTransactions(new Map(patches));
+	}
+
+	/**
+	 * Teaches merchant memory from a set of rows that were just given a category by hand.
+	 *
+	 * Every bulk assignment is also a lesson: whatever shops those rows belong to are now known for
+	 * good, so the next import of them lands categorized rather than back in the review queue. Called
+	 * by every path that sets a category on more than one row at a time.
+	 */
+	async rememberMerchantsFor(ids: Iterable<string>, categoryId: string): Promise<void> {
+		const store = this.store;
+		const chosen = new Set(ids);
+		let touched = false;
+		for (const tx of store.transactions) {
+			if (!chosen.has(tx.id)) continue;
+			const key = merchantKey(tx);
+			if (!key) continue;
+			store.merchants = remember(store.merchants, key, categoryId, "user");
+			touched = true;
+		}
+		if (touched) await store.saveMerchants();
 	}
 
 	/**

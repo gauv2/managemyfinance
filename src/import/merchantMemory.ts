@@ -17,6 +17,11 @@ export interface MerchantEntry {
 	/** Set when a suggestion was rejected without choosing a category. Keeps the merchant out of the
 	 *  next AI batch — "that guess is wrong" is worth remembering even though it names no answer. */
 	dismissedAt?: string;
+	/** Set when a person has looked at this merchant's category and said it is right — either by
+	 *  accepting a proposed change or by explicitly keeping the existing one. Distinct from having a
+	 *  category at all, which merely means something once assigned one. A recheck skips these by
+	 *  default, so confirming a merchant is what stops it being raised again every single pass. */
+	reviewedAt?: string;
 	/** An AI answer that wasn't confident enough to apply on its own. Sits here until you accept or
 	 *  reject it, so an uncertain guess never quietly becomes a category. */
 	suggestion?: {
@@ -51,6 +56,30 @@ export function remember(map: MerchantMap, key: string, categoryId: string, sour
 	return {
 		...map,
 		[key]: { key, categoryId, source, at: today(), suggestion: undefined, dismissedAt: undefined },
+	};
+}
+
+/**
+ * Records that a person has confirmed this merchant's category — whether by accepting a proposed
+ * change or by looking at one and keeping what was already there.
+ *
+ * Both are the same statement to the recheck pass ("a human has ruled on this"), which is why
+ * rejecting a proposal is stored rather than discarded: a recheck that keeps raising the same
+ * merchant you have already dismissed twice stops being something anyone runs.
+ */
+export function markReviewed(map: MerchantMap, key: string, categoryId: string | undefined): MerchantMap {
+	const existing = map[key];
+	return {
+		...map,
+		[key]: {
+			key,
+			categoryId: categoryId ?? existing?.categoryId,
+			source: "user",
+			at: today(),
+			reviewedAt: today(),
+			suggestion: undefined,
+			dismissedAt: existing?.dismissedAt,
+		},
 	};
 }
 

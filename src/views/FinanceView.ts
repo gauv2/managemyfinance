@@ -13,6 +13,7 @@ import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { renderAccountPage } from "./sections/AccountPage";
 import { renderBudgetsSection } from "./sections/BudgetsSection";
 import { renderCardsSection } from "./sections/CardsSection";
+import { renderReportsSection } from "./sections/ReportsSection";
 import { renderReviewSection } from "./sections/ReviewSection";
 import { renderSettingsSection } from "./sections/SettingsSection";
 import { renderSubscriptionsSection } from "./sections/SubscriptionsSection";
@@ -32,7 +33,7 @@ interface NavTabDef {
 	badgeCount?: number;
 }
 
-const DEFAULT_NAV_ORDER = ["all-accounts", "budgets", "subscriptions", "cards", "review"];
+const DEFAULT_NAV_ORDER = ["all-accounts", "budgets", "subscriptions", "cards", "review", "reports"];
 
 function possessive(name: string): string {
 	const trimmed = name.trim();
@@ -362,6 +363,13 @@ export class FinanceView extends ItemView {
 				onClick: () => void this.selectView("review"),
 				badgeCount: this.plugin.store.transactions.filter((t) => (t.review ?? "new") === "new").length,
 			},
+			reports: {
+				id: "reports",
+				label: "Reports",
+				icon: "file-bar-chart",
+				isActive: activeView === "reports",
+				onClick: () => void this.selectView("reports"),
+			},
 		};
 		this.navTabOrder().forEach((id) => this.renderDraggableTab(tabDefs[id]));
 
@@ -479,20 +487,26 @@ export class FinanceView extends ItemView {
 		// Two entries on purpose: this plugin has two distinct settings surfaces, and the footer is where
 		// both are found. "Settings" is the app's own display preferences (a page in this workspace);
 		// "Vault settings" is Obsidian's modal, holding the data itself.
-		const settingsItem = this.navFooterEl.createDiv({
-			cls: "fp-nav-item fp-nav-item-settings" + (this.plugin.settings.activeView === "settings" ? " is-active" : ""),
-		});
-		icon(settingsItem, "sliders-horizontal", "fp-nav-icon");
-		settingsItem.createSpan({ cls: "fp-nav-label", text: "Settings" });
-		icon(settingsItem, "chevron-right", "fp-nav-item-chevron");
-		settingsItem.addEventListener("click", () => void this.selectView("settings"));
+		//
+		// Side by side and quiet, rather than two full-width rows with their own dividers. They were
+		// competing with the account list for attention while being the two things you touch least,
+		// and two stacked separators at the bottom of the sidebar read as a section rather than as a
+		// footnote. Trailing chevrons dropped for the same reason — the icon and label carry it.
+		const settingsRow = this.navFooterEl.createDiv({ cls: "fp-nav-settings-row" });
 
-		const vaultSettingsItem = this.navFooterEl.createDiv({ cls: "fp-nav-item fp-nav-item-settings fp-nav-item-ghost" });
-		icon(vaultSettingsItem, "database", "fp-nav-icon");
-		vaultSettingsItem.createSpan({ cls: "fp-nav-label", text: "Vault settings" });
-		icon(vaultSettingsItem, "external-link", "fp-nav-item-chevron");
-		vaultSettingsItem.setAttribute("title", "Data folder, accounts, categories, exchange rates, import, backup and restore");
-		vaultSettingsItem.addEventListener("click", () => {
+		const settingsBtn = settingsRow.createEl("button", {
+			cls: "fp-nav-settings-btn" + (this.plugin.settings.activeView === "settings" ? " is-active" : ""),
+		});
+		icon(settingsBtn, "sliders-horizontal");
+		settingsBtn.createSpan({ cls: "fp-nav-settings-label", text: "Settings" });
+		settingsBtn.setAttribute("title", "Appearance, number format, review queue and report preferences");
+		settingsBtn.addEventListener("click", () => void this.selectView("settings"));
+
+		const vaultSettingsBtn = settingsRow.createEl("button", { cls: "fp-nav-settings-btn" });
+		icon(vaultSettingsBtn, "database");
+		vaultSettingsBtn.createSpan({ cls: "fp-nav-settings-label", text: "Vault" });
+		vaultSettingsBtn.setAttribute("title", "Vault settings — data folder, accounts, categories, exchange rates, AI, scheduled reports, import, backup and restore");
+		vaultSettingsBtn.addEventListener("click", () => {
 			const appWithSetting = this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } };
 			appWithSetting.setting.open();
 			appWithSetting.setting.openTabById(this.plugin.manifest.id);
@@ -524,6 +538,9 @@ export class FinanceView extends ItemView {
 				break;
 			case "review":
 				renderReviewSection(this.bodyEl, this.plugin);
+				break;
+			case "reports":
+				renderReportsSection(this.bodyEl, this.plugin);
 				break;
 			case "settings":
 				renderSettingsSection(this.bodyEl, this.plugin);

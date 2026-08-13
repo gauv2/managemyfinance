@@ -56,6 +56,20 @@ const sortState: LedgerSortState = {
  *  triggers (cleared explicitly after a successful apply instead). */
 const selectedIds: Set<string> = new Set();
 
+/**
+ * Which page of results is on screen. Module scope like the filters, so the re-render that follows
+ * approving a row doesn't throw you back to page one of a list you were halfway down.
+ *
+ * This replaces a `slice(0, 200)` that capped the table silently: the summary said "685
+ * transactions" while the table held 200, and the only way to discover the other 485 was to notice
+ * that scrolling stopped. A cap the interface doesn't mention is worse than no cap at all.
+ */
+const pageState = { page: 1 };
+
+/** 0 means "all on one page" — kept as an option because it's what printing and Ctrl-F want. */
+const PAGE_SIZE_OPTIONS = [50, 100, 250, 500, 0];
+const DEFAULT_PAGE_SIZE = 100;
+
 /** First click on a text column reads A→Z; first click on date/amount reads newest/largest first. */
 const DEFAULT_SORT_DIRECTION: Record<LedgerSortColumn, LedgerSortDirection> = {
 	date: "desc",
@@ -177,6 +191,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 
 	const bulkBar = container.createDiv({ cls: "fp-ledger-bulk-bar" });
 	const bulkCount = bulkBar.createSpan({ cls: "fp-ledger-bulk-count" });
+	const selectAllMatchingBtn = bulkBar.createSpan({ cls: "fp-ledger-bulk-selectall" });
 	const bulkPickerWrap = bulkBar.createDiv({ cls: "fp-ledger-bulk-picker" });
 	let bulkPickerValue: CategoryPickerValue = {};
 	renderCategoryPicker(bulkPickerWrap, {
@@ -203,7 +218,11 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		const patches = new Map<string, string>();
 		selectedIds.forEach((id) => patches.set(id, categoryId));
 		const count = await store.recategorize(patches);
-		new Notice(`Categorized ${count} transaction${count === 1 ? "" : "s"}`);
+		// Taught to merchant memory like every other categorize path. This one is the most debatable —
+		// a sweep-up across a dozen unrelated merchants stamps all of them — but the alternative was
+		// worse: the same gesture teaching or not teaching depending on which screen you did it from.
+		await plugin.rememberMerchantsFor(selectedIds, categoryId);
+		new Notice(`Categorized ${count} transaction${count === 1 ? "" : "s"}. Future imports from these merchants will follow it.`);
 		selectedIds.clear();
 		plugin.refreshViews();
 	}
@@ -222,9 +241,13 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 
 	const selectAllTh = thead.createEl("th", { cls: "fp-ledger-th-select" });
 	const selectAllCheckbox = selectAllTh.createEl("input", { type: "checkbox" });
+	// Ticks the page, not the whole filtered set. With everything on one list those were the same
+	// thing; with pages they are not, and a checkbox that silently selects 600 rows you can't see is
+	// how a bulk categorize goes somewhere you didn't intend. Selecting everything is still one click
+	// away — see the "select all N" link the bulk bar offers once a full page is ticked.
 	selectAllCheckbox.addEventListener("change", () => {
-		if (selectAllCheckbox.checked) currentFiltered.forEach((t) => selectedIds.add(t.id));
-		else currentFiltered.forEach((t) => selectedIds.delete(t.id));
+		if (selectAllCheckbox.checked) currentPage.forEach((t) => selectedIds.add(t.id));
+		else currentPage.forEach((t) => selectedIds.delete(t.id));
 		draw();
 	});
 
@@ -263,24 +286,51 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 				sortState.direction = DEFAULT_SORT_DIRECTION[col.id];
 			}
 			updateSortIndicators();
+			// Re-sorting reshuffles which rows land on which page, so "page 3" no longer refers to
+			// anything the reader was looking at.
+			pageState.page = 1;
 			draw();
 		});
 	});
 	updateSortIndicators();
 
 	const tbody = table.createEl("tbody");
-	/** Every currently filtered transaction (not just the 200 rendered) — what "select all" selects,
-	 *  and what the header checkbox's checked/indeterminate state is judged against. */
+	const pager = container.createDiv({ cls: "fp-ledger-pager" });
+	/** Every transaction matching the filters, across all pages. */
 	let currentFiltered: Transaction[] = [];
+	/** Just the rows currently rendered — what the header checkbox ticks. */
+	let currentPage: Transaction[] = [];
 
 	function updateBulkBar(): void {
 		bulkBar.toggleClass("is-visible", selectedIds.size > 0);
 		bulkCount.setText(`${selectedIds.size} selected`);
+
+		// The Gmail move: once the page is fully ticked and more rows match than are on it, offer the
+		// bigger selection explicitly rather than making the header checkbox mean two different things.
+		selectAllMatchingBtn.empty();
+		const pageAllSelected = currentPage.length > 0 && currentPage.every((t) => selectedIds.has(t.id));
+		const beyondPage = currentFiltered.length > currentPage.length;
+		if (!pageAllSelected || !beyondPage) return;
+
+		const allSelected = currentFiltered.every((t) => selectedIds.has(t.id));
+		const link = selectAllMatchingBtn.createEl("button", {
+			cls: "fp-btn fp-btn-ghost fp-btn-tiny",
+			text: allSelected ? `Clear — back to this page only` : `Select all ${currentFiltered.length} matching these filters`,
+		});
+		link.addEventListener("click", () => {
+			if (allSelected) {
+				currentFiltered.forEach((t) => selectedIds.delete(t.id));
+				currentPage.forEach((t) => selectedIds.add(t.id));
+			} else {
+				currentFiltered.forEach((t) => selectedIds.add(t.id));
+			}
+			draw();
+		});
 	}
 
 	function updateSelectAllState(): void {
-		const selectableCount = currentFiltered.length;
-		const selectedCount = currentFiltered.filter((t) => selectedIds.has(t.id)).length;
+		const selectableCount = currentPage.length;
+		const selectedCount = currentPage.filter((t) => selectedIds.has(t.id)).length;
 		selectAllCheckbox.checked = selectableCount > 0 && selectedCount === selectableCount;
 		selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < selectableCount;
 	}
@@ -379,26 +429,95 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		summaryTotalVal.removeClass("is-negative", "is-positive");
 		summaryTotalVal.addClass(total < 0 ? "is-negative" : "is-positive");
 
-		const rows = filtered.slice(0, 200);
-		if (rows.length === 0) {
+		if (filtered.length === 0) {
+			pager.empty();
 			const tr = tbody.createEl("tr");
-			tr.createEl("td", { attr: { colspan: String(columns.length) }, text: "No matching transactions." });
+			tr.createEl("td", { attr: { colspan: String(columns.length + 1) }, text: "No matching transactions." });
 			return;
 		}
-		rows.forEach(appendRow);
+
+		const size = pageSize();
+		const pages = size === 0 ? 1 : Math.max(1, Math.ceil(filtered.length / size));
+		// Clamped rather than reset: narrowing a filter while on page 7 should land on the last page
+		// that still exists, not silently throw you back to the top of the list.
+		if (pageState.page > pages) pageState.page = pages;
+		if (pageState.page < 1) pageState.page = 1;
+
+		const start = size === 0 ? 0 : (pageState.page - 1) * size;
+		const end = size === 0 ? filtered.length : Math.min(start + size, filtered.length);
+		currentPage = filtered.slice(start, end);
+		currentPage.forEach(appendRow);
+		renderPager(filtered.length, pages, start, end);
+		updateSelectAllState();
+	}
+
+	function pageSize(): number {
+		const stored = plugin.settings.ledgerPageSize;
+		return PAGE_SIZE_OPTIONS.includes(stored as number) ? (stored as number) : DEFAULT_PAGE_SIZE;
+	}
+
+	function renderPager(total: number, pages: number, start: number, end: number): void {
+		pager.empty();
+
+		// Always states the range against the total, so the table and the "685 transactions" summary
+		// above it can never appear to disagree.
+		pager.createSpan({ cls: "fp-ledger-pager-range", text: `Showing ${start + 1}–${end} of ${total}` });
+
+		const sizeWrap = pager.createDiv({ cls: "fp-ledger-pager-size" });
+		sizeWrap.createSpan({ text: "Per page" });
+		const sizeSelect = sizeWrap.createEl("select", { cls: "fp-filter-select" });
+		PAGE_SIZE_OPTIONS.forEach((n) => sizeSelect.createEl("option", { text: n === 0 ? "All" : String(n), value: String(n) }));
+		sizeSelect.value = String(pageSize());
+		sizeSelect.addEventListener("change", async () => {
+			plugin.settings.ledgerPageSize = Number(sizeSelect.value);
+			pageState.page = 1;
+			await plugin.saveSettings();
+			draw();
+		});
+
+		if (pages <= 1) return;
+
+		const nav = pager.createDiv({ cls: "fp-ledger-pager-nav" });
+		const step = (to: number): void => {
+			pageState.page = Math.min(pages, Math.max(1, to));
+			draw();
+			// The rows change under the cursor, so put the reader back at the top of the new page
+			// rather than wherever the old one's scroll position happened to leave them.
+			tableWrap.scrollIntoView({ block: "nearest" });
+		};
+		const navBtn = (label: string, iconName: string, to: number, disabled: boolean): void => {
+			const btn = nav.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+			icon(btn, iconName);
+			btn.setAttribute("aria-label", label);
+			btn.setAttribute("title", label);
+			btn.disabled = disabled;
+			btn.addEventListener("click", () => step(to));
+		};
+
+		navBtn("First page", "chevrons-left", 1, pageState.page === 1);
+		navBtn("Previous page", "chevron-left", pageState.page - 1, pageState.page === 1);
+		nav.createSpan({ cls: "fp-ledger-pager-count", text: `Page ${pageState.page} of ${pages}` });
+		navBtn("Next page", "chevron-right", pageState.page + 1, pageState.page === pages);
+		navBtn("Last page", "chevrons-right", pages, pageState.page === pages);
+	}
+
+	/** Any filter change narrows or widens the set, so the page number has to start over. */
+	function redrawFromFirstPage(): void {
+		pageState.page = 1;
+		draw();
 	}
 
 	draw();
-	search.addEventListener("input", draw);
-	accountSelect?.addEventListener("change", draw);
+	search.addEventListener("input", redrawFromFirstPage);
+	accountSelect?.addEventListener("change", redrawFromFirstPage);
 	primarySelect.addEventListener("change", () => {
 		populateSecondaryFilter(primarySelect.value, "");
-		draw();
+		redrawFromFirstPage();
 	});
-	secondarySelect.addEventListener("change", draw);
-	reviewSelect.addEventListener("change", draw);
-	dateFrom.addEventListener("change", draw);
-	dateTo.addEventListener("change", draw);
+	secondarySelect.addEventListener("change", redrawFromFirstPage);
+	reviewSelect.addEventListener("change", redrawFromFirstPage);
+	dateFrom.addEventListener("change", redrawFromFirstPage);
+	dateTo.addEventListener("change", redrawFromFirstPage);
 	clearBtn.addEventListener("click", () => {
 		search.value = "";
 		if (accountSelect) accountSelect.value = "";
@@ -407,6 +526,6 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		reviewSelect.value = "";
 		dateFrom.value = "";
 		dateTo.value = "";
-		draw();
+		redrawFromFirstPage();
 	});
 }

@@ -69,6 +69,13 @@ const NOISE_PHRASES = [
 ];
 
 /**
+ * The same phrases as case-insensitive patterns, compiled once. merchantDisplayName() is called per
+ * transaction — by the review queue, and once per row again when hunting for matching descriptions —
+ * so building twenty RegExps inside it meant hundreds of thousands of constructions on a real ledger.
+ */
+const NOISE_PATTERNS = NOISE_PHRASES.map((phrase) => new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"));
+
+/**
  * Words a bank puts in front of the actual payee: direction, instrument, and the verb for the
  * movement. Stripped from the front repeatedly, because they otherwise eat the whole token budget —
  * "Transfer from HOOGENDOORN HOLDING BV" reduced to "transfer from", which merged every transfer in
@@ -189,9 +196,7 @@ export function merchantDisplayName(raw: string): string {
 			break;
 		}
 	}
-	for (const phrase of NOISE_PHRASES) {
-		s = s.replace(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
-	}
+	for (const phrase of NOISE_PATTERNS) s = s.replace(phrase, " ");
 	s = s.split(/[,/|]/)[0];
 
 	let tokens = s
