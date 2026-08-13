@@ -5,6 +5,8 @@ import { DEFAULT_BASE_CURRENCY, type FxContext } from "./currency";
 import type { MerchantMap } from "./import/merchantMemory";
 import type { NumberFormatPreference } from "./money";
 import type { AiSettings } from "./ai/provider";
+import type { EmailSettings, TelegramSettings, TestDeliverySettings } from "./delivery/channels";
+import type { ReportSchedule } from "./reports/schedule";
 import type {
 	Account,
 	BalanceSnapshot,
@@ -19,7 +21,7 @@ import type {
 } from "./types";
 
 /** The workspace pages that aren't scoped to a single account. */
-export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "settings";
+export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "reports" | "compare" | "settings";
 
 export interface FinanceSettings {
 	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */
@@ -58,6 +60,27 @@ export interface FinanceSettings {
 	/** Hides transactions you've already approved from the Review queue (the default) — turn off to
 	 *  browse everything, approved rows included. */
 	reviewHideApproved?: boolean;
+	/** After approving a single row, offer to apply the same decision to every other transaction from
+	 *  the same merchant. On by default — it's the difference between one click and forty. The match
+	 *  sheet is still reachable per-row when this is off. */
+	reviewMatchPrompt?: boolean;
+	/** Delimiter for exported report CSVs. ";" for a locale where Excel reads "," as a decimal point
+	 *  and so refuses to split a comma-delimited file into columns. Never affects the vault's own data
+	 *  files, which are always comma-delimited. */
+	reportCsvDelimiter?: "," | ";";
+	/** Rows per page in the ledger table. 0 means "all on one page". Persisted because it is a
+	 *  preference about how you read, not about the data. */
+	ledgerPageSize?: number;
+	/** Recurring report deliveries. Nothing fires while Obsidian is closed — a due report is sent on
+	 *  the next launch instead. See src/reports/schedule.ts. */
+	reportSchedules?: ReportSchedule[];
+	/** Credentials for the delivery channels. Stored in this vault's plugin data.json in plain text,
+	 *  exactly like the AI key, and the settings panel says so. */
+	delivery?: {
+		email?: EmailSettings;
+		telegram?: TelegramSettings;
+		test?: TestDeliverySettings;
+	};
 	/** AI-assisted categorization. Disabled unless explicitly turned on — see src/ai/provider.ts. */
 	ai?: AiSettings;
 	/** The currency every total is expressed in. Amounts in any other currency are converted through
@@ -88,6 +111,8 @@ export const DEFAULT_SETTINGS: FinanceSettings = {
 	numberFormat: "auto",
 	subscriptionView: "monthly",
 	reviewHideApproved: true,
+	reviewMatchPrompt: true,
+	reportCsvDelimiter: ",",
 	baseCurrency: DEFAULT_BASE_CURRENCY,
 	budgetAlerts: true,
 	budgetAlertThreshold: 0.9,

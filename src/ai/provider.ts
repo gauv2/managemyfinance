@@ -45,6 +45,29 @@ export interface ClassifyResult extends ValidationResult {
 }
 
 /**
+ * One question for the model: what it is, what to answer, and the shape the answer must take.
+ *
+ * Both AI passes — classifying merchants into categories, and deciding whether two merchant names are
+ * the same payee — are the same request with different words in it. Threading the prompt through as a
+ * value rather than baking it into the transport means the second pass reuses the API path, the CLI
+ * path, the error translation and the timeout, instead of growing a parallel copy of all four.
+ */
+export interface ModelRequest {
+	system: string;
+	user: string;
+	/** JSON Schema for the API's structured-output mode. The CLI has none; extractJson covers it. */
+	schema: Record<string, unknown>;
+}
+
+/** Sends one request down whichever transport is configured and returns the raw reply text. */
+export async function callModel(request: ModelRequest, settings: AiSettings): Promise<{ raw: string; model: string; provider: AiProviderId }> {
+	const provider = settings.provider ?? "api";
+	const model = settings.model ?? DEFAULT_AI_MODEL;
+	const raw = provider === "cli" ? await callClaudeCli(request, settings) : await callAnthropicApi(request, model, settings);
+	return { raw, model, provider };
+}
+
+/**
  * Sends one batch of merchant names for classification.
  *
  * Only the merchant strings and your category tree go over the wire — no amounts, dates, account
@@ -60,11 +83,10 @@ export async function classifyMerchants(
 		return { assignments: [], rejected: [], model: settings.model ?? DEFAULT_AI_MODEL, provider: settings.provider ?? "api" };
 	}
 
-	const provider = settings.provider ?? "api";
-	const model = settings.model ?? DEFAULT_AI_MODEL;
-	const userPrompt = buildUserPrompt(merchants, categories);
-
-	const raw = provider === "cli" ? await callClaudeCli(userPrompt, settings) : await callAnthropicApi(userPrompt, model, settings);
+	const { raw, model, provider } = await callModel(
+		{ system: SYSTEM_PROMPT, user: buildUserPrompt(merchants, categories), schema: responseSchema() },
+		settings
+	);
 
 	const validated = validateAssignments(extractJson(raw), merchants, categories);
 	return { ...validated, model, provider };
@@ -79,7 +101,7 @@ export async function classifyMerchants(
  * not desktop-only), and it keeps the SDK's bundle out of a plugin that currently ships ~280 KB
  * total. The existing exchange-rate fetch in fx.ts uses the same call for the same reasons.
  */
-async function callAnthropicApi(userPrompt: string, model: string, settings: AiSettings): Promise<string> {
+async function callAnthropicApi(request: ModelRequest, model: string, settings: AiSettings): Promise<string> {
 	const apiKey = (settings.apiKey ?? "").trim();
 	if (!apiKey) throw new Error("No Claude API key set — add one in Settings → AI.");
 
@@ -97,14 +119,14 @@ async function callAnthropicApi(userPrompt: string, model: string, settings: AiS
 		body: JSON.stringify({
 			model,
 			max_tokens: 8000,
-			system: SYSTEM_PROMPT,
-			// Classification from a short list of names is exactly the "short, scoped task" that low
-			// effort is for; it keeps latency and token spend down without hurting the answer.
+			system: request.system,
+			// Judging a short list of names is exactly the "short, scoped task" that low effort is for;
+			// it keeps latency and token spend down without hurting the answer.
 			output_config: {
 				effort: "low",
-				format: { type: "json_schema", schema: responseSchema() },
+				format: { type: "json_schema", schema: request.schema },
 			},
-			messages: [{ role: "user", content: userPrompt }],
+			messages: [{ role: "user", content: request.user }],
 		}),
 	});
 
@@ -160,7 +182,7 @@ function describeApiError(status: number, text: string): string {
  * do. There is also no structured-output mode here, which is why the reply goes through
  * extractJson() — the CLI happily wraps its answer in a code fence or a sentence of preamble.
  */
-async function callClaudeCli(userPrompt: string, settings: AiSettings): Promise<string> {
+async function callClaudeCli(request: ModelRequest, settings: AiSettings): Promise<string> {
 	if (!cliAvailable()) {
 		throw new Error("The Claude CLI needs the desktop app — switch to the API key provider on mobile.");
 	}
@@ -175,7 +197,7 @@ async function callClaudeCli(userPrompt: string, settings: AiSettings): Promise<
 	}
 
 	const binary = (settings.cliPath ?? "").trim() || "claude";
-	const prompt = `${SYSTEM_PROMPT}\n\n${userPrompt}`;
+	const prompt = `${request.system}\n\n${request.user}`;
 
 	return new Promise<string>((resolve, reject) => {
 		const child = spawn(binary, ["-p", "--output-format", "text"], {

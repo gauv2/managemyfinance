@@ -221,6 +221,10 @@ export class TransactionEditModal extends Modal {
 
 		if (this.opts.transaction) {
 			await store.editTransaction(this.opts.transaction.id, patch);
+			// Taught after the edit, never before: the merchant key is derived from the description, and
+			// this form can change the description and the category in the same save. Teaching first
+			// would file the decision under the old merchant and leave the new one unknown.
+			if (categoryId) await this.plugin.rememberMerchantsFor([this.opts.transaction.id], categoryId);
 			new Notice("Transaction updated");
 		} else {
 			// Hashed from the same fields an importer uses, so a manual row and a later import of the
@@ -243,6 +247,9 @@ export class TransactionEditModal extends Modal {
 				// Nothing to review: you just entered it, so it arrives already signed off.
 				review: "approved",
 			});
+			// A hand-entered row is a decision about that merchant too — the cash payments people type
+			// in by hand are exactly the recurring ones worth remembering.
+			if (categoryId) await this.plugin.rememberMerchantsFor([id], categoryId);
 			new Notice("Transaction added");
 		}
 

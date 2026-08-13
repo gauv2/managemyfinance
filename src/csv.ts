@@ -53,17 +53,24 @@ export function parseCSV(text: string): string[][] {
 	return rows.filter((r) => !(r.length === 1 && r[0] === ""));
 }
 
-export function toCSV(rows: (string | number | undefined)[][]): string {
+/**
+ * The delimiter defaults to "," — the format every data file this plugin writes for itself uses, and
+ * the one parseCSV round-trips. ";" exists for exports headed to a spreadsheet in a locale where the
+ * comma is the decimal separator: Excel there reads a comma-delimited file as a single column.
+ */
+export function toCSV(rows: (string | number | undefined)[][], delimiter: "," | ";" = ","): string {
+	// Built from the delimiter so a semicolon file quotes the fields that need it, and no others.
+	const needsQuoting = new RegExp(`["\\n${delimiter}]`);
 	return (
 		rows
 			.map((r) =>
 				r
 					.map((cell) => {
 						const s = String(cell ?? "");
-						if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+						if (needsQuoting.test(s)) return '"' + s.replace(/"/g, '""') + '"';
 						return s;
 					})
-					.join(",")
+					.join(delimiter)
 			)
 			.join("\n") + "\n"
 	);

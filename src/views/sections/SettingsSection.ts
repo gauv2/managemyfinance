@@ -212,6 +212,16 @@ export function renderSettingsSection(container: HTMLElement, plugin: FinancePlu
 			void save();
 		});
 
+		const matchControl = settingRow(
+			review,
+			"Offer to settle matching transactions",
+			"After you approve or flag a single row, ask whether every other transaction from the same merchant should follow. The sheet is still reachable from the button on each row when this is off."
+		);
+		toggle(matchControl, settings.reviewMatchPrompt !== false, (next) => {
+			settings.reviewMatchPrompt = next;
+			void save();
+		});
+
 		const reviewLinkControl = settingRow(
 			review,
 			"Go to the review queue",
@@ -224,6 +234,41 @@ export function renderSettingsSection(container: HTMLElement, plugin: FinancePlu
 		reviewBtn.createSpan({ text: "Open Review" });
 		reviewBtn.addEventListener("click", async () => {
 			settings.activeView = "review";
+			await plugin.saveSettings();
+			plugin.refreshViews();
+		});
+
+		// ---- Reports ---------------------------------------------------------
+		const reports = settingsCard(container, {
+			icon: "file-bar-chart",
+			title: "Reports",
+			desc: "How exported reports are written. Files land in your data folder's exports/ and reports/ subfolders.",
+			chip: { text: settings.reportCsvDelimiter === ";" ? "semicolon CSV" : "comma CSV", tone: "ok" },
+		});
+		const delimiterControl = settingRow(
+			reports,
+			"CSV column separator",
+			"Excel splits a CSV on whichever character your locale calls the list separator. In a locale where the comma is the decimal point (most of Europe), a comma-separated file opens as one squashed column — pick semicolon there. This never affects the plugin's own data files, which are always comma-separated."
+		);
+		segmented(
+			delimiterControl,
+			[
+				{ value: "," as const, label: "Comma" },
+				{ value: ";" as const, label: "Semicolon" },
+			],
+			settings.reportCsvDelimiter ?? ",",
+			(value) => {
+				settings.reportCsvDelimiter = value;
+				void save();
+			}
+		);
+
+		const reportsLinkControl = settingRow(reports, "Build a report", "Pick a period and some categories, then export it as PDF, CSV, Excel or a note.");
+		const reportsBtn = reportsLinkControl.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(reportsBtn, "file-bar-chart");
+		reportsBtn.createSpan({ text: "Open Reports" });
+		reportsBtn.addEventListener("click", async () => {
+			settings.activeView = "reports";
 			await plugin.saveSettings();
 			plugin.refreshViews();
 		});

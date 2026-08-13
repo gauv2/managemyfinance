@@ -1,12 +1,13 @@
 import { ACCOUNT_TYPE_META } from "../../constants";
-import { fiProjection, netWorth, primaryCategoryTotals, summarizeByYear, yearSummaryFor, YearSummary } from "../../kpi";
+import { fiProjection, netWorth, netWorthAsOf, summarizeByYear, summarizeTotal, yearSummaryFor, YearSummary } from "../../kpi";
 import type FinancePlugin from "../../main";
-import { CategoryDrilldownModal } from "../../modals/CategoryDrilldownModal";
 import { MonthDrilldownModal } from "../../modals/MonthDrilldownModal";
-import { barChart, lineChart, stackedShareBar } from "../../ui/charts";
+import { inRange, type DateRange } from "../../period";
+import { lineChart, stackedShareBar } from "../../ui/charts";
 import { icon, tabSwitcher } from "../../ui/dom";
 import { renderKpiCard, renderMeter } from "../../ui/kpiCard";
-import { deltaRow, formatEUR, formatPct, metricRow, yearHeaderRow, yoy } from "../../ui/metricsTable";
+import { deltaRow, formatEUR, formatPct, metricRow, partialYearsNote, yearHeaderRow, yearLabeller, yoy } from "../../ui/metricsTable";
+import { renderSpendingByCategoryCard } from "./dashboards/SpendingByCategoryCard";
 
 const CAT_COLORS = ["var(--fp-cat-1)", "var(--fp-cat-2)", "var(--fp-cat-3)", "var(--fp-cat-4)", "var(--fp-cat-5)"];
 
@@ -16,46 +17,18 @@ async function switchToAccount(plugin: FinancePlugin, accountId: string): Promis
 	plugin.refreshViews();
 }
 
-/** Where this year's spending actually went, combined across every account — the "All Accounts" analogue of each account's own "Spending by category" card. */
-function renderExpenseCategoriesOverview(container: HTMLElement, plugin: FinancePlugin, year: string | undefined): void {
-	const store = plugin.store;
-	const totals = primaryCategoryTotals(store, year);
-	if (totals.size === 0) return;
-
-	const card = container.createDiv({ cls: "fp-card" });
-	card.createEl("h3", { text: `Spending by category — ${year}` });
-	const categoryById = new Map(store.categories.map((c) => [c.id, c]));
-	const rows = Array.from(totals.entries())
-		.sort((a, b) => b[1] - a[1])
-		.map(([catId, amount]) => {
-			const cat = categoryById.get(catId);
-			return {
-				label: cat?.name ?? "Uncategorized",
-				value: amount,
-				color: cat?.color ?? "#6b7280",
-				iconName: cat?.icon ?? "help-circle",
-				// Every bar is a way into the transactions behind it, across all accounts.
-				onClick: () =>
-					new CategoryDrilldownModal(plugin.app, plugin, {
-						categoryId: catId,
-						period: year,
-						scopeLabel: "All accounts",
-					}).open(),
-			};
-		});
-	barChart(card, rows);
-}
-
 /**
- * Every account side by side — net worth, this year's net, savings rate, transaction count.
+ * Every account side by side — net worth, its net over the period, transaction count.
  * Clicking a row switches into that account's own page.
  */
-function renderAccountsOverview(container: HTMLElement, plugin: FinancePlugin): void {
+function renderAccountsOverview(container: HTMLElement, plugin: FinancePlugin, range: DateRange | undefined, periodLabel: string): void {
 	const store = plugin.store;
 	const card = container.createDiv({ cls: "fp-card" });
 	card.createEl("h3", { text: "Accounts overview" });
 
-	const positive = store.accounts.map((acc) => ({ acc, worth: netWorth(store, acc.id) })).filter((a) => a.worth > 0);
+	const worthOf = (accountId?: string): number => (range?.to ? netWorthAsOf(store, range.to, accountId) : netWorth(store, accountId));
+
+	const positive = store.accounts.map((acc) => ({ acc, worth: worthOf(acc.id) })).filter((a) => a.worth > 0);
 	if (positive.length > 0) {
 		stackedShareBar(
 			card,
@@ -67,14 +40,16 @@ function renderAccountsOverview(container: HTMLElement, plugin: FinancePlugin): 
 	const table = card.createEl("table", { cls: "fp-table" });
 	const thead = table.createEl("thead").createEl("tr");
 	thead.createEl("th", { text: "Account" });
-	["Net worth", "This year net", "Transactions"].forEach((h) => thead.createEl("th", { text: h, cls: "fp-table-num" }));
+	[range ? "Net worth (period end)" : "Net worth", range ? `Net · ${periodLabel}` : "This year net", "Transactions"].forEach((h) =>
+		thead.createEl("th", { text: h, cls: "fp-table-num" })
+	);
 	const tbody = table.createEl("tbody");
 
 	store.accounts.forEach((acc) => {
-		const accYears = summarizeByYear(store, acc.id);
-		const accCurrent = yearSummaryFor(accYears);
-		const accWorth = netWorth(store, acc.id);
-		const accCount = store.transactions.filter((t) => t.accountId === acc.id).length;
+		const accYears = summarizeByYear(store, acc.id, range);
+		const accCurrent = range ? summarizeTotal(accYears) : yearSummaryFor(accYears);
+		const accWorth = worthOf(acc.id);
+		const accCount = store.transactions.filter((t) => t.accountId === acc.id && inRange(t.date, range)).length;
 
 		const tr = tbody.createEl("tr", { cls: "fp-table-row-clickable" });
 		tr.addEventListener("click", () => void switchToAccount(plugin, acc.id));
@@ -89,10 +64,11 @@ function renderAccountsOverview(container: HTMLElement, plugin: FinancePlugin): 
 	});
 }
 
-function renderHistoryTable(panel: HTMLElement, plugin: FinancePlugin, years: YearSummary[], fiMultiplier: number): void {
+function renderHistoryTable(panel: HTMLElement, plugin: FinancePlugin, years: YearSummary[], fiMultiplier: number, periodLabel: string): void {
 	const table = panel.createEl("table", { cls: "fp-table fp-table-metrics" });
 	yearHeaderRow(table, years.map((y) => y.year), {
 		onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year).open(),
+		labelFor: yearLabeller(years),
 	});
 	const tbody = table.createEl("tbody");
 
@@ -124,14 +100,29 @@ function renderHistoryTable(panel: HTMLElement, plugin: FinancePlugin, years: Ye
 		{ heat: "normal" }
 	);
 	metricRow(tbody, "Passive income", years.map((y) => y.passiveIncome), formatEUR, { heat: "normal" });
+
+	partialYearsNote(panel, years, periodLabel);
 }
 
 /**
  * Every metric from the table as lines, split across two charts since they don't share a scale:
  * EUR amounts (income/expenses/net worth/...) on one, rate-based indicators (%) on the other.
  */
-function renderHistoryChart(panel: HTMLElement, years: YearSummary[], fiMultiplier: number): void {
-	const categories = years.map((y) => y.year);
+function renderHistoryChart(panel: HTMLElement, years: YearSummary[], fiMultiplier: number, periodLabel: string): void {
+	// A line drawn through one point says nothing, and a chart that looks like a trend when it isn't
+	// one is worse than no chart. The table beside this tab still shows the period's own figures.
+	if (years.length < 2) {
+		panel.createEl("p", {
+			cls: "fp-step-desc",
+			text:
+				years.length === 0
+					? `Nothing happened in ${periodLabel}, so there is nothing to plot.`
+					: `${periodLabel} covers a single year (${years[0].year}) — these charts compare years against each other, so widen the period to see a trend.`,
+		});
+		return;
+	}
+
+	const categories = years.map((y) => (y.partial ? `${y.year}*` : y.year));
 
 	panel.createEl("h4", { text: "Amounts" });
 	lineChart(panel, categories, [
@@ -161,25 +152,53 @@ function renderHistoryChart(panel: HTMLElement, years: YearSummary[], fiMultipli
 		],
 		{ formatValue: (n) => `${n.toFixed(1)}%`, money: false }
 	);
+
+	partialYearsNote(panel, years, periodLabel);
 }
 
-/** The "All Accounts" master view: hero KPIs, an FI-progress meter, and a per-account breakdown. */
-export function renderAllAccountsDashboard(container: HTMLElement, plugin: FinancePlugin): void {
+/**
+ * The "All Accounts" master view: hero KPIs, an FI-progress meter, and a per-account breakdown.
+ *
+ * Everything here reads the page's period filter, `range` — including the year-by-year history and
+ * its charts. The one thing that deliberately doesn't is the FI number, which is an annual figure by
+ * definition: see the meter below.
+ */
+export function renderAllAccountsDashboard(
+	container: HTMLElement,
+	plugin: FinancePlugin,
+	range?: DateRange,
+	periodLabel = "All time"
+): void {
 	const store = plugin.store;
 
-	const years = summarizeByYear(store);
-	const currentYear = yearSummaryFor(years);
-	const previousYear = yearSummaryFor(years, String(new Date().getFullYear() - 1));
-	const worth = netWorth(store);
+	const years = summarizeByYear(store, undefined, range);
+	/** The unfiltered run of years, for the two figures that can only be read against whole ones. */
+	const allYears = range ? summarizeByYear(store) : years;
+	const current = range ? summarizeTotal(years) : yearSummaryFor(years);
+	const worth = range?.to ? netWorthAsOf(store, range.to) : netWorth(store);
 
-	const fiNumber = currentYear ? currentYear.expenses * plugin.settings.fiMultiplier : 0;
+	// A period that lands on exactly one whole calendar year still has a "versus the year before" that
+	// means something. Five days in March does not, so the deltas simply drop out rather than compare
+	// against a stretch of time of a different size.
+	const wholeYear = range && range.from.endsWith("-01-01") && range.to.endsWith("-12-31") && range.from.slice(0, 4) === range.to.slice(0, 4);
+	const comparedTo = wholeYear ? String(Number(range.from.slice(0, 4)) - 1) : range ? undefined : String(new Date().getFullYear() - 1);
+	const previous = comparedTo ? yearSummaryFor(allYears, comparedTo) : undefined;
+
+	// The FI number is 25× (or whatever multiple) a *year* of expenses. A week of spending × 25 is a
+	// number too, just not one worth showing, so the meter always reads a whole calendar year — the
+	// last one the period touches — and says which.
+	const fiYear = yearSummaryFor(allYears, (range?.to || "").slice(0, 4) || String(new Date().getFullYear()));
+	const fiNumber = fiYear ? fiYear.expenses * plugin.settings.fiMultiplier : 0;
 	const fiRatio = fiNumber > 0 ? worth / fiNumber : 0;
-	const monthlyNet = currentYear ? currentYear.net / 12 : 0;
+	const monthlyNet = fiYear ? fiYear.net / 12 : 0;
 	const yearsToFi = fiNumber > 0 ? fiProjection(worth, monthlyNet, plugin.settings.expectedReturn, fiNumber) : undefined;
 
-	const netWorthDelta = currentYear && previousYear ? yoy(currentYear.netWorthEOY, previousYear.netWorthEOY) : undefined;
-	const incomeDelta = currentYear && previousYear ? yoy(currentYear.income, previousYear.income) : undefined;
-	const expensesDelta = currentYear && previousYear ? yoy(currentYear.expenses, previousYear.expenses) : undefined;
+	const netWorthDelta = current && previous ? yoy(current.netWorthEOY, previous.netWorthEOY) : undefined;
+	const incomeDelta = current && previous ? yoy(current.income, previous.income) : undefined;
+	const expensesDelta = current && previous ? yoy(current.expenses, previous.expenses) : undefined;
+
+	const inPeriod = range ? ` · ${periodLabel}` : " this year";
+	const savingsRateLabel = range ? `Savings rate in ${periodLabel}` : "Savings rate this year";
 
 	const kpis = container.createDiv({ cls: "fp-kpi-grid" });
 	renderKpiCard(kpis, {
@@ -189,26 +208,26 @@ export function renderAllAccountsDashboard(container: HTMLElement, plugin: Finan
 		delta: netWorthDelta === undefined ? undefined : { value: netWorthDelta },
 		sparklineValues: years.map((y) => y.netWorthEOY),
 		sparklineColor: "var(--fp-neutral)",
-		sub: currentYear ? `Savings rate this year: ${formatPct(currentYear.savingsRate)}` : undefined,
+		sub: current ? `${savingsRateLabel}: ${formatPct(current.savingsRate)}` : undefined,
 	});
 	renderKpiCard(kpis, {
-		label: "Income this year",
-		value: currentYear ? formatEUR(currentYear.income) : "—",
+		label: `Income${inPeriod}`,
+		value: current ? formatEUR(current.income) : "—",
 		hero: true,
 		delta: incomeDelta === undefined ? undefined : { value: incomeDelta },
 		sparklineValues: years.map((y) => y.income),
 		sparklineColor: "var(--fp-chart-income)",
 	});
 	renderKpiCard(kpis, {
-		label: "Expenses this year",
-		value: currentYear ? formatEUR(currentYear.expenses) : "—",
+		label: `Expenses${inPeriod}`,
+		value: current ? formatEUR(current.expenses) : "—",
 		hero: true,
 		delta: expensesDelta === undefined ? undefined : { value: expensesDelta, goodIfUp: false },
 		sparklineValues: years.map((y) => y.expenses),
 		sparklineColor: "var(--fp-chart-expenses)",
 	});
 
-	renderExpenseCategoriesOverview(container, plugin, currentYear?.year);
+	renderSpendingByCategoryCard(container, plugin, { scopeLabel: "All accounts", range, periodLabel });
 
 	const fiTail =
 		yearsToFi === undefined ? "" : ` · ${yearsToFi.toFixed(1)} years at current pace (${(plugin.settings.expectedReturn * 100).toFixed(0)}% return)`;
@@ -224,19 +243,27 @@ export function renderAllAccountsDashboard(container: HTMLElement, plugin: Finan
 						el.createSpan({ text: " of " });
 						el.createSpan({ cls: "fp-money", text: formatEUR(fiNumber) });
 						el.createSpan({ text: ` FI number${fiTail}` });
+						if (range && fiYear) el.createSpan({ cls: "fp-table-note", text: ` — based on ${fiYear.year}'s full year of expenses` });
 				  }
 				: undefined,
 	});
 
-	renderAccountsOverview(container, plugin);
+	renderAccountsOverview(container, plugin, range, periodLabel);
 
-	if (years.length === 0) return;
+	// Nothing anywhere in the ledger: the empty states elsewhere on the page say so already.
+	if (years.length === 0 && !range) return;
 
 	const fiMultiplier = plugin.settings.fiMultiplier;
 	const historyCard = container.createDiv({ cls: "fp-card" });
 	historyCard.createEl("h3", { text: "Historical performance" });
+	// Kept on screen when the period turns up nothing, so a narrow filter doesn't look like the
+	// section quietly disappeared.
+	if (years.length === 0) {
+		historyCard.createEl("p", { cls: "fp-step-desc", text: `Nothing happened in ${periodLabel} — widen the period to see the years around it.` });
+		return;
+	}
 	tabSwitcher(historyCard, [
-		{ label: "Table", render: (panel) => renderHistoryTable(panel, plugin, years, fiMultiplier) },
-		{ label: "Chart", render: (panel) => renderHistoryChart(panel, years, fiMultiplier) },
+		{ label: "Table", render: (panel) => renderHistoryTable(panel, plugin, years, fiMultiplier, periodLabel) },
+		{ label: "Chart", render: (panel) => renderHistoryChart(panel, years, fiMultiplier, periodLabel) },
 	]);
 }

@@ -84,13 +84,20 @@ export class TransactionDetailModal extends Modal {
 			onChange: async ({ primaryId, secondaryId }) => {
 				if (!primaryId) return;
 				const categoryId = secondaryId ?? primaryId;
-				this.tx.categoryId = categoryId;
-				await store.updateTransaction(this.tx.id, { categoryId });
+				// assignCategory, not updateTransaction: setting a category here is the same act as
+				// setting one in the review queue, so it has to teach merchant memory the same way.
+				// Writing only the row meant this correction was invisible to the next import unless
+				// the merchant happened to have a clear majority for it to be inferred from.
+				const alsoTagged = await this.plugin.assignCategory(this.tx, categoryId);
 				const newChain = categoryChain(store.categories, categoryId);
 				chipHolder.empty();
 				categoryChainChip(chipHolder, newChain.primary, newChain.secondary);
 				this.plugin.refreshViews();
-				new Notice("Category updated");
+				new Notice(
+					alsoTagged > 0
+						? `Category updated — also applied to ${alsoTagged} other transaction${alsoTagged === 1 ? "" : "s"} from this merchant.`
+						: "Category updated. Future imports from this merchant will follow it."
+				);
 			},
 		});
 
