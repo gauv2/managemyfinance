@@ -1,9 +1,23 @@
 import { App, Modal, Notice } from "obsidian";
-import { ACCOUNT_TYPE_META, CURRENCIES } from "../constants";
+import { ACCOUNT_TYPE_META, ACCOUNT_TYPE_ORDER, CURRENCIES } from "../constants";
 import type FinancePlugin from "../main";
-import { formatMoney } from "../money";
+import { formatMoney, parseMoney } from "../money";
 import type { Account, AccountType } from "../types";
 import { icon, moneyInput, type MoneyInputHandle } from "../ui/dom";
+
+/** A 1–31 day of the month, or undefined when the field is blank or nonsense. */
+function dayOfMonth(raw: string): number | undefined {
+	const n = parseInt(raw.trim(), 10);
+	return isNaN(n) || n < 1 || n > 31 ? undefined : n;
+}
+
+/** A rate entered as a fraction (0.1999 = 19.99%). Values above 1 are read as percentages typed by
+ *  someone who thought in percent — "19.99" clearly isn't a 1999% APR. */
+function fraction(raw: string): number | undefined {
+	const n = parseMoney(raw);
+	if (n === undefined || n < 0) return undefined;
+	return n > 1 ? n / 100 : n;
+}
 
 /**
  * Edits an account after the fact — including its type, which was previously fixed at creation and
@@ -37,6 +51,11 @@ export class EditAccountModal extends Modal {
 		this.currency = account.currency || "EUR";
 		this.iban = account.iban ?? "";
 		this.openingBalance = account.openingBalance ?? 0;
+		this.creditLimit = account.creditLimit;
+		this.statementDay = account.statementDay !== undefined ? String(account.statementDay) : "";
+		this.paymentDueDay = account.paymentDueDay !== undefined ? String(account.paymentDueDay) : "";
+		this.apr = account.apr !== undefined ? String(account.apr) : "";
+		this.minPaymentPct = account.minPaymentPct !== undefined ? String(account.minPaymentPct) : "";
 	}
 
 	/** Everything already imported for this account — the fixed part of the balance equation. */
@@ -70,9 +89,7 @@ export class EditAccountModal extends Modal {
 		const typeRow = form.createDiv({ cls: "fp-form-row" });
 		typeRow.createEl("label", { text: "Type" });
 		const typeSelect = typeRow.createEl("select");
-		(Object.keys(ACCOUNT_TYPE_META) as AccountType[]).forEach((t) =>
-			typeSelect.createEl("option", { text: ACCOUNT_TYPE_META[t].label, value: t })
-		);
+		ACCOUNT_TYPE_ORDER.forEach((t) => typeSelect.createEl("option", { text: ACCOUNT_TYPE_META[t].label, value: t }));
 		typeSelect.value = this.type;
 		const typeHint = typeRow.createDiv({ cls: "fp-form-hint" });
 		const describeType = (): void =>
@@ -152,6 +169,29 @@ export class EditAccountModal extends Modal {
 		this.summaryEl = form.createDiv({ cls: "fp-form-balance-summary" });
 		this.renderBalanceSummary();
 
+		// Credit terms live on the account because they're facts about the card, not about any
+		// transaction — and the credit dashboard can't say anything useful about utilization, a
+		// statement or a minimum payment without them.
+		this.termsEl = form.createDiv();
+		this.renderCreditTerms();
+		typeSelect.addEventListener("change", () => this.renderCreditTerms());
+
+		const snapshotRow = form.createDiv({ cls: "fp-form-row" });
+		snapshotRow.createEl("label", { text: "Recorded balances" });
+		const snapshotControl = snapshotRow.createDiv({ cls: "fp-field-control" });
+		const snapshotCount = this.plugin.store.snapshots.filter((sn) => sn.accountId === this.account.id).length;
+		const snapshotBtn = snapshotControl.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(snapshotBtn, "scale");
+		snapshotBtn.createSpan({ text: snapshotCount > 0 ? `${snapshotCount} recorded — manage` : "Record a balance" });
+		snapshotBtn.addEventListener("click", () => {
+			this.close();
+			this.plugin.openBalanceSnapshot(this.account.id);
+		});
+		snapshotControl.createDiv({
+			cls: "fp-field-hint",
+			text: "For an account whose value can't be worked out from transactions. A recorded balance supersedes the opening balance above from its date onwards.",
+		});
+
 		const footer = c.createDiv({ cls: "fp-wizard-footer" });
 		const left = footer.createDiv({ cls: "fp-wizard-footer-left" });
 		const cancel = left.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Cancel" });
@@ -167,6 +207,45 @@ export class EditAccountModal extends Modal {
 	}
 
 	private summaryEl!: HTMLElement;
+	private termsEl!: HTMLElement;
+	private creditLimit: number | undefined;
+	private statementDay = "";
+	private paymentDueDay = "";
+	private apr = "";
+	private minPaymentPct = "";
+
+	/** Credit-card terms — rendered only for a credit account, and re-rendered if the type changes. */
+	private renderCreditTerms(): void {
+		if (!this.termsEl) return;
+		this.termsEl.empty();
+		if (this.type !== "credit") return;
+
+		this.termsEl.createDiv({ cls: "fp-form-section-label", text: "Card terms" });
+
+		const limitRow = this.termsEl.createDiv({ cls: "fp-form-row" });
+		limitRow.createEl("label", { text: "Credit limit" });
+		moneyInput(limitRow, {
+			value: this.creditLimit,
+			currency: this.currency,
+			allowNegative: false,
+			onChange: (v) => (this.creditLimit = v),
+		});
+
+		const numberField = (label: string, value: string, hint: string, onChange: (v: string) => void): void => {
+			const row = this.termsEl.createDiv({ cls: "fp-form-row" });
+			row.createEl("label", { text: label });
+			const control = row.createDiv({ cls: "fp-field-control" });
+			const input = control.createEl("input", { type: "text", attr: { inputmode: "decimal", autocomplete: "off" } });
+			input.value = value;
+			input.addEventListener("input", () => onChange(input.value));
+			control.createDiv({ cls: "fp-field-hint", text: hint });
+		};
+
+		numberField("Statement day", this.statementDay, "Day of the month the statement closes, 1–31.", (v) => (this.statementDay = v));
+		numberField("Payment due day", this.paymentDueDay, "Day of the month payment is due, 1–31.", (v) => (this.paymentDueDay = v));
+		numberField("APR", this.apr, "As a fraction — 0.1999 means 19.99%. Used to show what carrying a balance costs.", (v) => (this.apr = v));
+		numberField("Minimum payment", this.minPaymentPct, "Fraction of the statement balance — 0.02 means 2%.", (v) => (this.minPaymentPct = v));
+	}
 
 	/** Spells the balance equation out in full, so a back-computed opening balance is never a mystery. */
 	private renderBalanceSummary(): void {
@@ -214,6 +293,22 @@ export class EditAccountModal extends Modal {
 		account.currency = this.currency;
 		account.iban = this.iban.trim() || undefined;
 		account.openingBalance = this.openingBalance ?? 0;
+
+		// Card terms are only meaningful on a credit account; switching an account away from credit
+		// clears them rather than leaving a stale limit attached to a savings account.
+		if (this.type === "credit") {
+			account.creditLimit = this.creditLimit;
+			account.statementDay = dayOfMonth(this.statementDay);
+			account.paymentDueDay = dayOfMonth(this.paymentDueDay);
+			account.apr = fraction(this.apr);
+			account.minPaymentPct = fraction(this.minPaymentPct);
+		} else {
+			delete account.creditLimit;
+			delete account.statementDay;
+			delete account.paymentDueDay;
+			delete account.apr;
+			delete account.minPaymentPct;
+		}
 
 		await this.plugin.store.saveAccounts();
 		new Notice(

@@ -39,46 +39,46 @@
 .fp-btn:active {
 	transform: translateY(0);
 }
-.fp-btn-primary {
+.fp-btn.fp-btn-primary {
 	background: var(--interactive-accent);
 	color: var(--text-on-accent);
 	box-shadow: 0 2px 8px color-mix(in srgb, var(--interactive-accent) 35%, transparent);
 }
-.fp-btn-primary:hover {
+.fp-btn.fp-btn-primary:hover {
 	background: var(--interactive-accent-hover);
 }
-.fp-btn-secondary {
+.fp-btn.fp-btn-secondary {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 	border-color: var(--background-modifier-border);
 }
-.fp-btn-ghost {
+.fp-btn.fp-btn-ghost {
 	background: transparent;
 	color: var(--text-muted);
 }
-.fp-btn-ghost:hover {
+.fp-btn.fp-btn-ghost:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
-.fp-btn-danger {
+.fp-btn.fp-btn-danger {
 	background: var(--fp-bad);
 	color: var(--text-on-accent);
 	box-shadow: 0 2px 8px color-mix(in srgb, var(--fp-bad) 35%, transparent);
 }
-.fp-btn-danger:hover {
+.fp-btn.fp-btn-danger:hover {
 	background: color-mix(in srgb, var(--fp-bad) 85%, black);
 }
-.fp-btn-chip {
+.fp-btn.fp-btn-chip {
 	background: var(--background-secondary);
 	color: var(--text-normal);
 	border-color: var(--background-modifier-border);
 	border-radius: 999px;
 	padding: 5px 12px;
 }
-.fp-btn-chip:hover {
+.fp-btn.fp-btn-chip:hover {
 	background: var(--background-modifier-hover);
 }
-.fp-btn-icon {
+.fp-btn.fp-btn-icon {
 	padding: 4px 6px;
 }
 
@@ -1096,8 +1096,15 @@
 	border-top: 1px solid var(--background-modifier-border);
 	margin: 32px 0 20px;
 }
+.fp-account-page-ledger-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 14px;
+}
 .fp-account-page-ledger-title {
-	margin: 0 0 14px;
+	margin: 0;
 }
 
 /* ---------- Stat tiles ---------- */
@@ -1352,6 +1359,47 @@
 }
 .fp-filter-date-sep {
 	color: var(--text-muted);
+}
+.fp-filter-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+/* The one period control — see src/ui/periodFilter.ts. Used by the ledger, the account and
+   all-accounts pages, and the reports builder. */
+.fp-period-filter,
+.fp-period-filter-custom {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+/* Month waits on a year, week waits on a month — greyed rather than hidden, so the drill-down's
+   shape stays visible before you've started down it. */
+.fp-period-filter .fp-filter-select:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.fp-period-filter-custom.is-hidden {
+	display: none;
+}
+/* The page-level bar the account and all-accounts pages put it in: one period for the dashboard
+   cards and the ledger under them, above everything it drives. */
+.fp-page-filter {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 16px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.fp-table-note {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-top: 6px;
+}
+.fp-card-head-note {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
 }
 .fp-ledger-table-wrap {
 	overflow-x: auto;
@@ -2329,9 +2377,6 @@
 	gap: 10px;
 	margin-bottom: 10px;
 }
-.fp-ledger-rules-btn {
-	flex-shrink: 0;
-}
 .fp-ledger-bulk-bar {
 	display: none;
 	align-items: center;
@@ -2395,7 +2440,10 @@
 	border-bottom: 1px solid var(--background-modifier-border);
 }
 .fp-rule-pattern-input {
-	flex: 1 1 160px;
+	/* .fp-rule-pattern-wrap is a COLUMN, so a flex-basis here sizes the field's height, not its width —
+	   `1 1 160px` was written for a row and turned the search box into a 160px-tall slab. Natural
+	   height; the field already spans the wrap's width by stretching. */
+	flex: 0 0 auto;
 	min-width: 140px;
 	padding: 7px 10px;
 	border-radius: var(--fp-radius-sm);
@@ -3902,14 +3950,20 @@
 }
 
 /* Unreviewed-count pill on the Review nav tab. */
+/* A solid pill rather than amber-on-12%-amber. The tinted version washed out against the nav's own
+   background and got worse on the active row, which is a grey block — so the one number in the
+   sidebar that exists to be noticed was the hardest thing in it to read.
+
+   The ink is a fixed dark rather than a theme variable on purpose: the background is a fixed amber,
+   and --text-normal would resolve to near-white in a dark theme and vanish against it. */
 .fp-nav-count {
 	margin-left: auto;
 	padding: 1px 7px;
 	border-radius: 999px;
 	font-size: var(--font-ui-smaller);
 	font-weight: 700;
-	background: var(--fp-warn-bg);
-	color: var(--fp-warn);
+	background: var(--fp-warn);
+	color: #1a1d23;
 	font-variant-numeric: tabular-nums;
 }
 
@@ -4008,7 +4062,7 @@
 	width: 88px;
 }
 .fp-review-table .col-actions {
-	width: 108px;
+	width: 140px;
 	text-align: right;
 	white-space: nowrap;
 }
@@ -4070,7 +4124,7 @@
 	font-size: var(--font-ui-smaller);
 }
 
-.fp-review-actions .fp-btn-icon {
+.fp-review-actions .fp-btn.fp-btn-icon {
 	padding: 3px;
 }
 .fp-review-more {
@@ -4094,7 +4148,7 @@
 	}
 }
 
-.fp-btn-icon.is-active {
+.fp-btn.fp-btn-icon.is-active {
 	background: var(--fp-neutral-bg);
 	color: var(--fp-neutral);
 }
@@ -4360,7 +4414,7 @@
 	color: var(--text-faint);
 	font-variant-numeric: tabular-nums;
 }
-.fp-btn-tiny {
+.fp-btn.fp-btn-tiny {
 	padding: 2px 8px;
 	font-size: var(--font-ui-smaller);
 }
@@ -4408,4 +4462,1352 @@
 	font-size: var(--font-ui-smaller);
 	color: var(--text-faint);
 	font-variant-numeric: tabular-nums;
+}
+
+/* ===========================================================================
+   Phase 2 — manual entry, transfers, balances, subscriptions ↔ ledger,
+   in-note blocks, and the sidebar's tip deck.
+   =========================================================================== */
+
+/* --- Sidebar: tip deck ---------------------------------------------------- */
+
+/* The dismiss × sits at the end of the tip's own header row, so it reads as belonging to this tip
+   rather than to the sidebar. Quiet until hovered — it retires a tip permanently. */
+.fp-nav-tip .fp-nav-tip-dismiss {
+	margin-left: auto;
+	background: none;
+	border: none;
+	padding: 2px;
+	cursor: pointer;
+	color: var(--text-faint);
+	opacity: 0.6;
+	display: flex;
+	align-items: center;
+	border-radius: var(--fp-radius-sm, 4px);
+}
+.fp-nav-tip .fp-nav-tip-dismiss:hover {
+	opacity: 1;
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.fp-nav-tip-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.fp-nav-tip-pager {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+}
+.fp-nav-tip-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+	min-width: 32px;
+	text-align: center;
+}
+
+/* --- Sidebar: the eye button --------------------------------------------- */
+
+.fp-nav-brand-actions {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+}
+
+/* Small and unobtrusive, but always in the same place: you reach for this when someone walks up to
+   your desk, which is not a moment for hunting through a settings page. */
+.fp-nav-privacy {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: var(--fp-radius-sm, 4px);
+	color: var(--text-faint);
+	cursor: pointer;
+}
+.fp-nav-privacy:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.fp-nav-privacy.is-on {
+	color: var(--fp-warn, var(--text-accent));
+	background: var(--background-modifier-hover);
+}
+
+/* --- Rules: search-as-you-type against your own ledger -------------------- */
+
+.fp-rule-pattern-wrap {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	/* Always its own full row in the wrapping .fp-rule-add-row. Sized to content it claimed more width
+	   whenever the matching counterparties were wide, which bumped the Regex/Category/Add controls onto
+	   a second line and moved the modal by ~44px mid-typing. */
+	flex: 1 1 100%;
+}
+
+.fp-rule-match-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	/* Holds one line even while empty. The count is only written once there is a query, so without
+	   this the line has zero height on an empty box and everything below it shifts by ~16px the
+	   moment you type the first character. */
+	min-height: 1lh;
+}
+.fp-rule-match-count.is-empty {
+	color: var(--fp-bad, var(--text-error));
+}
+
+.fp-rule-suggestions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	align-content: flex-start;
+	gap: 5px;
+	/* A fixed height, deliberately not min-height. The chip list re-wraps to one, two or three rows
+	   depending on how wide the matching counterparties happen to be, and collapses to nothing when a
+	   query matches none — which resized the whole modal by ~160px on almost every keystroke. Reserve
+	   the room once and let the overflow scroll, so typing never moves anything below it. */
+	height: 86px;
+	overflow-y: auto;
+}
+.fp-rule-suggestions-label {
+	width: 100%;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+/* Each suggestion is a real counterparty out of the ledger, with how many rows it covers. */
+.fp-rule-suggestion {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	padding: 3px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	cursor: pointer;
+}
+.fp-rule-suggestion:hover {
+	border-color: var(--interactive-accent);
+}
+.fp-rule-suggestion.is-active {
+	border-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+.fp-rule-suggestion-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 220px;
+}
+.fp-rule-suggestion-count {
+	font-variant-numeric: tabular-nums;
+	color: var(--text-faint);
+}
+
+/* --- Linking rows: subscriptions, transfers ------------------------------ */
+
+.fp-linked-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-md, 8px);
+	background: var(--background-secondary);
+	margin-bottom: 12px;
+}
+.fp-linked-icon {
+	color: var(--fp-neutral);
+	flex-shrink: 0;
+}
+.fp-linked-row button {
+	margin-left: auto;
+}
+
+.fp-link-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 320px;
+	overflow-y: auto;
+	margin: 10px 0;
+}
+.fp-link-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px;
+	border-radius: var(--fp-radius-md, 8px);
+	border: 1px solid var(--background-modifier-border);
+}
+.fp-link-row:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-link-row-info {
+	min-width: 0;
+	flex: 1;
+}
+.fp-link-row-name {
+	font-weight: 600;
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-link-row-meta {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* A pair the transfer matcher proposed but you unticked — still listed, visibly not counted. */
+.fp-row-muted {
+	opacity: 0.45;
+}
+.fp-transfer-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	max-width: 260px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* --- Subscriptions: what they've actually cost --------------------------- */
+
+.fp-sub-card-paid {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 6px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* --- Budgets: tabs, rollover, one-off pots ------------------------------- */
+
+.fp-tab-icon {
+	margin-right: 6px;
+	color: currentColor;
+}
+
+.fp-budget-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+}
+
+.fp-budget-cat-meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 2px;
+}
+.fp-budget-cat-meta .fp-btn.is-active {
+	color: var(--interactive-accent);
+}
+
+.fp-category-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 8px 0 14px;
+}
+
+/* The income/expense switch on a category row — direction changes what its budget *means*. */
+.fp-cat-kind {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: none;
+	border: none;
+	padding: 4px;
+	cursor: pointer;
+	color: var(--text-faint);
+	border-radius: var(--fp-radius-sm, 4px);
+}
+.fp-cat-kind:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.fp-cat-kind.is-income {
+	color: var(--fp-good, var(--text-success));
+}
+
+/* --- Clickable chart rows ------------------------------------------------ */
+
+/* A bar that leads somewhere says so — "how much" always raises "on what?". */
+.fp-barchart-row.is-clickable {
+	cursor: pointer;
+	border-radius: var(--fp-radius-sm, 4px);
+}
+.fp-barchart-row.is-clickable:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-barchart-row.is-clickable:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+/* --- Confirm dialogs ----------------------------------------------------- */
+
+.fp-confirm-modal {
+	max-width: 460px;
+}
+
+/* --- ```finance code blocks in notes ------------------------------------- */
+
+/* Rendered inside somebody's own note, so it stays visually quieter than the workspace: a bordered
+   card that belongs to the note rather than a slab of app UI dropped into the middle of it. */
+.fp-block {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-lg, 12px);
+	background: var(--background-primary);
+	overflow: hidden;
+	margin: 12px 0;
+}
+.fp-block-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.fp-block-icon {
+	color: var(--fp-neutral);
+}
+.fp-block-title {
+	font-weight: 700;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+.fp-block-sub {
+	margin-left: auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+.fp-block-body {
+	padding: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-block-empty {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.fp-block-error {
+	color: var(--fp-bad, var(--text-error));
+	font-size: var(--font-ui-smaller);
+}
+.fp-block-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 10px;
+}
+.fp-block-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.fp-block-list-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	font-size: var(--font-ui-smaller);
+}
+.fp-block-list-name {
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-block-list-meta {
+	color: var(--text-faint);
+	white-space: nowrap;
+}
+
+/* ============================================================================
+   Review — editing an amount in place
+   ========================================================================== */
+/* The amount column is a fixed 104px under table-layout:fixed, so an editor can't widen the cell.
+   It's anchored as a popover over the neighbouring columns instead: no layout shift, no reflow of
+   the rows below, and the row you were reading stays exactly where it was. */
+.fp-review-table .col-amount {
+	position: relative;
+}
+.fp-review-amount-value {
+	display: inline-block;
+}
+.fp-review-amount-edit {
+	opacity: 0;
+	margin-left: 4px;
+	vertical-align: middle;
+	transition: opacity 90ms ease-in-out;
+}
+/* Revealed on hover, but never hidden from the keyboard: opacity:0 still takes focus and still
+   announces, so tabbing through a row reaches it even though the mouse hasn't been near. */
+.fp-review-row:hover .fp-review-amount-edit,
+.fp-review-amount-edit:focus-visible {
+	opacity: 1;
+}
+.fp-review-table .col-amount.is-editing {
+	overflow: visible;
+}
+.fp-review-amount-editor {
+	position: absolute;
+	top: 50%;
+	right: 4px;
+	transform: translateY(-50%);
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 8px;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--fp-neutral);
+	background: var(--background-primary);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+.fp-segmented-tiny .fp-segmented-btn {
+	padding: 3px 8px;
+	font-size: var(--font-ui-smaller);
+	min-width: 24px;
+}
+.fp-review-amount-input {
+	position: relative;
+	width: 116px;
+	flex: none;
+}
+.fp-review-amount-input .fp-money-input-field {
+	width: 100%;
+	text-align: right;
+}
+/* The "= € 12,50" echo is reassurance while typing, not a second row of layout to accommodate. */
+.fp-review-amount-input .fp-money-input-echo {
+	position: absolute;
+	top: 100%;
+	right: 0;
+	margin-top: 2px;
+	white-space: nowrap;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-review-amount-actions {
+	display: flex;
+	gap: 4px;
+}
+
+/* ============================================================================
+   Bulk match sheet — "settle the rest of these too?"
+   ========================================================================== */
+.fp-match-modal .fp-match-subject {
+	display: flex;
+	gap: 9px;
+	align-items: flex-start;
+	padding: 10px 12px;
+	margin: 12px 0;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.fp-match-subject-icon {
+	color: var(--text-faint);
+	flex-shrink: 0;
+}
+.fp-match-subject-desc {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-match-subject-meta,
+.fp-match-row-meta {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 3px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-match-section {
+	margin-top: 14px;
+}
+.fp-match-section-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 6px 2px;
+}
+.fp-match-section-head.is-toggle {
+	cursor: pointer;
+	border-radius: var(--fp-radius-md);
+}
+.fp-match-section-head.is-toggle:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-match-section-icon {
+	color: var(--text-muted);
+}
+.fp-match-section-title {
+	font-weight: 600;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+.fp-match-section-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-match-list {
+	max-height: 260px;
+	overflow-y: auto;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+}
+.fp-match-list.is-hidden {
+	display: none;
+}
+.fp-match-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 7px 10px;
+}
+.fp-match-row + .fp-match-row {
+	border-top: 1px solid var(--background-modifier-border);
+}
+.fp-match-row.is-selected {
+	background: var(--fp-neutral-bg);
+}
+.fp-match-row-main {
+	flex: 1;
+	min-width: 0;
+}
+.fp-match-row-desc {
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-match-row-amount {
+	white-space: nowrap;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+.fp-match-row-amount.is-negative {
+	color: var(--fp-bad);
+}
+.fp-match-row-amount.is-positive {
+	color: var(--fp-good);
+}
+/* The confidence a fuzzy match carries, stated rather than implied — the exact tier never shows one,
+   which is itself the signal that it isn't a guess. */
+.fp-match-score {
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.fp-match-category-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-top: 16px;
+}
+.fp-match-category-label {
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	color: var(--text-muted);
+}
+.fp-match-count-bar {
+	margin-top: 12px;
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	color: var(--text-muted);
+}
+
+/* ============================================================================
+   Reports page
+   ========================================================================== */
+.fp-report-builder {
+	padding: 4px 14px 14px;
+	margin-bottom: 14px;
+}
+.fp-report-row {
+	display: flex;
+	gap: 16px;
+	align-items: flex-start;
+	padding: 12px 0;
+}
+.fp-report-row + .fp-report-row {
+	border-top: 1px solid var(--background-modifier-border);
+}
+.fp-report-row-label {
+	flex: 0 0 168px;
+	padding-top: 4px;
+	font-weight: 600;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+.fp-report-row-hint {
+	margin-top: 2px;
+	font-weight: 400;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-report-row-control {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+}
+.fp-report-chips,
+.fp-report-adder,
+.fp-report-scope {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	flex-wrap: wrap;
+}
+.fp-report-chips-empty {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-report-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+.fp-report-chip-x {
+	display: inline-flex;
+	align-items: center;
+	padding: 2px;
+	border: none;
+	background: transparent;
+	color: var(--text-faint);
+	cursor: pointer;
+	box-shadow: none;
+}
+.fp-report-chip-x:hover {
+	color: var(--fp-bad);
+	background: transparent;
+}
+.fp-report-scope .fp-search {
+	flex: 1;
+	min-width: 180px;
+}
+.fp-report-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-report-toggle label {
+	cursor: pointer;
+}
+.fp-report-title h3 {
+	margin: 6px 0 10px;
+	font-size: var(--font-ui-medium);
+}
+.fp-report-warning {
+	margin: 8px 0 0;
+	padding: 8px 11px;
+	border-left: 3px solid var(--fp-warn);
+	border-radius: var(--fp-radius-md);
+	background: var(--fp-warn-bg);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.fp-report-export-bar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin: 14px 0;
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.fp-report-export-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-report-export-actions {
+	display: flex;
+	gap: 7px;
+	flex-wrap: wrap;
+	margin-left: auto;
+}
+.fp-report-breakdown {
+	padding: 4px 14px 12px;
+	margin-bottom: 14px;
+}
+.fp-report-breakdown-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 10px 0 6px;
+}
+.fp-report-breakdown-head h4 {
+	margin: 0;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.fp-report-table .fp-report-group-label {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-report-bar-cell {
+	width: 34%;
+}
+.fp-report-bar {
+	height: 7px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+}
+.fp-report-bar-fill {
+	height: 100%;
+	border-radius: 999px;
+	background: var(--fp-neutral);
+}
+.fp-cell-muted {
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The frame reports are printed through. Off-screen at a real A4 size rather than collapsed to 0x0:
+   a zero-sized frame has no layout and prints blank in Chromium. */
+.fp-print-frame {
+	position: fixed;
+	left: -10000px;
+	top: 0;
+	border: 0;
+	visibility: visible;
+	pointer-events: none;
+}
+
+.fp-mobile .fp-report-row {
+	flex-direction: column;
+	gap: 6px;
+}
+.fp-mobile .fp-report-row-label {
+	flex: none;
+	padding-top: 0;
+}
+.fp-mobile .fp-report-export-actions {
+	margin-left: 0;
+}
+
+/* The AI tier of the match sheet. Visually the quietest of the three, matching its place in the
+   trust order: exact merchant is pre-ticked, text similarity is a guess, this is a judgement. */
+.fp-match-section-ai .fp-match-section-head {
+	gap: 8px;
+}
+.fp-match-ai-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 8px 10px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.fp-match-ai-head + .fp-match-row {
+	border-top: none;
+}
+.fp-match-ai-head-text {
+	flex: 1;
+	min-width: 0;
+}
+.fp-match-ai-name {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-match-ai-count {
+	margin-left: 7px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+/* The model's own words, verbatim. A judgement whose reasoning is hidden is just an assertion. */
+.fp-match-ai-reason {
+	margin-top: 2px;
+	font-size: var(--font-ui-smaller);
+	font-style: italic;
+	color: var(--text-muted);
+}
+
+/* ============================================================================
+   Recheck — Claude's second opinion on existing categories
+   ========================================================================== */
+.fp-recheck-stats {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin: 14px 0 10px;
+}
+.fp-recheck-stat {
+	flex: 1 1 140px;
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.fp-recheck-stat-value {
+	font-size: 20px;
+	font-weight: 700;
+	color: var(--text-normal);
+}
+.fp-recheck-stat-label {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+.fp-recheck-stat-sub {
+	margin-top: 2px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-recheck-note {
+	margin-top: 8px;
+	padding: 7px 10px;
+	border-left: 2px solid var(--background-modifier-border);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-recheck-toggle-row {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	margin-top: 12px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+.fp-recheck-toggle-row label {
+	cursor: pointer;
+}
+.fp-recheck-progress {
+	height: 6px;
+	margin: 16px 0 6px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+}
+.fp-recheck-progress-fill {
+	height: 100%;
+	background: var(--fp-neutral);
+	transition: width 160ms ease-out;
+}
+.fp-recheck-progress-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-recheck-summary {
+	margin: 12px 0;
+	padding: 9px 12px;
+	border-radius: var(--fp-radius-md);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-recheck-select-bar {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	padding: 6px 2px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+.fp-recheck-list {
+	max-height: 380px;
+	overflow-y: auto;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+}
+.fp-recheck-row {
+	display: flex;
+	gap: 10px;
+	align-items: flex-start;
+	padding: 10px 12px;
+}
+.fp-recheck-row + .fp-recheck-row {
+	border-top: 1px solid var(--background-modifier-border);
+}
+.fp-recheck-row.is-accepted {
+	background: var(--fp-neutral-bg);
+}
+.fp-recheck-row-main {
+	flex: 1;
+	min-width: 0;
+}
+.fp-recheck-row-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.fp-recheck-name {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-recheck-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-recheck-change {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 6px;
+}
+/* The current category reads as the thing being replaced, without hiding what it was. */
+.fp-recheck-from {
+	opacity: 0.6;
+}
+.fp-recheck-arrow {
+	color: var(--text-faint);
+}
+.fp-recheck-details {
+	margin-top: 6px;
+}
+.fp-recheck-details summary {
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-recheck-tx-list {
+	margin-top: 5px;
+	padding-left: 4px;
+	border-left: 2px solid var(--background-modifier-border);
+}
+.fp-recheck-tx {
+	display: flex;
+	gap: 9px;
+	padding: 2px 0 2px 7px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-recheck-tx-date {
+	color: var(--text-faint);
+	white-space: nowrap;
+}
+.fp-recheck-tx-desc {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-recheck-tx-more {
+	padding: 3px 0 3px 7px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+/* ============================================================================
+   Scheduled reports
+   ========================================================================== */
+.fp-schedule-card {
+	padding: 11px 13px;
+	margin-bottom: 9px;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.fp-schedule-card.is-off {
+	opacity: 0.62;
+}
+.fp-schedule-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.fp-schedule-title {
+	flex: 1;
+	min-width: 0;
+}
+.fp-schedule-name {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-schedule-sub {
+	margin-top: 2px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-schedule-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.fp-btn-danger-text {
+	color: var(--fp-bad);
+}
+.fp-schedule-status {
+	margin-top: 8px;
+	padding-top: 7px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+.fp-schedule-status-line {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	line-height: 1.5;
+}
+/* A revoked API key must not look like six months of quiet success. */
+.fp-schedule-status-line.is-bad {
+	color: var(--fp-bad);
+}
+.fp-schedule-status-line.is-ok {
+	color: var(--fp-good);
+}
+.fp-schedule-status-line.is-due {
+	font-weight: 600;
+	color: var(--fp-warn);
+}
+.fp-schedule-checks {
+	display: flex;
+	gap: 14px;
+	flex-wrap: wrap;
+}
+.fp-schedule-modal textarea {
+	width: 100%;
+	min-height: 62px;
+	resize: vertical;
+}
+.fp-form-row-label {
+	display: flex;
+	flex-direction: column;
+}
+
+/* Collapsible merchant lists in the recheck dialog — what a click is about to confirm, and what it
+   is deliberately leaving alone. Collapsed by default when there are proposals to read first. */
+.fp-recheck-group {
+	margin-top: 10px;
+	border-radius: var(--fp-radius-md);
+	border: 1px solid var(--background-modifier-border);
+	overflow: hidden;
+}
+.fp-recheck-group-summary {
+	display: flex;
+	align-items: baseline;
+	gap: 9px;
+	flex-wrap: wrap;
+	padding: 8px 11px;
+	cursor: pointer;
+	background: var(--background-secondary);
+	list-style-position: inside;
+}
+.fp-recheck-group-summary:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-recheck-group-title {
+	font-weight: 600;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+.fp-recheck-group-hint {
+	flex: 1;
+	min-width: 160px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.fp-recheck-group .fp-recheck-list {
+	max-height: 260px;
+	border: none;
+	border-top: 1px solid var(--background-modifier-border);
+	border-radius: 0;
+}
+/* A withheld near-miss reads as the change it would have been, visibly not applied. */
+.fp-recheck-withheld {
+	opacity: 0.55;
+}
+.fp-recheck-withheld-tag {
+	font-size: var(--font-ui-smaller);
+	font-style: italic;
+	color: var(--text-faint);
+}
+
+/* Whether the row the match sheet was opened from is itself part of the action. Stated on the
+   subject card because it explains why the button's count can exceed the rows you ticked. */
+.fp-match-subject-tag {
+	align-self: center;
+	margin-left: auto;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+/* ============================================================================
+   Ledger pagination
+   ========================================================================== */
+.fp-ledger-pager {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex-wrap: wrap;
+	padding: 9px 4px 2px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-ledger-pager-range {
+	font-variant-numeric: tabular-nums;
+}
+.fp-ledger-pager-size {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.fp-ledger-pager-size .fp-filter-select {
+	padding-top: 3px;
+	padding-bottom: 3px;
+}
+.fp-ledger-pager-nav {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+.fp-ledger-pager-count {
+	padding: 0 8px;
+	font-weight: 600;
+	color: var(--text-normal);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.fp-ledger-pager-nav .fp-btn:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+/* The "select all 685" escape hatch, only present once a full page is ticked. */
+.fp-ledger-bulk-selectall:empty {
+	display: none;
+}
+.fp-mobile .fp-ledger-pager-nav {
+	margin-left: 0;
+}
+
+/* ============================================================================
+   Nav footer — the two settings surfaces, side by side and deliberately quiet
+   ========================================================================== */
+/* One divider above the pair rather than one above each: they are a footnote to the sidebar, not
+   two more sections of it. */
+.fp-nav-settings-row {
+	display: flex;
+	gap: 4px;
+	margin-top: 4px;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+.fp-nav-settings-btn {
+	flex: 1 1 0;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 5px 8px;
+	border: none;
+	border-radius: var(--fp-radius-md);
+	background: transparent;
+	box-shadow: none;
+	cursor: pointer;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	font-weight: 500;
+}
+.fp-nav-settings-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.fp-nav-settings-btn.is-active {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+	font-weight: 600;
+}
+/* Smaller than the nav's own icons — these sit below the fold of what matters. */
+.fp-nav-settings-btn .fp-icon {
+	flex: none;
+	display: inline-flex;
+}
+.fp-nav-settings-btn .fp-icon svg {
+	width: 14px;
+	height: 14px;
+}
+/* Ellipsis rather than wrap: the sidebar is resizable down to 200px, and a two-line button in a
+   footer is worse than a clipped word with a tooltip behind it. */
+.fp-nav-settings-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* --- Compare: years side by side ------------------------------------------ */
+
+/* Controls stack as rows of label + control so the three axes of the page (which years, which
+   accounts, which categories) read top to bottom instead of competing on one line. */
+.fp-compare-controls {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-compare-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.fp-compare-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+
+/* Doubled class: Obsidian core styles bare buttons at (0,1,1), which outranks a single class. */
+.fp-compare-chip.fp-compare-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	cursor: pointer;
+}
+.fp-compare-chip.fp-compare-chip:hover {
+	color: var(--text-normal);
+	border-color: var(--fp-neutral);
+}
+.fp-compare-chip.fp-compare-chip.is-on {
+	background: var(--fp-neutral-bg);
+	border-color: var(--fp-neutral);
+	color: var(--fp-neutral);
+}
+.fp-compare-chip-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	background: var(--fp-chip-dot, var(--fp-neutral));
+	flex-shrink: 0;
+	display: inline-block;
+}
+
+.fp-compare-total-note {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+.fp-compare-total-note .fp-money {
+	font-size: var(--font-ui-medium);
+	font-weight: 700;
+	color: var(--text-normal);
+}
+
+/* Spending up is bad news, so the palette is inverted against the usual green-is-up convention. */
+.fp-compare-delta {
+	font-weight: 700;
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+.fp-compare-delta.is-up {
+	color: var(--fp-bad);
+}
+.fp-compare-delta.is-down {
+	color: var(--fp-good);
+}
+
+.fp-compare-movers {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 18px;
+}
+.fp-compare-mover-col h4 {
+	margin: 0 0 6px;
+	font-size: var(--font-ui-smaller);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-faint);
+}
+.fp-compare-mover {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 3px 0;
+	font-size: var(--font-ui-small);
+}
+.fp-compare-mover-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-compare-mover-abs {
+	font-variant-numeric: tabular-nums;
+	color: var(--text-normal);
+}
+
+.fp-compare-table td:first-child {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.fp-compare-row-icon {
+	color: var(--text-faint);
+	flex-shrink: 0;
+}
+.fp-compare-row-clickable {
+	cursor: pointer;
+}
+.fp-compare-row-clickable:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-compare-up {
+	color: var(--fp-bad);
+}
+.fp-compare-down {
+	color: var(--fp-good);
+}
+
+@media (max-width: 700px) {
+	.fp-compare-movers {
+		grid-template-columns: 1fr;
+	}
 }

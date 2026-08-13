@@ -1,10 +1,20 @@
 import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { defaultCategories, VIEW_TYPE_FINANCE } from "./constants";
 import { aiCategorize, describeAiResult } from "./ai/categorizer";
+import { budgetAlerts, currentMonth } from "./budgets";
 import { autoCategorize, buildDefaultRules, effectiveRules } from "./import/autoCategorize";
 import { merchantKey } from "./import/merchantKey";
 import { applyMemory, applyPendingSuggestions, learnFromHistory, pruneMemory, remember, siblingsOf } from "./import/merchantMemory";
-import { setNumberFormatPreference } from "./money";
+import { BalanceSnapshotModal } from "./modals/BalanceSnapshotModal";
+import { RecheckModal } from "./modals/RecheckModal";
+import { DetectedSubscriptionsModal, dueSoon } from "./modals/SubscriptionLinkModal";
+import { TransactionEditModal } from "./modals/TransactionEditModal";
+import { TransferMatchModal } from "./modals/TransferMatchModal";
+import { formatMoney, setNumberFormatPreference } from "./money";
+import { registerFinanceCodeBlock } from "./reports/codeblock";
+import { buildMonthlyReport, buildNetWorthReport, buildYearlyReport, type ReportContext } from "./reports/markdown";
+import { runDueSchedules } from "./reports/scheduleRunner";
+import { openNote, writeReportNote } from "./reports/write";
 import { FinanceSettingTab } from "./settings/SettingsTab";
 import { DEFAULT_SETTINGS, FinanceSettings, FinanceStore } from "./store";
 import type { Portfolio, Transaction } from "./types";
@@ -72,6 +82,12 @@ export default class FinancePlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "recheck-categories",
+			name: "Recheck existing categories with Claude",
+			callback: () => new RecheckModal(this.app, this).open(),
+		});
+
+		this.addCommand({
 			id: "auto-categorize-transactions",
 			name: "Auto-categorize uncategorized transactions",
 			callback: () => void this.autoCategorizeExisting(),
@@ -82,6 +98,129 @@ export default class FinancePlugin extends Plugin {
 			name: "Install default categories & auto-categorize transactions",
 			callback: () => void this.installDefaultCategoriesAndCategorize(),
 		});
+
+		this.addCommand({
+			id: "add-transaction",
+			name: "Add a transaction",
+			callback: () => new TransactionEditModal(this.app, this, {}).open(),
+		});
+
+		this.addCommand({
+			id: "find-transfers",
+			name: "Find transfers between your accounts",
+			callback: () => new TransferMatchModal(this.app, this).open(),
+		});
+
+		this.addCommand({
+			id: "record-balance",
+			name: "Record an account balance",
+			callback: () => new BalanceSnapshotModal(this.app, this).open(),
+		});
+
+		this.addCommand({
+			id: "detect-subscriptions",
+			name: "Find recurring payments not tracked as subscriptions",
+			callback: () => new DetectedSubscriptionsModal(this.app, this).open(),
+		});
+
+		this.addCommand({
+			id: "report-month",
+			name: "Write this month's report into the vault",
+			callback: () => void this.writeMonthlyReport(),
+		});
+
+		this.addCommand({
+			id: "report-year",
+			name: "Write this year's report into the vault",
+			callback: () => void this.writeYearlyReport(),
+		});
+
+		this.addCommand({
+			id: "report-networth",
+			name: "Write a net worth report into the vault",
+			callback: () => void this.writeNetWorthReport(),
+		});
+
+		this.addCommand({
+			id: "open-reports",
+			name: "Build a report (categories, period, PDF/CSV/Excel)",
+			callback: () => void this.openView("reports"),
+		});
+
+		// Figures can be embedded in any note via a ```finance block — see reports/codeblock.ts.
+		registerFinanceCodeBlock(this);
+
+		// Deferred until the workspace is ready so a notice can't fire into a half-built UI, and so
+		// opening Obsidian isn't held up by work nobody is waiting on.
+		this.app.workspace.onLayoutReady(() => {
+			this.notifyBudgetAlerts();
+			this.notifyUpcomingRenewals();
+			// Scheduled reports are checked here rather than on a timer: a plugin has no background
+			// process, so "every Monday" can only mean "on the first launch on or after Monday". A
+			// failure is reported and leaves the period due, so the next launch retries it.
+			void runDueSchedules(this).catch((e) => {
+				new Notice(`Couldn't check scheduled reports: ${e instanceof Error ? e.message : String(e)}`);
+			});
+		});
+	}
+
+	/** The context every report builder needs — one place, so all three agree on currency and version. */
+	private reportContext(): ReportContext {
+		return {
+			store: this.store,
+			categories: this.store.categories,
+			baseCurrency: this.settings.baseCurrency,
+			generatedAt: new Date().toISOString(),
+			pluginVersion: this.manifest.version,
+			portfolioName: this.activePortfolio?.name,
+		};
+	}
+
+	async writeMonthlyReport(month = currentMonth()): Promise<void> {
+		const path = await writeReportNote(this.app, this.settings.dataFolder, month, buildMonthlyReport(this.reportContext(), month));
+		new Notice(`Report written to ${path}`);
+		await openNote(this.app, path);
+	}
+
+	async writeYearlyReport(year = String(new Date().getFullYear())): Promise<void> {
+		const path = await writeReportNote(this.app, this.settings.dataFolder, year, buildYearlyReport(this.reportContext(), year));
+		new Notice(`Report written to ${path}`);
+		await openNote(this.app, path);
+	}
+
+	async writeNetWorthReport(): Promise<void> {
+		const path = await writeReportNote(this.app, this.settings.dataFolder, "Net worth", buildNetWorthReport(this.reportContext()));
+		new Notice(`Report written to ${path}`);
+		await openNote(this.app, path);
+	}
+
+	/**
+	 * Warns about budgets that are close to (or past) their limit this month.
+	 *
+	 * One notice, listing the worst few, rather than one per category: a budget you have blown is
+	 * worth an interruption, six separate interruptions about it are not.
+	 */
+	private notifyBudgetAlerts(): void {
+		if (this.settings.budgetAlerts === false) return;
+		const alerts = budgetAlerts(this.store, this.store.categories, currentMonth(), this.settings.budgetAlertThreshold ?? 0.9);
+		if (alerts.length === 0) return;
+
+		const over = alerts.filter((a) => a.severity === "over");
+		const lines = alerts
+			.slice(0, 4)
+			.map((a) => `${a.categoryName}: ${formatMoney(a.spent)} of ${formatMoney(a.available)} (${Math.round(a.pct * 100)}%)`);
+		const more = alerts.length > lines.length ? `\n+${alerts.length - lines.length} more` : "";
+		new Notice(`${over.length > 0 ? `${over.length} budget${over.length === 1 ? "" : "s"} blown` : "Budgets running close"}\n${lines.join("\n")}${more}`, 12000);
+	}
+
+	/** Reminds about subscriptions renewing in the next few days — the point of tracking a due date. */
+	private notifyUpcomingRenewals(): void {
+		if (this.settings.subscriptionReminders === false) return;
+		const days = this.settings.subscriptionReminderDays ?? 3;
+		const due = dueSoon(this.store.subscriptions, days);
+		if (due.length === 0) return;
+		const lines = due.slice(0, 4).map((d) => `${d.sub.name} — ${d.daysUntil === 0 ? "today" : `in ${d.daysUntil} day${d.daysUntil === 1 ? "" : "s"}`}`);
+		new Notice(`Subscriptions renewing soon\n${lines.join("\n")}`, 10000);
 	}
 
 	onunload(): void {
@@ -135,6 +274,42 @@ export default class FinancePlugin extends Plugin {
 
 	get activePortfolio(): Portfolio | undefined {
 		return this.settings.portfolios?.find((p) => p.id === this.settings.activePortfolioId);
+	}
+
+	// The sidebar tips (src/ui/tips.ts) act on the app rather than merely describing it, and they're
+	// declared as data, not as UI. These are the verbs they call — also useful anywhere else that
+	// wants to open one of these without importing the modal itself.
+
+	/** Switches the workspace to one of its non-account pages, opening it first if it isn't already
+	 *  on screen — a command that names a page is otherwise silent when the workspace is closed. */
+	async openView(view: NonNullable<FinanceSettings["activeView"]>): Promise<void> {
+		this.settings.activeView = view;
+		await this.saveSettings();
+		await this.activateView();
+		this.refreshViews();
+	}
+
+	openTransactionEditor(defaultAccountId?: string): void {
+		new TransactionEditModal(this.app, this, { defaultAccountId }).open();
+	}
+
+	openTransferMatcher(): void {
+		new TransferMatchModal(this.app, this).open();
+	}
+
+	openBalanceSnapshot(accountId?: string): void {
+		new BalanceSnapshotModal(this.app, this, { accountId }).open();
+	}
+
+	openSubscriptionDetector(): void {
+		new DetectedSubscriptionsModal(this.app, this).open();
+	}
+
+	/** Flips privacy mode (the eye button) and repaints everything showing an amount. */
+	async togglePrivacyMode(): Promise<void> {
+		this.settings.privacyMode = !this.settings.privacyMode;
+		await this.saveSettings();
+		this.refreshViews();
 	}
 
 	/**
@@ -194,6 +369,27 @@ export default class FinancePlugin extends Plugin {
 		if (siblings.length === 0) return 0;
 		const patches = new Map(siblings.map((t) => [t.id, { categoryId }] as const));
 		return store.updateTransactions(new Map(patches));
+	}
+
+	/**
+	 * Teaches merchant memory from a set of rows that were just given a category by hand.
+	 *
+	 * Every bulk assignment is also a lesson: whatever shops those rows belong to are now known for
+	 * good, so the next import of them lands categorized rather than back in the review queue. Called
+	 * by every path that sets a category on more than one row at a time.
+	 */
+	async rememberMerchantsFor(ids: Iterable<string>, categoryId: string): Promise<void> {
+		const store = this.store;
+		const chosen = new Set(ids);
+		let touched = false;
+		for (const tx of store.transactions) {
+			if (!chosen.has(tx.id)) continue;
+			const key = merchantKey(tx);
+			if (!key) continue;
+			store.merchants = remember(store.merchants, key, categoryId, "user");
+			touched = true;
+		}
+		if (touched) await store.saveMerchants();
 	}
 
 	/**

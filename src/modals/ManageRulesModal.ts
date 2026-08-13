@@ -51,13 +51,33 @@ export class ManageRulesModal extends Modal {
 		applyBtn.addEventListener("click", () => void this.applyToUncategorized());
 
 		const addRow = c.createDiv({ cls: "fp-rule-add-row" });
-		const patternInput = addRow.createEl("input", {
+		const patternWrap = addRow.createDiv({ cls: "fp-rule-pattern-wrap" });
+		const patternInput = patternWrap.createEl("input", {
 			type: "text",
 			cls: "fp-rule-pattern-input",
-			attr: { placeholder: "e.g. Q-Park" },
+			attr: { placeholder: "Search your transactions — e.g. Q-Park", autocomplete: "off" },
 		});
 		patternInput.value = this.newPattern;
-		patternInput.addEventListener("input", () => (this.newPattern = patternInput.value));
+
+		// Suggestions and the live match count are both rendered below the field: typing a rule
+		// blind and hoping it matches something is how a rules list fills up with rules that never
+		// fire. See renderSuggestions.
+		const suggestionsEl = patternWrap.createDiv({ cls: "fp-rule-suggestions" });
+		const matchCountEl = patternWrap.createDiv({ cls: "fp-rule-match-count" });
+
+		const refreshSuggestions = (): void => {
+			this.renderSuggestions(suggestionsEl, matchCountEl, (value) => {
+				this.newPattern = value;
+				patternInput.value = value;
+				refreshSuggestions();
+			});
+		};
+		patternInput.addEventListener("input", () => {
+			this.newPattern = patternInput.value;
+			refreshSuggestions();
+		});
+		patternInput.addEventListener("focus", () => refreshSuggestions());
+		refreshSuggestions();
 
 		const regexLabel = addRow.createEl("label", { cls: "fp-rule-regex-label" });
 		const regexCheckbox = regexLabel.createEl("input", { type: "checkbox" });
@@ -118,6 +138,68 @@ export class ManageRulesModal extends Modal {
 		icon(closeBtn, "check");
 		closeBtn.createSpan({ text: "Done" });
 		closeBtn.addEventListener("click", () => this.close());
+	}
+
+	/**
+	 * What a rule could be written against, taken from the ledger itself.
+	 *
+	 * Writing a rule used to mean guessing at how a merchant is spelled in the export — and bank
+	 * descriptions are full of prefixes, terminal ids and reference numbers that make guessing wrong
+	 * more often than right. These are the actual counterparties in your own data, ranked by how many
+	 * transactions each covers, so a rule is chosen from what exists rather than typed from memory.
+	 *
+	 * The live match count underneath answers the other half: does this pattern hit anything, and how
+	 * much of the ledger would it claim.
+	 */
+	private renderSuggestions(container: HTMLElement, countEl: HTMLElement, onPick: (value: string) => void): void {
+		container.empty();
+		countEl.empty();
+
+		const store = this.plugin.store;
+		const query = this.newPattern.trim().toLowerCase();
+
+		// Counted across every transaction, not only uncategorized ones: a rule is just as often
+		// written to re-file something that's already categorized wrongly.
+		const counts = new Map<string, { label: string; count: number; uncategorized: number }>();
+		for (const tx of store.transactions) {
+			const label = (tx.counterparty || tx.description || "").trim();
+			if (label.length < 3) continue;
+			const key = label.toLowerCase();
+			const entry = counts.get(key) ?? { label, count: 0, uncategorized: 0 };
+			entry.count++;
+			if (!tx.categoryId) entry.uncategorized++;
+			counts.set(key, entry);
+		}
+
+		if (query) {
+			const matching = store.transactions.filter((tx) =>
+				`${tx.description ?? ""} ${tx.counterparty ?? ""}`.toLowerCase().includes(query)
+			);
+			const uncategorized = matching.filter((tx) => !tx.categoryId).length;
+			countEl.setText(
+				matching.length === 0
+					? "No transactions contain that text — the rule would never fire."
+					: `Matches ${matching.length} transaction${matching.length === 1 ? "" : "s"} (${uncategorized} uncategorized).`
+			);
+			countEl.toggleClass("is-empty", matching.length === 0);
+		}
+
+		const ranked = Array.from(counts.values())
+			.filter((entry) => !query || entry.label.toLowerCase().includes(query))
+			// Uncategorized rows first at equal frequency: those are the ones a new rule actually helps.
+			.sort((a, b) => b.uncategorized - a.uncategorized || b.count - a.count)
+			.slice(0, 8);
+
+		if (ranked.length === 0) return;
+
+		container.createDiv({ cls: "fp-rule-suggestions-label", text: query ? "Matching counterparties" : "Most common counterparties" });
+		ranked.forEach((entry) => {
+			const chip = container.createEl("button", { cls: "fp-rule-suggestion" });
+			chip.createSpan({ cls: "fp-rule-suggestion-label", text: entry.label });
+			chip.createSpan({ cls: "fp-rule-suggestion-count", text: `${entry.count}` });
+			chip.setAttribute("title", `${entry.count} transactions, ${entry.uncategorized} of them uncategorized`);
+			chip.addEventListener("click", () => onPick(entry.label));
+		});
 	}
 
 	private async addRule(): Promise<void> {

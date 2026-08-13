@@ -1,13 +1,27 @@
 import { App, normalizePath } from "obsidian";
 import { parseCSV, toCSV } from "./csv";
 import { DEFAULT_DATA_FOLDER, defaultCategories, defaultSecondaryCategories } from "./constants";
+import { DEFAULT_BASE_CURRENCY, type FxContext } from "./currency";
 import type { MerchantMap } from "./import/merchantMemory";
 import type { NumberFormatPreference } from "./money";
 import type { AiSettings } from "./ai/provider";
-import type { Account, Card, Category, CategoryRule, Portfolio, Subscription, Transaction } from "./types";
+import type { EmailSettings, TelegramSettings, TestDeliverySettings } from "./delivery/channels";
+import type { ReportSchedule } from "./reports/schedule";
+import type {
+	Account,
+	BalanceSnapshot,
+	Card,
+	Category,
+	CategoryRule,
+	ImportBatch,
+	OneOffBudget,
+	Portfolio,
+	Subscription,
+	Transaction,
+} from "./types";
 
 /** The workspace pages that aren't scoped to a single account. */
-export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "settings";
+export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "reports" | "compare" | "settings";
 
 export interface FinanceSettings {
 	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */
@@ -46,8 +60,47 @@ export interface FinanceSettings {
 	/** Hides transactions you've already approved from the Review queue (the default) — turn off to
 	 *  browse everything, approved rows included. */
 	reviewHideApproved?: boolean;
+	/** After approving a single row, offer to apply the same decision to every other transaction from
+	 *  the same merchant. On by default — it's the difference between one click and forty. The match
+	 *  sheet is still reachable per-row when this is off. */
+	reviewMatchPrompt?: boolean;
+	/** Delimiter for exported report CSVs. ";" for a locale where Excel reads "," as a decimal point
+	 *  and so refuses to split a comma-delimited file into columns. Never affects the vault's own data
+	 *  files, which are always comma-delimited. */
+	reportCsvDelimiter?: "," | ";";
+	/** Rows per page in the ledger table. 0 means "all on one page". Persisted because it is a
+	 *  preference about how you read, not about the data. */
+	ledgerPageSize?: number;
+	/** Recurring report deliveries. Nothing fires while Obsidian is closed — a due report is sent on
+	 *  the next launch instead. See src/reports/schedule.ts. */
+	reportSchedules?: ReportSchedule[];
+	/** Credentials for the delivery channels. Stored in this vault's plugin data.json in plain text,
+	 *  exactly like the AI key, and the settings panel says so. */
+	delivery?: {
+		email?: EmailSettings;
+		telegram?: TelegramSettings;
+		test?: TestDeliverySettings;
+	};
 	/** AI-assisted categorization. Disabled unless explicitly turned on — see src/ai/provider.ts. */
 	ai?: AiSettings;
+	/** The currency every total is expressed in. Amounts in any other currency are converted through
+	 *  the rate table above. Defaults to EUR, which is what the whole app assumed before this existed. */
+	baseCurrency?: string;
+	/** Warn when a category's spending crosses `budgetAlertThreshold` of its monthly budget. */
+	budgetAlerts?: boolean;
+	/** Fraction of a budget at which the warning fires — 0.9 means "tell me at 90%". */
+	budgetAlertThreshold?: number;
+	/** Tips retired one-by-one by builds before the deck gained a single on/off switch. Nothing writes
+	 *  to this any more; it is still honoured so those tips stay gone, and cleared when tips are
+	 *  switched back on in settings. See src/ui/tips.ts. */
+	dismissedTips?: string[];
+	/** Whether the sidebar tip deck appears at all. Closing the card switches this off in one click,
+	 *  rather than making you retire ten tips one at a time; the settings page turns it back on. */
+	tipsEnabled?: boolean;
+	/** Notify on plugin load about subscriptions renewing within the next few days. */
+	subscriptionReminders?: boolean;
+	/** How many days ahead a subscription renewal reminder fires. */
+	subscriptionReminderDays?: number;
 }
 
 export const DEFAULT_SETTINGS: FinanceSettings = {
@@ -58,6 +111,14 @@ export const DEFAULT_SETTINGS: FinanceSettings = {
 	numberFormat: "auto",
 	subscriptionView: "monthly",
 	reviewHideApproved: true,
+	reviewMatchPrompt: true,
+	reportCsvDelimiter: ",",
+	baseCurrency: DEFAULT_BASE_CURRENCY,
+	budgetAlerts: true,
+	budgetAlertThreshold: 0.9,
+	subscriptionReminders: true,
+	subscriptionReminderDays: 3,
+	tipsEnabled: true,
 };
 
 const TX_COLUMNS: (keyof Transaction)[] = [
@@ -87,6 +148,9 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 	// file onto the current shape on next write. Inserting mid-list instead would misalign old rows.
 	"review",
 	"reviewNote",
+	"transferGroupId",
+	"importBatchId",
+	"subscriptionId",
 ];
 
 const NUMERIC_COLUMNS: (keyof Transaction)[] = ["amount", "shares", "price", "fee", "tax"];
@@ -105,8 +169,23 @@ export class FinanceStore {
 	cards: Card[] = [];
 	/** merchant key → what this portfolio has learned about it. See import/merchantMemory.ts. */
 	merchants: MerchantMap = {};
+	/** Hand-recorded account balances — see BalanceSnapshot. */
+	snapshots: BalanceSnapshot[] = [];
+	/** One entry per import run, newest last — what makes an import undoable. */
+	batches: ImportBatch[] = [];
+	/** Named one-off budgets (a holiday, a kitchen) — see OneOffBudget. */
+	oneOffBudgets: OneOffBudget[] = [];
 
 	constructor(private app: App, public settings: FinanceSettings) {}
+
+	/**
+	 * Base currency + rate table, in the shape every calculation module takes. Read fresh each time
+	 * rather than cached, so changing the base currency or fetching new rates is reflected on the next
+	 * render without anything having to invalidate anything.
+	 */
+	get fx(): FxContext {
+		return { baseCurrency: this.settings.baseCurrency ?? DEFAULT_BASE_CURRENCY, rates: this.settings.exchangeRates };
+	}
 
 	private path(...parts: string[]): string {
 		return normalizePath([this.settings.dataFolder, ...parts].join("/"));
@@ -134,6 +213,9 @@ export class FinanceStore {
 		this.subscriptions = await this.readJson<Subscription[]>(this.path("data", "subscriptions.json"), []);
 		this.cards = await this.readJson<Card[]>(this.path("data", "cards.json"), []);
 		this.merchants = await this.readJson<MerchantMap>(this.path("data", "merchants.json"), {});
+		this.snapshots = await this.readJson<BalanceSnapshot[]>(this.path("data", "snapshots.json"), []);
+		this.batches = await this.readJson<ImportBatch[]>(this.path("data", "import-batches.json"), []);
+		this.oneOffBudgets = await this.readJson<OneOffBudget[]>(this.path("data", "oneoff-budgets.json"), []);
 		await this.migrateLegacyCardExpiry();
 
 		this.transactions = await this.readLedger();
@@ -272,6 +354,19 @@ export class FinanceStore {
 		await this.app.vault.adapter.write(this.path("data", "merchants.json"), JSON.stringify(this.merchants, null, "\t"));
 	}
 
+	async saveSnapshots(): Promise<void> {
+		this.snapshots.sort((a, b) => a.date.localeCompare(b.date));
+		await this.app.vault.adapter.write(this.path("data", "snapshots.json"), JSON.stringify(this.snapshots, null, "\t"));
+	}
+
+	async saveBatches(): Promise<void> {
+		await this.app.vault.adapter.write(this.path("data", "import-batches.json"), JSON.stringify(this.batches, null, "\t"));
+	}
+
+	async saveOneOffBudgets(): Promise<void> {
+		await this.app.vault.adapter.write(this.path("data", "oneoff-budgets.json"), JSON.stringify(this.oneOffBudgets, null, "\t"));
+	}
+
 	existingIds(): Set<string> {
 		return new Set(this.transactions.map((t) => t.id));
 	}
@@ -281,11 +376,18 @@ export class FinanceStore {
 	 * Groups by each transaction's own `source`/year — a single import (e.g. one combined workbook)
 	 * can carry rows from more than one source.
 	 */
-	async importTransactions(incoming: Transaction[]): Promise<{ added: number; skipped: number }> {
+	async importTransactions(
+		incoming: Transaction[],
+		meta?: { fileName?: string; format?: string }
+	): Promise<{ added: number; skipped: number; batchId?: string }> {
 		const existing = this.existingIds();
 		const bySourceYear = new Map<string, Transaction[]>();
 		let added = 0;
 		let skipped = 0;
+
+		// Every row from one run of the wizard carries the same batch id, which is the whole basis of
+		// "undo this import" — without it a mistaken import can only be unpicked row by row.
+		const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 		for (const tx of incoming) {
 			if (existing.has(tx.id)) {
@@ -293,6 +395,7 @@ export class FinanceStore {
 				continue;
 			}
 			existing.add(tx.id);
+			tx.importBatchId = batchId;
 			this.transactions.push(tx);
 			const year = tx.date.slice(0, 4) || "unknown";
 			const key = `${tx.source}::${year}`;
@@ -305,7 +408,92 @@ export class FinanceStore {
 			const [source, year] = key.split("::");
 			await this.appendToLedger(source, year, txs);
 		}
-		return { added, skipped };
+
+		if (added > 0) {
+			this.batches.push({
+				id: batchId,
+				importedAt: new Date().toISOString(),
+				source: (incoming.find((t) => t.importBatchId === batchId)?.source ?? "generic") as Transaction["source"],
+				fileName: meta?.fileName,
+				format: meta?.format,
+				count: added,
+			});
+			await this.saveBatches();
+		}
+		return { added, skipped, batchId: added > 0 ? batchId : undefined };
+	}
+
+	/**
+	 * Adds one hand-entered transaction. Separate from importTransactions because a manual entry has
+	 * no batch, no duplicate check against an export, and should land in the ledger immediately — but
+	 * it writes into exactly the same per-source/year CSV, so a manual row is a first-class ledger row
+	 * rather than a second class of data living somewhere else.
+	 */
+	async addTransaction(tx: Transaction): Promise<void> {
+		this.transactions.push(tx);
+		const year = tx.date.slice(0, 4) || "unknown";
+		await this.appendToLedger(tx.source, year, [tx]);
+	}
+
+	/**
+	 * Removes transactions outright and rewrites every ledger file they touched.
+	 *
+	 * A deletion has to rewrite rather than append, so this is the one place that has to be careful:
+	 * files are recomputed from what's left in memory, and a file whose last transaction just went
+	 * away is written back as a header-only file rather than left holding stale rows.
+	 */
+	async deleteTransactions(ids: Iterable<string>): Promise<number> {
+		const doomed = new Set(ids);
+		if (doomed.size === 0) return 0;
+
+		const touchedFiles = new Set<string>();
+		let removed = 0;
+		this.transactions = this.transactions.filter((tx) => {
+			if (!doomed.has(tx.id)) return true;
+			touchedFiles.add(this.ledgerKey(tx));
+			removed++;
+			return false;
+		});
+		for (const key of touchedFiles) await this.rewriteLedgerFile(key);
+		return removed;
+	}
+
+	/**
+	 * A full edit of one transaction, including the fields that decide which ledger file it lives in.
+	 *
+	 * `updateTransaction` rewrites the file the transaction belongs to *now*, which is correct for a
+	 * category or review change but silently leaves a stale copy behind when an edit moves the row to
+	 * a different file — changing a date from December to January moves it into the next year's ledger
+	 * while the old year still holds the original. Editing a date is the single most likely correction
+	 * anyone makes to an imported row, so it gets a method that rewrites both ends of the move.
+	 */
+	async editTransaction(id: string, patch: Partial<Transaction>): Promise<void> {
+		const tx = this.transactions.find((t) => t.id === id);
+		if (!tx) return;
+		const previousKey = this.ledgerKey(tx);
+		Object.assign(tx, patch);
+		const nextKey = this.ledgerKey(tx);
+		await this.rewriteLedgerFile(nextKey);
+		if (previousKey !== nextKey) await this.rewriteLedgerFile(previousKey);
+	}
+
+	/** Everything one import run brought in — the rows "undo this import" would remove. */
+	transactionsInBatch(batchId: string): Transaction[] {
+		return this.transactions.filter((t) => t.importBatchId === batchId);
+	}
+
+	/**
+	 * Undoes one import: deletes every transaction it created and forgets the batch.
+	 *
+	 * Rows you've since edited are deleted too, deliberately — "undo this import" means the file
+	 * shouldn't have been imported at all, and leaving behind the handful you happened to touch would
+	 * be a stranger outcome than removing them. The confirmation dialog says as much.
+	 */
+	async undoImportBatch(batchId: string): Promise<number> {
+		const removed = await this.deleteTransactions(this.transactionsInBatch(batchId).map((t) => t.id));
+		this.batches = this.batches.filter((b) => b.id !== batchId);
+		await this.saveBatches();
+		return removed;
 	}
 
 	private serializeTx(tx: Transaction): (string | number | undefined)[] {
@@ -443,6 +631,9 @@ export class FinanceStore {
 		await this.saveSubscriptions();
 		await this.saveCards();
 		await this.saveMerchants();
+		await this.saveSnapshots();
+		await this.saveBatches();
+		await this.saveOneOffBudgets();
 		await this.rewriteAllLedgers();
 	}
 
@@ -459,6 +650,9 @@ export class FinanceStore {
 		this.cards = [];
 		this.transactions = [];
 		this.merchants = {};
+		this.snapshots = [];
+		this.batches = [];
+		this.oneOffBudgets = [];
 		this.categories = defaultCategories();
 		await this.saveAll();
 		await this.seedDefaultSecondaryCategories();

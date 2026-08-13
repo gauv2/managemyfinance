@@ -314,15 +314,30 @@ export function stackedShareBar(
 	});
 }
 
-/** Horizontal bar chart for category totals — each bar keeps that category's own color. */
+/** Horizontal bar chart for category totals — each bar keeps that category's own color. Rows carrying
+ *  an `onClick` become buttons into whatever is behind them (see CategoryDrilldownModal), which is why
+ *  a chart is worth clicking at all: "how much" always leads straight to "on what?". */
 export function barChart(
 	container: HTMLElement,
-	rows: { label: string; value: number; color: string; iconName?: string }[]
+	rows: { label: string; value: number; color: string; iconName?: string; onClick?: () => void }[]
 ): void {
 	const wrap = container.createDiv({ cls: "fp-barchart" });
 	const max = Math.max(...rows.map((r) => r.value), 1);
 	rows.forEach((r) => {
-		const row = wrap.createDiv({ cls: "fp-barchart-row" });
+		const row = wrap.createDiv({ cls: "fp-barchart-row" + (r.onClick ? " is-clickable" : "") });
+		if (r.onClick) {
+			const onClick = r.onClick;
+			row.setAttribute("role", "button");
+			row.setAttribute("tabindex", "0");
+			row.setAttribute("title", `See the transactions behind ${r.label}`);
+			row.addEventListener("click", () => onClick());
+			row.addEventListener("keydown", (ev: KeyboardEvent) => {
+				if (ev.key === "Enter" || ev.key === " ") {
+					ev.preventDefault();
+					onClick();
+				}
+			});
+		}
 		const labelEl = row.createDiv({ cls: "fp-barchart-label" });
 		if (r.iconName) icon(labelEl, r.iconName, "fp-barchart-icon");
 		labelEl.createSpan({ text: r.label });

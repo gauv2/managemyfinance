@@ -1,12 +1,14 @@
 import { Notice } from "obsidian";
 import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
 import { merchantKey, merchantLabel } from "../../import/merchantKey";
-import { dismissSuggestion, remember, siblingsOf, unknownMerchants } from "../../import/merchantMemory";
+import { dismissSuggestion, siblingsOf, unknownMerchants } from "../../import/merchantMemory";
 import type FinancePlugin from "../../main";
 import { formatMoney } from "../../money";
+import { BulkMatchModal } from "../../modals/BulkMatchModal";
+import { RecheckModal } from "../../modals/RecheckModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import type { ReviewStatus, Transaction } from "../../types";
-import { badge, categoryChainChip, emptyState, icon, renderCategoryPicker, statTile } from "../../ui/dom";
+import { badge, categoryChainChip, emptyState, icon, moneyInput, renderCategoryPicker, statTile } from "../../ui/dom";
 
 type StatusFilter = "all" | ReviewStatus | "uncategorized";
 
@@ -99,7 +101,13 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			.sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
 	}
 
-	async function setStatus(ids: string[], status: ReviewStatus): Promise<void> {
+	/**
+	 * `subject` is set only when the decision came from a single row's own button. That's what makes
+	 * the match sheet appear there and not after a bulk action: someone who ticked twelve rows and
+	 * pressed Approve has already chosen their set, and asking "and these others?" would be arguing
+	 * with a decision they just made explicitly.
+	 */
+	async function setStatus(ids: string[], status: ReviewStatus, opts: { subject?: Transaction } = {}): Promise<void> {
 		if (ids.length === 0) return;
 		const patches = new Map<string, Partial<Transaction>>();
 		// "new" is stored as an absent value, so un-approving genuinely clears the field rather than
@@ -113,6 +121,28 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		selected.clear();
 		plugin.refreshViews();
 		render();
+
+		// Never after clearing a decision: "this needs reviewing again" is a statement about one row,
+		// not something to offer to fan out across a merchant.
+		if (opts.subject && status !== "new" && plugin.settings.reviewMatchPrompt !== false) {
+			offerMatches(opts.subject, status, { justActed: true });
+		}
+	}
+
+	/**
+	 * Builds the match sheet and opens it.
+	 *
+	 * `force` is the difference between the two ways in. The automatic offer after an approval only
+	 * appears when the text tiers already found something — interrupting every single approval to say
+	 * "nothing matched, but you could ask Claude" would make the prompt a nuisance within a minute. The
+	 * button on the row is an explicit request, so it opens regardless: with nothing found locally, the
+	 * sheet's whole content is the Ask Claude offer, which is exactly what was asked for.
+	 */
+	function offerMatches(subject: Transaction, status: ReviewStatus, opts: { force?: boolean; justActed?: boolean } = {}): boolean {
+		const modal = new BulkMatchModal(plugin.app, plugin, subject, { status, justActed: opts.justActed, onDone: () => render() });
+		if (!modal.hasAnything && !opts.force) return false;
+		modal.open();
+		return true;
 	}
 
 	async function setCategory(ids: string[], categoryId: string): Promise<void> {
@@ -120,25 +150,12 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		const patches = new Map<string, Partial<Transaction>>();
 		for (const id of ids) patches.set(id, { categoryId });
 		const changed = await store.updateTransactions(patches);
-		await learnFrom(ids, categoryId);
+		// Every bulk assignment is also a lesson: the merchants involved are now known for good.
+		await plugin.rememberMerchantsFor(ids, categoryId);
 		const name = store.categories.find((c) => c.id === categoryId)?.name ?? "category";
 		new Notice(`Set ${changed} transaction${changed === 1 ? "" : "s"} to "${name}"`);
 		plugin.refreshViews();
 		render();
-	}
-
-	/** Every bulk assignment is also a lesson: the merchants involved are now known for good. */
-	async function learnFrom(ids: string[], categoryId: string): Promise<void> {
-		const chosen = new Set(ids);
-		let touched = false;
-		for (const tx of store.transactions) {
-			if (!chosen.has(tx.id)) continue;
-			const key = merchantKey(tx);
-			if (!key) continue;
-			store.merchants = remember(store.merchants, key, categoryId, "user");
-			touched = true;
-		}
-		if (touched) await store.saveMerchants();
 	}
 
 	/** Category + approval in one action — the common case when working down the queue. */
@@ -147,7 +164,7 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		const patches = new Map<string, Partial<Transaction>>();
 		for (const id of ids) patches.set(id, { categoryId, review: "approved" });
 		const changed = await store.updateTransactions(patches);
-		await learnFrom(ids, categoryId);
+		await plugin.rememberMerchantsFor(ids, categoryId);
 		const name = store.categories.find((c) => c.id === categoryId)?.name ?? "category";
 		new Notice(`Categorized and approved ${changed} transaction${changed === 1 ? "" : "s"} as "${name}"`);
 		selected.clear();
@@ -212,6 +229,19 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 				aiBtn.addClass("is-muted");
 				aiBtn.addEventListener("click", () => plugin.openVaultSettings("ai"));
 			}
+		}
+
+		// Offered whenever there is anything already categorized to have a second look at — which is the
+		// blind spot every other action here leaves: they all only ever touch rows with no category.
+		if (store.transactions.some((t) => t.categoryId)) {
+			const recheckBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+			icon(recheckBtn, "refresh-cw");
+			recheckBtn.createSpan({ text: "Recheck categories" });
+			recheckBtn.setAttribute(
+				"title",
+				"Have Claude re-classify merchants you've already categorized and propose fixes. Nothing changes until you accept them."
+			);
+			recheckBtn.addEventListener("click", () => new RecheckModal(plugin.app, plugin, { onDone: () => render() }).open());
 		}
 
 		const manageBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary" });
@@ -529,6 +559,109 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		}
 	}
 
+	/**
+	 * The amount, plus a pencil to correct it in place.
+	 *
+	 * A wrong amount is the one import error you can't fix from this page: a wrong category has a
+	 * picker right there in the row, but a mistyped OCR figure or a bank that exported gross instead
+	 * of net meant opening the detail modal — or, before that existed, editing the CSV in the vault.
+	 * Since reviewing is precisely the pass where you're comparing rows against a statement, the fix
+	 * belongs in the row you spotted it on.
+	 */
+	function renderAmount(cell: HTMLElement, tx: Transaction): void {
+		cell.empty();
+		cell.removeClass("is-editing");
+		cell.createSpan({ cls: "fp-review-amount-value fp-money", text: formatMoney(tx.amount, { currency: tx.currency || "EUR" }) });
+
+		const edit = cell.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon fp-review-amount-edit" });
+		icon(edit, "pencil");
+		edit.setAttribute("aria-label", `Edit the amount of ${tx.description || "this transaction"}`);
+		edit.setAttribute("title", "Correct this amount");
+		edit.addEventListener("click", () => editAmount(cell, tx));
+	}
+
+	function editAmount(cell: HTMLElement, tx: Transaction): void {
+		cell.empty();
+		cell.addClass("is-editing");
+		const editor = cell.createDiv({ cls: "fp-review-amount-editor" });
+
+		// Magnitude plus a direction, never a signed figure — the same convention as the transaction
+		// form. Asking someone to type "-12.50" is asking them to remember an internal convention, and
+		// getting it wrong here silently turns an expense into income.
+		let direction: "out" | "in" = tx.amount < 0 ? "out" : "in";
+		const group = editor.createDiv({ cls: "fp-segmented fp-segmented-tiny" });
+		(
+			[
+				["out", "−", "Money out"],
+				["in", "+", "Money in"],
+			] as const
+		).forEach(([value, label, title]) => {
+			const btn = group.createEl("button", { cls: "fp-segmented-btn" + (direction === value ? " is-active" : ""), text: label });
+			btn.setAttribute("title", title);
+			btn.setAttribute("aria-label", title);
+			btn.addEventListener("click", () => {
+				direction = value;
+				group.querySelectorAll(".fp-segmented-btn").forEach((el) => el.removeClass("is-active"));
+				btn.addClass("is-active");
+			});
+		});
+
+		const field = moneyInput(editor, {
+			value: Math.abs(tx.amount),
+			currency: tx.currency || "EUR",
+			allowNegative: false,
+			cls: "fp-review-amount-input",
+		});
+
+		const actions = editor.createDiv({ cls: "fp-review-amount-actions" });
+		const save = actions.createEl("button", { cls: "fp-btn fp-btn-primary fp-btn-icon" });
+		icon(save, "check");
+		save.setAttribute("aria-label", "Save this amount");
+		save.setAttribute("title", "Save (Enter)");
+		const cancel = actions.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+		icon(cancel, "x");
+		cancel.setAttribute("aria-label", "Cancel");
+		cancel.setAttribute("title", "Cancel (Escape)");
+
+		const commit = async (): Promise<void> => {
+			if (!field.isValid()) {
+				new Notice("That doesn't read as an amount.");
+				return;
+			}
+			const magnitude = field.value();
+			if (magnitude === undefined || magnitude === 0) {
+				new Notice("Enter an amount.");
+				return;
+			}
+			const next = direction === "out" ? -Math.abs(magnitude) : Math.abs(magnitude);
+			if (next === tx.amount) {
+				renderAmount(cell, tx);
+				return;
+			}
+			// editTransaction, not updateTransaction: it rewrites both ends if the row ever moves files,
+			// and it is the method that owns "an edit to a saved transaction".
+			await store.editTransaction(tx.id, { amount: next });
+			new Notice(`Amount changed to ${formatMoney(next, { currency: tx.currency || "EUR" })}`);
+			plugin.refreshViews();
+			render();
+		};
+
+		save.addEventListener("click", () => void commit());
+		cancel.addEventListener("click", () => renderAmount(cell, tx));
+		field.input.addEventListener("keydown", (ev: KeyboardEvent) => {
+			if (ev.key === "Enter") {
+				ev.preventDefault();
+				void commit();
+			} else if (ev.key === "Escape") {
+				ev.preventDefault();
+				renderAmount(cell, tx);
+			}
+		});
+
+		field.input.focus();
+		field.input.select();
+	}
+
 	function renderRow(tbody: HTMLElement, tx: Transaction): void {
 		const status = statusOf(tx);
 		const tr = tbody.createEl("tr", { cls: `fp-review-row is-${status}` + (selected.has(tx.id) ? " is-selected" : "") });
@@ -569,8 +702,11 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 
 		tr.createEl("td", { text: store.accounts.find((a) => a.id === tx.accountId)?.name ?? "—", cls: "col-account" });
 
-		const amtCell = tr.createEl("td", { cls: "fp-cell-amount fp-money col-amount " + (tx.amount < 0 ? "is-negative" : "is-positive") });
-		amtCell.setText(formatMoney(tx.amount, { currency: tx.currency || "EUR" }));
+		// fp-money sits on the value span rather than the cell: privacy mode blurs whatever carries it,
+		// and a CSS filter can't be undone by a child — so blurring the cell would blur the pencil, and
+		// blur the field you were typing an amount into.
+		const amtCell = tr.createEl("td", { cls: "fp-cell-amount col-amount " + (tx.amount < 0 ? "is-negative" : "is-positive") });
+		renderAmount(amtCell, tx);
 
 		const catCell = tr.createEl("td", { cls: "fp-review-cat-cell col-category" });
 		const chain = categoryChain(store.categories, tx.categoryId);
@@ -642,13 +778,28 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		icon(approveBtn, "check");
 		approveBtn.setAttribute("aria-label", status === "approved" ? "Mark as needing review again" : "Approve");
 		approveBtn.setAttribute("title", status === "approved" ? "Mark as needing review again" : "Approve");
-		approveBtn.addEventListener("click", () => void setStatus([tx.id], status === "approved" ? "new" : "approved"));
+		approveBtn.addEventListener("click", () =>
+			void setStatus([tx.id], status === "approved" ? "new" : "approved", { subject: tx })
+		);
 
 		const flagBtn = actionCell.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" + (status === "flagged" ? " is-active" : "") });
 		icon(flagBtn, "flag");
 		flagBtn.setAttribute("aria-label", status === "flagged" ? "Remove flag" : "Flag for a decision later");
 		flagBtn.setAttribute("title", status === "flagged" ? "Remove flag" : "Flag for a decision later");
-		flagBtn.addEventListener("click", () => void setStatus([tx.id], status === "flagged" ? "new" : "flagged"));
+		flagBtn.addEventListener("click", () => void setStatus([tx.id], status === "flagged" ? "new" : "flagged", { subject: tx }));
+
+		// The same sheet the approve button offers, on demand — so it's still reachable after someone
+		// has turned the automatic prompt off, and for a row they want to fan out without deciding yet.
+		const matchBtn = actionCell.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+		icon(matchBtn, "copy");
+		matchBtn.setAttribute("aria-label", "Find matching transactions");
+		matchBtn.setAttribute("title", "Find other transactions that look like this one — or ask Claude — and settle them together");
+		matchBtn.addEventListener("click", () => {
+			// An unreviewed row has no decision to spread yet, so the useful offer there is "approve
+			// these together"; a row already flagged or approved spreads whatever it already is.
+			const target: ReviewStatus = status === "new" ? "approved" : status;
+			offerMatches(tx, target, { force: true });
+		});
 
 		const detailBtn = actionCell.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
 		icon(detailBtn, "maximize-2");

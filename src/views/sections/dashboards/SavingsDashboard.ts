@@ -1,19 +1,22 @@
-import { averageMonthlyExpenses, netWorth, summarizeByYear, yearSummaryFor } from "../../../kpi";
+import { averageMonthlyExpenses, netWorth, summarizeByYear, summarizeTotal, yearSummaryFor } from "../../../kpi";
 import type FinancePlugin from "../../../main";
 import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
+import { describeRange, type DateRange } from "../../../period";
 import type { Account } from "../../../types";
 import { statTile } from "../../../ui/dom";
-import { deltaRow, formatEUR, metricRow, yearHeaderRow, yoy } from "../../../ui/metricsTable";
+import { deltaRow, formatEUR, metricRow, partialYearsNote, yearHeaderRow, yearLabeller, yoy } from "../../../ui/metricsTable";
 
 /**
  * A savings account's job is to hold a buffer and grow — so its KPIs center on balance growth and
  * how many months of everyday spending that balance would cover (the emergency-fund read).
  */
-export function renderSavingsDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account): void {
+export function renderSavingsDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account, range?: DateRange): void {
 	const store = plugin.store;
-	const years = summarizeByYear(store, account.id);
-	const currentYear = yearSummaryFor(years);
-	const previousYear = yearSummaryFor(years, String(new Date().getFullYear() - 1));
+	const periodLabel = describeRange(range);
+	const years = summarizeByYear(store, account.id, range);
+	const currentYear = range ? summarizeTotal(years) : yearSummaryFor(years);
+	// Year-on-year growth needs the year before the one on screen, which a filtered run has dropped.
+	const previousYear = range ? undefined : yearSummaryFor(years, String(new Date().getFullYear() - 1));
 	const balance = netWorth(store, account.id);
 
 	const spendingAccountIds = store.accounts.filter((a) => a.type === "debit" || a.type === "cash").map((a) => a.id);
@@ -40,7 +43,7 @@ export function renderSavingsDashboard(container: HTMLElement, plugin: FinancePl
 		money: false,
 	});
 	statTile(tiles, {
-		label: "Net deposits this year",
+		label: range ? `Net deposits · ${periodLabel}` : "Net deposits this year",
 		value: currentYear ? formatEUR(currentYear.net) : "—",
 		iconName: "download",
 	});
@@ -51,11 +54,16 @@ export function renderSavingsDashboard(container: HTMLElement, plugin: FinancePl
 		const table = card.createEl("table", { cls: "fp-table fp-table-metrics" });
 		yearHeaderRow(table, years.map((y) => y.year), {
 			onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year, account.name, account.id).open(),
+			labelFor: yearLabeller(years),
 		});
 		const tbody = table.createEl("tbody");
 		metricRow(tbody, "Balance (EOY)", years.map((y) => y.netWorthEOY), formatEUR, { emphasize: true, heat: "normal" });
 		deltaRow(tbody, years.map((y) => y.netWorthEOY));
 		metricRow(tbody, "Net deposits", years.map((y) => y.net), formatEUR, { heat: "normal" });
+		partialYearsNote(card, years, periodLabel);
+	} else if (range) {
+		const card = container.createDiv({ cls: "fp-card" });
+		card.createEl("p", { cls: "fp-step-desc", text: `Nothing moved on this account in ${periodLabel}.` });
 	} else {
 		const card = container.createDiv({ cls: "fp-card" });
 		card.createEl("p", {

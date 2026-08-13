@@ -9,8 +9,25 @@ import {
 	DEFAULT_CONFIDENCE_THRESHOLD,
 	testProvider,
 } from "../ai/provider";
+import { buildMatchPrompt } from "../ai/matchPrompt";
 import { buildUserPrompt } from "../ai/prompt";
+import { sendEmail, sendTelegram } from "../delivery/channels";
+import { canExportPdf } from "../reports/pdf";
+import { describeOutcome, runSchedule, sendTestReport } from "../reports/scheduleRunner";
+import {
+	completedPeriod,
+	currentPeriod,
+	describeSchedule,
+	DETAIL_HINT,
+	DETAIL_LABEL,
+	isDue,
+	nextDueAt,
+	type Cadence,
+	type ReportDetail,
+} from "../reports/schedule";
+import { ScheduleEditModal } from "../modals/ScheduleEditModal";
 import { buildBackup, serializeBackup, transactionsToCsv, writeExport } from "../data/backup";
+import { merchantDisplayName } from "../import/merchantKey";
 import { unknownMerchants } from "../import/merchantMemory";
 import { fetchLatestRates } from "../fx";
 import { decimalSeparator, formatMoneyForInput, parseMoney } from "../money";
@@ -164,6 +181,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 			{ id: "currency", label: "Currency", icon: "coins", render: (c) => this.renderCurrency(c) },
 			{ id: "import", label: "Import", icon: "download", render: (c) => this.renderImport(c) },
 			{ id: "ai", label: "AI", icon: "sparkles", render: (c) => this.renderAi(c) },
+			{ id: "schedules", label: "Scheduled reports", icon: "send", render: (c) => this.renderSchedules(c) },
 			{ id: "data", label: "Data", icon: "database", render: (c) => this.renderData(c) },
 			{ id: "about", label: "About", icon: "info", render: (c) => this.renderAbout(c) },
 		];
@@ -585,7 +603,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 		const pending = unknownMerchants(store.transactions, store.merchants);
 		const preview = this.group(content, {
 			icon: "shield",
-			title: "What gets sent",
+			title: "What gets sent — categorizing",
 			subtitle: "Merchant names and your category tree. Nothing else.",
 			chip:
 				pending.length > 0
@@ -607,6 +625,392 @@ export class FinanceSettingTab extends PluginSettingTab {
 		);
 		if (pending.length > sample.length) {
 			this.note(preview.content, `Showing the first ${sample.length} of ${pending.length}; the rest go in later batches of the same shape.`);
+		}
+
+		// The second AI feature sends a different payload, so it gets its own panel rather than being
+		// covered by implication. A promise about what leaves the vault is only worth making if every
+		// request that leaves it is shown.
+		const matchPreview = this.group(content, {
+			icon: "shield",
+			title: "What gets sent — matching transactions",
+			subtitle: "Merchant names only. Not even your category tree.",
+			collapsibleId: "ai-match-payload",
+			defaultExpanded: false,
+		});
+		this.note(
+			matchPreview.content,
+			"Sent when you press “Ask Claude” on the match sheet in Review, and only then. It asks which of your other merchants are the same shop as the one you're reviewing — the question that finds “AH to go” for “Albert Heijn”, which no text comparison can. No amounts, dates, account names, IBANs or balances."
+		);
+		const merchantNames = Array.from(
+			new Set(
+				store.transactions
+					.map((t) => merchantDisplayName(t.description || t.counterparty || ""))
+					.filter((name): name is string => !!name)
+			)
+		);
+		const matchBox = matchPreview.content.createEl("pre", { cls: "fp-ai-payload" });
+		matchBox.setText(
+			merchantNames.length < 2
+				? "Nothing to show — this portfolio has no merchants to compare yet."
+				: buildMatchPrompt(
+						merchantNames[0],
+						merchantNames.slice(1, 21).map((name) => ({ key: name, name, count: 1 }))
+				  )
+		);
+	}
+
+	/**
+	 * Recurring report delivery: the credentials, the schedules, and an honest account of when any of
+	 * it actually runs.
+	 *
+	 * The "no background process" caveat is stated at the top rather than buried, because a user who
+	 * believes this is a cron job will conclude the feature is broken the first time they leave
+	 * Obsidian closed over a weekend — and they'd be right to, given what they were told.
+	 */
+	private renderSchedules(content: HTMLElement): void {
+		const settings = this.plugin.settings;
+		settings.delivery ??= {};
+		const schedules = settings.reportSchedules ?? [];
+
+		const listGroup = this.group(content, {
+			icon: "send",
+			title: "Schedules",
+			subtitle: "Reports built and delivered for each completed period.",
+			chip:
+				schedules.length === 0
+					? { text: "none yet", tone: "pending" }
+					: { text: `${schedules.filter((s) => s.enabled).length} of ${schedules.length} active`, tone: "ok" },
+			headerAction: (right: HTMLElement) => {
+				const btn = right.createEl("button", { cls: "fp-btn fp-btn-primary" });
+				icon(btn, "plus");
+				btn.createSpan({ text: "New schedule" });
+				btn.addEventListener("click", () => new ScheduleEditModal(this.app, this.plugin, undefined, () => this.renderBody()).open());
+			},
+		});
+
+		this.note(
+			listGroup.content,
+			"Obsidian has no background process, so nothing is sent while it is closed. A report that falls due is delivered the first time Obsidian runs on or after that date, and says in its own body that it was generated late. One launch produces one report per schedule — never a burst of back-filled ones."
+		);
+		if (!canExportPdf()) {
+			this.note(listGroup.content, "PDF rendering needs the desktop app. On mobile, a schedule asking for PDF sends the report as HTML instead and says so in its delivery log.");
+		}
+
+		if (schedules.length === 0) {
+			this.note(listGroup.content, "No schedules yet. Build the report you want on the Reports tab first to see what the filters produce, then recreate it here as a recurring one.");
+		}
+
+		for (const schedule of schedules) {
+			const card = listGroup.content.createDiv({ cls: "fp-schedule-card" + (schedule.enabled ? "" : " is-off") });
+
+			const head = card.createDiv({ cls: "fp-schedule-head" });
+			const title = head.createDiv({ cls: "fp-schedule-title" });
+			title.createSpan({ cls: "fp-schedule-name", text: schedule.name });
+			title.createDiv({ cls: "fp-schedule-sub", text: describeSchedule(schedule) });
+
+			const actions = head.createDiv({ cls: "fp-schedule-actions" });
+			const toggle = actions.createEl("button", { cls: "fp-toggle" + (schedule.enabled ? " is-on" : "") });
+			toggle.setAttribute("role", "switch");
+			toggle.setAttribute("aria-checked", String(schedule.enabled));
+			toggle.setAttribute("aria-label", schedule.enabled ? "Pause this schedule" : "Resume this schedule");
+			toggle.createSpan({ cls: "fp-toggle-knob" });
+			toggle.addEventListener("click", async () => {
+				schedule.enabled = !schedule.enabled;
+				await this.plugin.saveSettings();
+				this.renderBody();
+			});
+
+			const edit = actions.createEl("button", { cls: "fp-btn fp-btn-secondary fp-btn-tiny", text: "Edit" });
+			edit.addEventListener("click", () => new ScheduleEditModal(this.app, this.plugin, schedule, () => this.renderBody()).open());
+
+			const send = actions.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-tiny", text: "Send now" });
+			send.addEventListener("click", async () => {
+				send.disabled = true;
+				send.setText("Sending…");
+				try {
+					const outcome = await runSchedule(this.plugin, schedule);
+					// A manual send records its outcome but never advances the period — otherwise testing
+					// a schedule would silently consume the delivery it was meant to be testing.
+					schedule.lastRun = { at: new Date().toISOString(), periodKey: outcome.period.key, ok: outcome.ok, detail: describeOutcome(outcome) };
+					await this.plugin.saveSettings();
+					new Notice(`${outcome.ok ? "Sent" : "Failed"}: ${describeOutcome(outcome)}`, outcome.ok ? 8000 : 15000);
+				} catch (e) {
+					new Notice(`Couldn't send: ${e instanceof Error ? e.message : String(e)}`, 12000);
+				} finally {
+					this.renderBody();
+				}
+			});
+
+			const remove = actions.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-tiny fp-btn-danger-text", text: "Delete" });
+			remove.addEventListener("click", async () => {
+				settings.reportSchedules = (settings.reportSchedules ?? []).filter((s) => s.id !== schedule.id);
+				await this.plugin.saveSettings();
+				new Notice(`Schedule "${schedule.name}" deleted.`);
+				this.renderBody();
+			});
+
+			// The status line. Without this, a schedule whose API key was revoked in March looks
+			// identical to one that has been working perfectly all year.
+			const status = card.createDiv({ cls: "fp-schedule-status" });
+			const next = nextDueAt(schedule.cadence);
+			if (!schedule.enabled) {
+				status.createDiv({ cls: "fp-schedule-status-line", text: "Paused — nothing will be sent." });
+			} else if (isDue(schedule)) {
+				status.createDiv({
+					cls: "fp-schedule-status-line is-due",
+					text: `Due now for ${completedPeriod(schedule.cadence).label} — it will go out on the next launch, or press Send now.`,
+				});
+			} else {
+				status.createDiv({
+					cls: "fp-schedule-status-line",
+					text: `Next report covers ${completedPeriod(schedule.cadence, next).label}, once ${next.toLocaleDateString()} has passed.`,
+				});
+			}
+			if (schedule.lastRun) {
+				const run = schedule.lastRun;
+				status.createDiv({
+					cls: "fp-schedule-status-line " + (run.ok ? "is-ok" : "is-bad"),
+					text: `Last run ${new Date(run.at).toLocaleString()} for ${run.periodKey} — ${run.detail}`,
+				});
+			} else {
+				status.createDiv({ cls: "fp-schedule-status-line", text: "Never run yet." });
+			}
+		}
+
+		// ---- credentials -----------------------------------------------------
+		const emailGroup = this.group(content, {
+			icon: "mail",
+			title: "Email (Resend)",
+			subtitle: "Delivery over the Resend HTTP API.",
+			chip: settings.delivery.email?.apiKey ? { text: "key set", tone: "ok" } : { text: "not set up", tone: "pending" },
+			collapsibleId: "delivery-email",
+			defaultExpanded: !settings.delivery.email?.apiKey,
+		});
+		this.note(
+			emailGroup.content,
+			"Resend needs a free account and a verified sender domain. The API key is stored in this vault's plugin data.json in plain text, exactly like the Claude key — anyone with the vault can read it."
+		);
+		new Setting(emailGroup.content)
+			.setName("API key")
+			.setDesc("From resend.com → API Keys. Sending permission is enough.")
+			.addText((t) => {
+				t.inputEl.type = "password";
+				t.setPlaceholder("re_...")
+					.setValue(settings.delivery?.email?.apiKey ?? "")
+					.onChange(async (value) => {
+						settings.delivery!.email = { ...settings.delivery!.email, apiKey: value.trim() };
+						await this.plugin.saveSettings();
+					});
+			});
+		new Setting(emailGroup.content)
+			.setName("From address")
+			.setDesc('Must be on a domain verified with Resend, e.g. "Finance <reports@yourdomain.com>".')
+			.addText((t) =>
+				t
+					.setPlaceholder("Finance <reports@yourdomain.com>")
+					.setValue(settings.delivery?.email?.from ?? "")
+					.onChange(async (value) => {
+						settings.delivery!.email = { ...settings.delivery!.email, from: value.trim() };
+						await this.plugin.saveSettings();
+					})
+			);
+		// Lives with the email credentials rather than down in the test-report panel: it is a property
+		// of this channel, and both tests need it.
+		new Setting(emailGroup.content)
+			.setName("Test recipient")
+			.setDesc("Where the two test buttons send. Remembered, so it isn't retyped every attempt.")
+			.addText((t) =>
+				t
+					.setPlaceholder("you@example.com")
+					.setValue(settings.delivery?.email?.testRecipient ?? "")
+					.onChange(async (value) => {
+						settings.delivery!.email = { ...settings.delivery!.email, testRecipient: value.trim() };
+						await this.plugin.saveSettings();
+					})
+			);
+		// The counterpart to Telegram's ping, which email was missing. Worth having separately from the
+		// full report send: a rejected key or an unverified sender domain are the two things that go
+		// wrong first, and finding them shouldn't cost a PDF render and a multi-megabyte attachment.
+		new Setting(emailGroup.content)
+			.setName("Test the connection")
+			.setDesc("Sends a short email with no attachment. Proves the key, the sender domain and the address — and nothing else.")
+			.addButton((b) =>
+				b.setButtonText("Send test").onClick(async () => {
+					const to = (this.plugin.settings.delivery?.email?.testRecipient ?? "").trim();
+					if (!to) {
+						new Notice("Add a test recipient above first.");
+						return;
+					}
+					b.setButtonText("Sending…").setDisabled(true);
+					const result = await sendEmail(this.plugin.settings.delivery?.email ?? {}, {
+						to: [to],
+						subject: "Manage My Finance — connection test",
+						html: "<p>Manage My Finance is connected. Scheduled reports will arrive at this address.</p>",
+						attachments: [],
+					});
+					new Notice(result.ok ? `Email connected — sent to ${to}.` : `Email test failed: ${result.detail}`, result.ok ? 6000 : 14000);
+					b.setButtonText("Send test").setDisabled(false);
+				})
+			);
+		const tgGroup = this.group(content, {
+			icon: "send",
+			title: "Telegram",
+			subtitle: "Delivery to a chat via your own bot.",
+			chip: settings.delivery.telegram?.botToken ? { text: "bot set", tone: "ok" } : { text: "not set up", tone: "pending" },
+			collapsibleId: "delivery-telegram",
+			defaultExpanded: !settings.delivery.telegram?.botToken,
+		});
+		this.note(
+			tgGroup.content,
+			"Create a bot by messaging @BotFather on Telegram; it gives you a token. Then send your new bot any message and open https://api.telegram.org/bot<TOKEN>/getUpdates in a browser to find your chat id. Both are stored in plain text in this vault's data.json."
+		);
+		new Setting(tgGroup.content)
+			.setName("Bot token")
+			.setDesc("From @BotFather.")
+			.addText((t) => {
+				t.inputEl.type = "password";
+				t.setPlaceholder("123456:ABC-DEF...")
+					.setValue(settings.delivery?.telegram?.botToken ?? "")
+					.onChange(async (value) => {
+						settings.delivery!.telegram = { ...settings.delivery!.telegram, botToken: value.trim() };
+						await this.plugin.saveSettings();
+					});
+			});
+		new Setting(tgGroup.content)
+			.setName("Chat id")
+			.setDesc("Your own user id for a direct message, or a negative number for a group.")
+			.addText((t) =>
+				t
+					.setPlaceholder("123456789")
+					.setValue(settings.delivery?.telegram?.chatId ?? "")
+					.onChange(async (value) => {
+						settings.delivery!.telegram = { ...settings.delivery!.telegram, chatId: value.trim() };
+						await this.plugin.saveSettings();
+					})
+			);
+		new Setting(tgGroup.content)
+			.setName("Test the connection")
+			.setDesc("Sends a short text message to the chat above. Proves the token and chat id, and nothing else.")
+			.addButton((b) =>
+				b.setButtonText("Send test").onClick(async () => {
+					b.setButtonText("Sending…").setDisabled(true);
+					const result = await sendTelegram(settings.delivery?.telegram ?? {}, {
+						text: "Manage My Finance is connected. Scheduled reports will arrive here.",
+						attachments: [],
+					});
+					new Notice(result.ok ? "Telegram connected." : `Telegram test failed: ${result.detail}`, result.ok ? 6000 : 12000);
+					b.setButtonText("Send test").setDisabled(false);
+				})
+			);
+
+		this.renderTestDelivery(content);
+	}
+
+	/**
+	 * One place to send a real report on demand, to either channel, at a size you choose.
+	 *
+	 * Shared rather than a button per channel: the two pickers are the same question both times, and
+	 * the thing being tested — build, render, attach, transmit — is identical up to the last step.
+	 */
+	private renderTestDelivery(content: HTMLElement): void {
+		const settings = this.plugin.settings;
+		settings.delivery ??= {};
+		const test = (settings.delivery.test ??= {});
+		const cadence: Exclude<Cadence, "weekly"> = test.cadence ?? "monthly";
+		const detail: ReportDetail = test.detail ?? "summary";
+
+		const group = this.group(content, {
+			icon: "flask-conical",
+			title: "Send a test report",
+			subtitle: "Runs the whole pipeline — report, PDF, attachment, transport — right now.",
+			collapsibleId: "delivery-test",
+			defaultExpanded: true,
+		});
+		this.note(
+			group.content,
+			"Uses a period that is still in progress, so the numbers are ones you'll recognise. Nothing about your schedules is touched — no period is consumed, no run is recorded."
+		);
+
+		const period = currentPeriod(cadence);
+		new Setting(group.content)
+			.setName("Period")
+			.setDesc(`Currently ${period.label} — ${period.from} to ${period.to}.`)
+			.addDropdown((d) => {
+				d.addOption("monthly", "This month");
+				d.addOption("quarterly", "This quarter");
+				d.addOption("yearly", "This year");
+				d.setValue(cadence).onChange(async (value) => {
+					settings.delivery!.test = { ...settings.delivery!.test, cadence: value as Exclude<Cadence, "weekly"> };
+					await this.plugin.saveSettings();
+					this.renderBody();
+				});
+			});
+
+		new Setting(group.content)
+			.setName("Detail")
+			.setDesc(DETAIL_HINT[detail])
+			.addDropdown((d) => {
+				(["summary", "standard", "full"] as ReportDetail[]).forEach((value) => d.addOption(value, DETAIL_LABEL[value]));
+				d.setValue(detail).onChange(async (value) => {
+					settings.delivery!.test = { ...settings.delivery!.test, detail: value as ReportDetail };
+					await this.plugin.saveSettings();
+					this.renderBody();
+				});
+			});
+
+		const to = (settings.delivery.email?.testRecipient ?? "").trim();
+		const emailReady = !!settings.delivery.email?.apiKey && !!settings.delivery.email?.from && !!to;
+		new Setting(group.content)
+			.setName("Send to email")
+			.setDesc(emailReady ? `Goes to ${to}.` : "Needs a Resend API key, a sender address and a test recipient — all above.")
+			.addButton((b) => {
+				b.setButtonText("Send").setDisabled(!emailReady);
+				b.onClick(async () => {
+					b.setButtonText("Sending…").setDisabled(true);
+					await this.runTestReport({ email: [to] }, cadence, detail);
+					b.setButtonText("Send").setDisabled(false);
+				});
+			});
+
+		const telegramReady = !!settings.delivery.telegram?.botToken && !!settings.delivery.telegram?.chatId;
+		new Setting(group.content)
+			.setName("Send to Telegram")
+			.setDesc(telegramReady ? "Goes to the chat configured above." : "Add a bot token and chat id above first.")
+			.addButton((b) => {
+				b.setButtonText("Send").setDisabled(!telegramReady);
+				b.onClick(async () => {
+					b.setButtonText("Sending…").setDisabled(true);
+					await this.runTestReport({ telegram: true }, cadence, detail);
+					b.setButtonText("Send").setDisabled(false);
+				});
+			});
+	}
+
+	/**
+	 * Runs the full delivery pipeline once, now, and reports exactly what happened.
+	 *
+	 * Goes through the same deliverReport() a schedule does rather than a simplified version, because
+	 * the point of a test button is to fail in the same places the real thing would — an unverified
+	 * sender domain, a wrong chat id, an Electron render that doesn't work on this machine. A test
+	 * that takes a shortcut past those is a test that passes and tells you nothing.
+	 */
+	private async runTestReport(
+		channels: { email?: string[]; telegram?: boolean },
+		cadence: Exclude<Cadence, "weekly">,
+		detail: ReportDetail
+	): Promise<void> {
+		try {
+			const outcome = await sendTestReport(this.plugin, channels, { cadence, detail });
+			const rows = outcome.result.count;
+			new Notice(
+				`${outcome.ok ? "Sent" : "Failed"} — ${outcome.period.label}, ${rows} transaction${rows === 1 ? "" : "s"}.\n${describeOutcome(outcome)}`,
+				outcome.ok ? 10000 : 15000
+			);
+			// The outcome is worth keeping visible: a schedule list that shows every real run and
+			// nothing about the test you just ran makes the test the one result you have to remember.
+			if (!outcome.ok) console.error("[Manage My Finance] test report failed", outcome);
+		} catch (e) {
+			new Notice(`Couldn't send the test report: ${e instanceof Error ? e.message : String(e)}`, 15000);
 		}
 	}
 
@@ -864,7 +1268,27 @@ export class FinanceSettingTab extends PluginSettingTab {
 			});
 		}
 
-		// 6 — delete
+		// 6 — kind. Only offered on primaries: a budget's direction is a property of the whole
+		// envelope, and a subcategory that disagreed with its parent would make the rollup nonsense.
+		// Income categories read their budget as a target to reach rather than a ceiling to stay under.
+		if (!isSub) {
+			const kindBtn = row.createEl("button", { cls: "fp-cat-kind" + (cat.kind === "income" ? " is-income" : "") });
+			icon(kindBtn, cat.kind === "income" ? "trending-up" : "trending-down");
+			kindBtn.setAttribute(
+				"title",
+				cat.kind === "income"
+					? "Income category — its budget is a target to reach. Click to make it an expense category."
+					: "Expense category — its budget is a limit to stay under. Click to make it an income category."
+			);
+			kindBtn.addEventListener("click", async () => {
+				cat.kind = cat.kind === "income" ? undefined : "income";
+				await store.saveCategories();
+				this.plugin.refreshViews();
+				this.renderBody();
+			});
+		}
+
+		// 7 — delete
 		const del = row.createEl("button", { cls: "fp-cat-delete", attr: { "aria-label": `Delete ${cat.name}` } });
 		icon(del, "trash-2");
 		del.setAttribute("title", "Delete");
@@ -875,7 +1299,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 			}).open()
 		);
 
-		// 7 — subcategory count
+		// 8 — subcategory count
 		const count = row.createDiv({ cls: "fp-cat-cell fp-cat-count" });
 		if (childCount > 0) count.createSpan({ cls: "fp-chip", text: String(childCount) });
 	}
@@ -989,7 +1413,93 @@ export class FinanceSettingTab extends PluginSettingTab {
 		});
 	}
 
+	/** Budget warnings, renewal reminders, and writing reports into the vault. */
+	private renderNotificationsAndReports(content: HTMLElement): void {
+		const settings = this.plugin.settings;
+
+		const alerts = this.group(content, {
+			icon: "bell",
+			title: "Alerts",
+			subtitle: "What this plugin will interrupt you about, and when.",
+			chip: settings.budgetAlerts === false ? { text: "budget alerts off", tone: "pending" } : { text: "on", tone: "ok" },
+		});
+
+		new Setting(alerts.content)
+			.setName("Warn about budgets")
+			.setDesc("One notice when you open the vault, listing the categories closest to (or past) their limit this month.")
+			.addToggle((t) =>
+				t.setValue(settings.budgetAlerts !== false).onChange(async (value) => {
+					settings.budgetAlerts = value;
+					await this.plugin.saveSettings();
+					this.renderBody();
+				})
+			);
+
+		new Setting(alerts.content)
+			.setName("Warn at")
+			.setDesc("How much of a budget has to be spent before it's worth mentioning. 0.9 means 90%.")
+			.addText((t) =>
+				t.setValue(String(settings.budgetAlertThreshold ?? 0.9)).onChange(async (v) => {
+					const n = parseMoney(v);
+					if (n !== undefined && n > 0 && n <= 2) {
+						settings.budgetAlertThreshold = n;
+						await this.plugin.saveSettings();
+					}
+				})
+			);
+
+		new Setting(alerts.content)
+			.setName("Remind about renewals")
+			.setDesc("Notifies about subscriptions renewing in the next few days — the whole point of tracking a due date.")
+			.addToggle((t) =>
+				t.setValue(settings.subscriptionReminders !== false).onChange(async (value) => {
+					settings.subscriptionReminders = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(alerts.content)
+			.setName("Days ahead")
+			.setDesc("How far in advance a renewal reminder fires.")
+			.addText((t) =>
+				t.setValue(String(settings.subscriptionReminderDays ?? 3)).onChange(async (v) => {
+					const n = parseMoney(v);
+					if (n !== undefined && n >= 0) {
+						settings.subscriptionReminderDays = n;
+						await this.plugin.saveSettings();
+					}
+				})
+			);
+
+		const reports = this.group(content, {
+			icon: "file-text",
+			title: "Reports",
+			subtitle: "Write your figures into the vault as ordinary notes.",
+		});
+
+		new Setting(reports.content)
+			.setName("This month")
+			.setDesc("Income, expenses, spending by category and budget performance, with frontmatter Dataview can query.")
+			.addButton((b) => b.setButtonText("Write it").setCta().onClick(() => void this.plugin.writeMonthlyReport()));
+
+		new Setting(reports.content)
+			.setName("This year")
+			.setDesc("The same figures for the year, month by month, plus planned-vs-actual for every category.")
+			.addButton((b) => b.setButtonText("Write it").onClick(() => void this.plugin.writeYearlyReport()));
+
+		new Setting(reports.content)
+			.setName("Net worth")
+			.setDesc("Current net worth, the year-by-year walk behind it, and every account's balance.")
+			.addButton((b) => b.setButtonText("Write it").onClick(() => void this.plugin.writeNetWorthReport()));
+
+		this.note(
+			reports.content,
+			"Reports are written to the reports/ folder inside this portfolio's data folder, one note per period, overwritten on regeneration. To embed live figures in a note of your own instead, use a ```finance code block — see the README."
+		);
+	}
+
 	private renderProjections(content: HTMLElement): void {
+		this.renderNotificationsAndReports(content);
 		const fi = this.group(content, {
 			icon: "trending-up",
 			title: "FI projections",
@@ -1036,6 +1546,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 	}
 
 	private renderCurrency(content: HTMLElement): void {
+		this.renderBaseCurrency(content);
 		const rates = this.plugin.settings.exchangeRates ?? {};
 		const setCount = Object.keys(rates).filter((code) => CURRENCIES.includes(code) && rates[code] && rates[code] !== 1).length;
 		const rateGroup = this.group(content, {
@@ -1108,6 +1619,57 @@ export class FinanceSettingTab extends PluginSettingTab {
 		});
 	}
 
+	/**
+	 * Which currency every total is expressed in.
+	 *
+	 * Until this existed, EUR wasn't a setting so much as an assumption baked through the whole app —
+	 * and worse, transactions in other currencies were summed into euro totals unconverted, as if a
+	 * dollar were a euro. Both halves are fixed together: this picks the currency you read everything
+	 * in, and the rate table below converts everything else into it.
+	 */
+	private renderBaseCurrency(content: HTMLElement): void {
+		const settings = this.plugin.settings;
+		const current = settings.baseCurrency ?? BASE_CURRENCY;
+		const foreign = new Set(
+			this.plugin.store.transactions.map((t) => (t.currency || current).toUpperCase()).filter((code) => code !== current)
+		);
+
+		const group = this.group(content, {
+			icon: "globe",
+			title: "Base currency",
+			subtitle: "The currency net worth, budgets and every total are shown in.",
+			chip: { text: current, tone: "ok" },
+		});
+
+		new Setting(group.content)
+			.setName("Base currency")
+			.setDesc("Amounts in any other currency are converted into this one using the rates below.")
+			.addDropdown((d) => {
+				CURRENCIES.forEach((code) => d.addOption(code, code));
+				d.setValue(current).onChange(async (value) => {
+					settings.baseCurrency = value;
+					await this.plugin.saveSettings();
+					this.plugin.refreshViews();
+					this.renderBody();
+				});
+			});
+
+		if (foreign.size > 0) {
+			const missing = Array.from(foreign).filter((code) => {
+				const rate = settings.exchangeRates?.[code];
+				return !(typeof rate === "number" && rate > 0);
+			});
+			this.note(
+				group.content,
+				missing.length > 0
+					? `Your ledger holds transactions in ${Array.from(foreign).join(", ")}. No rate is set for ${missing.join(
+							", "
+					  )}, so those amounts are currently counted one-for-one — set a rate below to convert them properly.`
+					: `Your ledger holds transactions in ${Array.from(foreign).join(", ")}, all of which have a rate set.`
+			);
+		}
+	}
+
 	private renderImport(content: HTMLElement): void {
 		const imports = this.group(content, {
 			icon: "download",
@@ -1125,7 +1687,60 @@ export class FinanceSettingTab extends PluginSettingTab {
 			);
 		this.note(
 			imports.content,
-			"ING and Trade Republic exports are recognised automatically. Anything else gets a column-mapping step with auto-guessed defaults, so it imports without needing a dedicated parser. Rows already in the ledger are skipped, so re-importing an overlapping export is safe."
+			"ING, Trade Republic, Revolut, bunq and N26 exports are recognised automatically, as are CAMT.053, MT940, OFX/QFX and QIF statement files. Anything else gets a column-mapping step with auto-guessed defaults, so it imports without needing a dedicated parser. Rows already in the ledger are skipped, so re-importing an overlapping export is safe."
+		);
+
+		this.renderImportHistory(content);
+	}
+
+	/**
+	 * Every import run, newest first, each undoable.
+	 *
+	 * Importing the wrong file used to be permanent: the rows landed in the ledger indistinguishable
+	 * from everything else, and unpicking them meant finding them by hand. Each run now carries a
+	 * batch id, which makes "undo that" a single, exact operation.
+	 */
+	private renderImportHistory(content: HTMLElement): void {
+		const store = this.plugin.store;
+		const batches = [...store.batches].sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+
+		const group = this.group(content, {
+			icon: "history",
+			title: "Import history",
+			subtitle: "Every import, and a way to undo one.",
+			chip: batches.length > 0 ? { text: `${batches.length} run${batches.length === 1 ? "" : "s"}`, tone: "ok" } : { text: "none yet", tone: "pending" },
+			collapsibleId: "import-history",
+			defaultExpanded: batches.length > 0,
+		});
+
+		if (batches.length === 0) {
+			this.note(group.content, "Imports run before this version aren't listed — batches are only recorded from now on.");
+			return;
+		}
+
+		batches.forEach((batch) => {
+			const remaining = store.transactionsInBatch(batch.id).length;
+			const when = batch.importedAt.slice(0, 16).replace("T", " ");
+			const setting = new Setting(group.content)
+				.setName(batch.fileName || batch.format || batch.source)
+				.setDesc(`${when} · ${batch.count} imported · ${remaining} still in the ledger`);
+
+			setting.addButton((b) =>
+				b
+					.setButtonText(remaining === 0 ? "Forget" : "Undo import")
+					.setWarning()
+					.onClick(async () => {
+						const removed = await store.undoImportBatch(batch.id);
+						new Notice(removed > 0 ? `Removed ${removed} transaction${removed === 1 ? "" : "s"} from that import` : "That import had nothing left to remove");
+						this.plugin.refreshViews();
+						this.renderBody();
+					})
+			);
+		});
+
+		this.note(
+			group.content,
+			"Undoing an import deletes every transaction it created — including any you've since edited or categorized. Re-importing the same file brings them back, minus those edits."
 		);
 	}
 
