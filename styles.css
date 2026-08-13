@@ -39,46 +39,46 @@
 .fp-btn:active {
 	transform: translateY(0);
 }
-.fp-btn-primary {
+.fp-btn.fp-btn-primary {
 	background: var(--interactive-accent);
 	color: var(--text-on-accent);
 	box-shadow: 0 2px 8px color-mix(in srgb, var(--interactive-accent) 35%, transparent);
 }
-.fp-btn-primary:hover {
+.fp-btn.fp-btn-primary:hover {
 	background: var(--interactive-accent-hover);
 }
-.fp-btn-secondary {
+.fp-btn.fp-btn-secondary {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 	border-color: var(--background-modifier-border);
 }
-.fp-btn-ghost {
+.fp-btn.fp-btn-ghost {
 	background: transparent;
 	color: var(--text-muted);
 }
-.fp-btn-ghost:hover {
+.fp-btn.fp-btn-ghost:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
-.fp-btn-danger {
+.fp-btn.fp-btn-danger {
 	background: var(--fp-bad);
 	color: var(--text-on-accent);
 	box-shadow: 0 2px 8px color-mix(in srgb, var(--fp-bad) 35%, transparent);
 }
-.fp-btn-danger:hover {
+.fp-btn.fp-btn-danger:hover {
 	background: color-mix(in srgb, var(--fp-bad) 85%, black);
 }
-.fp-btn-chip {
+.fp-btn.fp-btn-chip {
 	background: var(--background-secondary);
 	color: var(--text-normal);
 	border-color: var(--background-modifier-border);
 	border-radius: 999px;
 	padding: 5px 12px;
 }
-.fp-btn-chip:hover {
+.fp-btn.fp-btn-chip:hover {
 	background: var(--background-modifier-hover);
 }
-.fp-btn-icon {
+.fp-btn.fp-btn-icon {
 	padding: 4px 6px;
 }
 
@@ -2379,7 +2379,10 @@
 	border-bottom: 1px solid var(--background-modifier-border);
 }
 .fp-rule-pattern-input {
-	flex: 1 1 160px;
+	/* .fp-rule-pattern-wrap is a COLUMN, so a flex-basis here sizes the field's height, not its width —
+	   `1 1 160px` was written for a row and turned the search box into a 160px-tall slab. Natural
+	   height; the field already spans the wrap's width by stretching. */
+	flex: 0 0 auto;
 	min-width: 140px;
 	padding: 7px 10px;
 	border-radius: var(--fp-radius-sm);
@@ -4054,7 +4057,7 @@
 	font-size: var(--font-ui-smaller);
 }
 
-.fp-review-actions .fp-btn-icon {
+.fp-review-actions .fp-btn.fp-btn-icon {
 	padding: 3px;
 }
 .fp-review-more {
@@ -4078,7 +4081,7 @@
 	}
 }
 
-.fp-btn-icon.is-active {
+.fp-btn.fp-btn-icon.is-active {
 	background: var(--fp-neutral-bg);
 	color: var(--fp-neutral);
 }
@@ -4344,7 +4347,7 @@
 	color: var(--text-faint);
 	font-variant-numeric: tabular-nums;
 }
-.fp-btn-tiny {
+.fp-btn.fp-btn-tiny {
 	padding: 2px 8px;
 	font-size: var(--font-ui-smaller);
 }
@@ -4392,4 +4395,385 @@
 	font-size: var(--font-ui-smaller);
 	color: var(--text-faint);
 	font-variant-numeric: tabular-nums;
+}
+
+/* ===========================================================================
+   Phase 2 — manual entry, transfers, balances, subscriptions ↔ ledger,
+   in-note blocks, and the sidebar's tip deck.
+   =========================================================================== */
+
+/* --- Sidebar: tip deck ---------------------------------------------------- */
+
+/* The dismiss × sits at the end of the tip's own header row, so it reads as belonging to this tip
+   rather than to the sidebar. Quiet until hovered — it retires a tip permanently. */
+.fp-nav-tip .fp-nav-tip-dismiss {
+	margin-left: auto;
+	background: none;
+	border: none;
+	padding: 2px;
+	cursor: pointer;
+	color: var(--text-faint);
+	opacity: 0.6;
+	display: flex;
+	align-items: center;
+	border-radius: var(--fp-radius-sm, 4px);
+}
+.fp-nav-tip .fp-nav-tip-dismiss:hover {
+	opacity: 1;
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.fp-nav-tip-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.fp-nav-tip-pager {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+}
+.fp-nav-tip-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+	min-width: 32px;
+	text-align: center;
+}
+
+/* --- Sidebar: the eye button --------------------------------------------- */
+
+.fp-nav-brand-actions {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+}
+
+/* Small and unobtrusive, but always in the same place: you reach for this when someone walks up to
+   your desk, which is not a moment for hunting through a settings page. */
+.fp-nav-privacy {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: var(--fp-radius-sm, 4px);
+	color: var(--text-faint);
+	cursor: pointer;
+}
+.fp-nav-privacy:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.fp-nav-privacy.is-on {
+	color: var(--fp-warn, var(--text-accent));
+	background: var(--background-modifier-hover);
+}
+
+/* --- Rules: search-as-you-type against your own ledger -------------------- */
+
+.fp-rule-pattern-wrap {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	/* Always its own full row in the wrapping .fp-rule-add-row. Sized to content it claimed more width
+	   whenever the matching counterparties were wide, which bumped the Regex/Category/Add controls onto
+	   a second line and moved the modal by ~44px mid-typing. */
+	flex: 1 1 100%;
+}
+
+.fp-rule-match-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	/* Holds one line even while empty. The count is only written once there is a query, so without
+	   this the line has zero height on an empty box and everything below it shifts by ~16px the
+	   moment you type the first character. */
+	min-height: 1lh;
+}
+.fp-rule-match-count.is-empty {
+	color: var(--fp-bad, var(--text-error));
+}
+
+.fp-rule-suggestions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	align-content: flex-start;
+	gap: 5px;
+	/* A fixed height, deliberately not min-height. The chip list re-wraps to one, two or three rows
+	   depending on how wide the matching counterparties happen to be, and collapses to nothing when a
+	   query matches none — which resized the whole modal by ~160px on almost every keystroke. Reserve
+	   the room once and let the overflow scroll, so typing never moves anything below it. */
+	height: 86px;
+	overflow-y: auto;
+}
+.fp-rule-suggestions-label {
+	width: 100%;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+/* Each suggestion is a real counterparty out of the ledger, with how many rows it covers. */
+.fp-rule-suggestion {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	padding: 3px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	cursor: pointer;
+}
+.fp-rule-suggestion:hover {
+	border-color: var(--interactive-accent);
+}
+.fp-rule-suggestion.is-active {
+	border-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+.fp-rule-suggestion-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 220px;
+}
+.fp-rule-suggestion-count {
+	font-variant-numeric: tabular-nums;
+	color: var(--text-faint);
+}
+
+/* --- Linking rows: subscriptions, transfers ------------------------------ */
+
+.fp-linked-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-md, 8px);
+	background: var(--background-secondary);
+	margin-bottom: 12px;
+}
+.fp-linked-icon {
+	color: var(--fp-neutral);
+	flex-shrink: 0;
+}
+.fp-linked-row button {
+	margin-left: auto;
+}
+
+.fp-link-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 320px;
+	overflow-y: auto;
+	margin: 10px 0;
+}
+.fp-link-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px;
+	border-radius: var(--fp-radius-md, 8px);
+	border: 1px solid var(--background-modifier-border);
+}
+.fp-link-row:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-link-row-info {
+	min-width: 0;
+	flex: 1;
+}
+.fp-link-row-name {
+	font-weight: 600;
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-link-row-meta {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* A pair the transfer matcher proposed but you unticked — still listed, visibly not counted. */
+.fp-row-muted {
+	opacity: 0.45;
+}
+.fp-transfer-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	max-width: 260px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* --- Subscriptions: what they've actually cost --------------------------- */
+
+.fp-sub-card-paid {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 6px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* --- Budgets: tabs, rollover, one-off pots ------------------------------- */
+
+.fp-tab-icon {
+	margin-right: 6px;
+	color: currentColor;
+}
+
+.fp-budget-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+}
+
+.fp-budget-cat-meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 2px;
+}
+.fp-budget-cat-meta .fp-btn.is-active {
+	color: var(--interactive-accent);
+}
+
+.fp-category-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 8px 0 14px;
+}
+
+/* The income/expense switch on a category row — direction changes what its budget *means*. */
+.fp-cat-kind {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: none;
+	border: none;
+	padding: 4px;
+	cursor: pointer;
+	color: var(--text-faint);
+	border-radius: var(--fp-radius-sm, 4px);
+}
+.fp-cat-kind:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.fp-cat-kind.is-income {
+	color: var(--fp-good, var(--text-success));
+}
+
+/* --- Clickable chart rows ------------------------------------------------ */
+
+/* A bar that leads somewhere says so — "how much" always raises "on what?". */
+.fp-barchart-row.is-clickable {
+	cursor: pointer;
+	border-radius: var(--fp-radius-sm, 4px);
+}
+.fp-barchart-row.is-clickable:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-barchart-row.is-clickable:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+/* --- Confirm dialogs ----------------------------------------------------- */
+
+.fp-confirm-modal {
+	max-width: 460px;
+}
+
+/* --- ```finance code blocks in notes ------------------------------------- */
+
+/* Rendered inside somebody's own note, so it stays visually quieter than the workspace: a bordered
+   card that belongs to the note rather than a slab of app UI dropped into the middle of it. */
+.fp-block {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-lg, 12px);
+	background: var(--background-primary);
+	overflow: hidden;
+	margin: 12px 0;
+}
+.fp-block-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.fp-block-icon {
+	color: var(--fp-neutral);
+}
+.fp-block-title {
+	font-weight: 700;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+.fp-block-sub {
+	margin-left: auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+.fp-block-body {
+	padding: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-block-empty {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.fp-block-error {
+	color: var(--fp-bad, var(--text-error));
+	font-size: var(--font-ui-smaller);
+}
+.fp-block-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 10px;
+}
+.fp-block-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.fp-block-list-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	font-size: var(--font-ui-smaller);
+}
+.fp-block-list-name {
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-block-list-meta {
+	color: var(--text-faint);
+	white-space: nowrap;
 }

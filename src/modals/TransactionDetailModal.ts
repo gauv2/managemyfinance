@@ -2,8 +2,11 @@ import { App, FuzzySuggestModal, Modal, Notice, TFile } from "obsidian";
 import { categoryChain } from "../categories";
 import { formatMoney } from "../money";
 import type FinancePlugin from "../main";
+import { transferSiblings } from "../transfers";
 import type { ReviewStatus, Transaction } from "../types";
 import { badge, categoryChainChip, icon, renderCategoryPicker } from "../ui/dom";
+import { LinkSubscriptionModal } from "./SubscriptionLinkModal";
+import { TransactionEditModal } from "./TransactionEditModal";
 
 function formatAmount(tx: Transaction): string {
 	return formatMoney(tx.amount, { currency: tx.currency || "EUR" });
@@ -37,7 +40,12 @@ class VaultFileSuggestModal extends FuzzySuggestModal<TFile> {
 	}
 }
 
-/** Read-only breakdown of every field on a transaction, plus a quick category fix for uncategorized rows. */
+/**
+ * Everything known about one transaction, and everywhere it can be connected from: its category, its
+ * review state, an attachment, the subscription it pays for, and the other leg of a transfer. Editing
+ * and deleting live here too — this is where you land when a row looks wrong, so it's where the fix
+ * has to be.
+ */
 export class TransactionDetailModal extends Modal {
 	constructor(app: App, private plugin: FinancePlugin, private tx: Transaction) {
 		super(app);
@@ -100,6 +108,14 @@ export class TransactionDetailModal extends Modal {
 		const attachValue = attachRow.createDiv({ cls: "fp-detail-value" });
 		this.renderAttachment(attachValue);
 
+		const subRow = body.createDiv({ cls: "fp-detail-row" });
+		subRow.createDiv({ cls: "fp-detail-label", text: "Subscription" });
+		this.renderSubscription(subRow.createDiv({ cls: "fp-detail-value" }));
+
+		const transferRow = body.createDiv({ cls: "fp-detail-row" });
+		transferRow.createDiv({ cls: "fp-detail-label", text: "Transfer" });
+		this.renderTransfer(transferRow.createDiv({ cls: "fp-detail-value" }));
+
 		if (this.tx.ticker || this.tx.assetClass || this.tx.shares !== undefined) {
 			body.createEl("h4", { text: "Investment details" });
 			if (this.tx.ticker) row(body, "Ticker / ISIN", this.tx.ticker);
@@ -120,11 +136,78 @@ export class TransactionDetailModal extends Modal {
 		}
 
 		const footer = c.createDiv({ cls: "fp-wizard-footer" });
+		const left = footer.createDiv({ cls: "fp-wizard-footer-left" });
+		const editBtn = left.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(editBtn, "pencil");
+		editBtn.createSpan({ text: "Edit" });
+		editBtn.addEventListener("click", () => {
+			this.close();
+			new TransactionEditModal(this.app, this.plugin, { transaction: this.tx }).open();
+		});
+
 		const right = footer.createDiv({ cls: "fp-wizard-footer-right" });
 		const closeBtn = right.createEl("button", { cls: "fp-btn fp-btn-primary" });
 		icon(closeBtn, "check");
 		closeBtn.createSpan({ text: "Close" });
 		closeBtn.addEventListener("click", () => this.close());
+	}
+
+	/** The subscription this payment belongs to, if any — and the way to say which one it is. */
+	private renderSubscription(container: HTMLElement): void {
+		container.empty();
+		const store = this.plugin.store;
+		const sub = this.tx.subscriptionId ? store.subscriptions.find((s) => s.id === this.tx.subscriptionId) : undefined;
+
+		if (sub) {
+			badge(container, sub.name, "good");
+		} else {
+			container.createSpan({ cls: "fp-budget-hint-text", text: "Not linked" });
+		}
+
+		const linkBtn = container.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+		icon(linkBtn, sub ? "settings" : "repeat");
+		linkBtn.setAttribute("title", sub ? "Change or remove the subscription link" : "Link this to a subscription, or create one from it");
+		linkBtn.addEventListener("click", () => {
+			new LinkSubscriptionModal(this.app, this.plugin, this.tx, () => this.renderSubscription(container)).open();
+		});
+	}
+
+	/**
+	 * Whether this row is one half of a movement between your own accounts. Linked legs are excluded
+	 * from income and expenses entirely, so being able to see — and undo — the link matters: a wrong
+	 * link quietly removes two real transactions from every total.
+	 */
+	private renderTransfer(container: HTMLElement): void {
+		container.empty();
+		const store = this.plugin.store;
+		const siblings = transferSiblings(store.transactions, this.tx);
+
+		if (!this.tx.transferGroupId) {
+			container.createSpan({ cls: "fp-budget-hint-text", text: "Not part of a transfer" });
+			return;
+		}
+
+		const accountName = (id: string): string => store.accounts.find((a) => a.id === id)?.name ?? id;
+		if (siblings.length === 0) {
+			badge(container, "Linked — other leg missing", "warn");
+		} else {
+			siblings.forEach((sibling) => {
+				badge(container, `${accountName(sibling.accountId)} · ${sibling.date} · ${formatAmount(sibling)}`, "neutral");
+			});
+		}
+
+		const unlinkBtn = container.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+		icon(unlinkBtn, "unlink");
+		unlinkBtn.setAttribute("title", "Not a transfer — count both rows as income/expense again");
+		unlinkBtn.addEventListener("click", async () => {
+			const patches = new Map<string, Partial<Transaction>>([[this.tx.id, { transferGroupId: undefined }]]);
+			siblings.forEach((sibling) => patches.set(sibling.id, { transferGroupId: undefined }));
+			await store.updateTransactions(patches);
+			this.tx.transferGroupId = undefined;
+			new Notice("Transfer link removed");
+			this.plugin.refreshViews();
+			this.renderTransfer(container);
+		});
 	}
 
 	/** The same three-state control the Review page uses, so a transaction opened from anywhere can be

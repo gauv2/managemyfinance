@@ -2,7 +2,7 @@ import { normalizePath, type App } from "obsidian";
 import { toCSV } from "../csv";
 import type FinancePlugin from "../main";
 import type { MerchantMap } from "../import/merchantMemory";
-import type { Account, Card, Category, CategoryRule, Subscription, Transaction } from "../types";
+import type { Account, BalanceSnapshot, Card, Category, CategoryRule, ImportBatch, OneOffBudget, Subscription, Transaction } from "../types";
 
 /**
  * Export/import of a whole portfolio, so the data is recoverable independently of the vault it lives
@@ -12,7 +12,12 @@ import type { Account, Card, Category, CategoryRule, Subscription, Transaction }
  * The format is intentionally boring: one object, every collection under its own key, transactions
  * inline. Version is stamped so a future schema change can migrate rather than guess.
  */
-export const BACKUP_VERSION = 1;
+/**
+ * Bumped to 2 when hand-recorded balances, one-off budgets and import batches became things a
+ * portfolio can hold. A v1 backup still restores — every collection is optional on the way in — so
+ * the bump only stops a v2 backup being read by an older build that would quietly drop them.
+ */
+export const BACKUP_VERSION = 2;
 
 export interface FinanceBackup {
 	version: number;
@@ -28,6 +33,12 @@ export interface FinanceBackup {
 	transactions: Transaction[];
 	/** What the app has learned about merchants — the most expensive thing here to rebuild by hand. */
 	merchants?: MerchantMap;
+	/** Hand-recorded account balances. Irreplaceable: nothing else in the vault knows what your house
+	 *  was worth in 2023, so a backup that dropped these would lose history no import can rebuild. */
+	snapshots?: BalanceSnapshot[];
+	oneOffBudgets?: OneOffBudget[];
+	/** Import runs, so "undo this import" still works against a restored ledger. */
+	batches?: ImportBatch[];
 }
 
 export interface BackupCounts {
@@ -64,6 +75,9 @@ export function buildBackup(plugin: FinancePlugin): FinanceBackup {
 		cards: store.cards,
 		transactions: store.transactions,
 		merchants: store.merchants,
+		snapshots: store.snapshots,
+		oneOffBudgets: store.oneOffBudgets,
+		batches: store.batches,
 	};
 }
 
@@ -113,6 +127,9 @@ export function parseBackup(text: string): FinanceBackup {
 		cards: list<Card>("cards"),
 		transactions: list<Transaction>("transactions"),
 		merchants: obj.merchants && typeof obj.merchants === "object" && !Array.isArray(obj.merchants) ? (obj.merchants as MerchantMap) : {},
+		snapshots: list<BalanceSnapshot>("snapshots"),
+		oneOffBudgets: list<OneOffBudget>("oneOffBudgets"),
+		batches: list<ImportBatch>("batches"),
 	};
 }
 
@@ -121,6 +138,18 @@ export type RestoreMode = "merge" | "replace";
 export interface RestoreResult {
 	added: BackupCounts;
 	skipped: BackupCounts;
+}
+
+/** Adds whatever isn't already present by id, existing entries winning — same rule as everything else. */
+function mergeQuietly<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
+	const seen = new Set(existing.map((x) => x.id));
+	const out = [...existing];
+	for (const item of incoming) {
+		if (!item || typeof item.id !== "string" || seen.has(item.id)) continue;
+		seen.add(item.id);
+		out.push(item);
+	}
+	return out;
 }
 
 function emptyCounts(): BackupCounts {
@@ -152,6 +181,9 @@ export async function applyBackup(plugin: FinancePlugin, backup: FinanceBackup, 
 		store.cards = [...backup.cards];
 		store.transactions = [...backup.transactions];
 		store.merchants = { ...(backup.merchants ?? {}) };
+		store.snapshots = [...(backup.snapshots ?? [])];
+		store.oneOffBudgets = [...(backup.oneOffBudgets ?? [])];
+		store.batches = [...(backup.batches ?? [])];
 		added.accounts = backup.accounts.length;
 		added.categories = backup.categories.length;
 		added.rules = backup.rules.length;
@@ -179,6 +211,11 @@ export async function applyBackup(plugin: FinancePlugin, backup: FinanceBackup, 
 		store.subscriptions = mergeById(store.subscriptions, backup.subscriptions, "subscriptions");
 		store.cards = mergeById(store.cards, backup.cards, "cards");
 		store.transactions = mergeById(store.transactions, backup.transactions, "transactions");
+		// Counted under no key of their own: BackupCounts is the summary shown to the user, and
+		// "3 recorded balances merged" isn't a number anyone is deciding anything on.
+		store.snapshots = mergeQuietly(store.snapshots, backup.snapshots ?? []);
+		store.oneOffBudgets = mergeQuietly(store.oneOffBudgets, backup.oneOffBudgets ?? []);
+		store.batches = mergeQuietly(store.batches, backup.batches ?? []);
 		// Merchant memory merges key-by-key with existing entries winning, same as everything else.
 		store.merchants = { ...(backup.merchants ?? {}), ...store.merchants };
 

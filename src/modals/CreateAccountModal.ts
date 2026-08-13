@@ -1,5 +1,5 @@
 import { App, Modal, Notice } from "obsidian";
-import { ACCOUNT_TYPE_META } from "../constants";
+import { ACCOUNT_TYPE_META, ACCOUNT_TYPE_ORDER } from "../constants";
 import type FinancePlugin from "../main";
 import type { Account, AccountType } from "../types";
 import { icon, moneyInput } from "../ui/dom";
@@ -36,9 +36,15 @@ export class CreateAccountModal extends Modal {
 		const typeRow = form.createDiv({ cls: "fp-form-row" });
 		typeRow.createEl("label", { text: "Type" });
 		const typeSelect = typeRow.createEl("select");
-		(Object.keys(ACCOUNT_TYPE_META) as AccountType[]).forEach((t) => typeSelect.createEl("option", { text: ACCOUNT_TYPE_META[t].label, value: t }));
+		ACCOUNT_TYPE_ORDER.forEach((t) => typeSelect.createEl("option", { text: ACCOUNT_TYPE_META[t].label, value: t }));
 		typeSelect.value = this.type;
-		typeSelect.addEventListener("change", () => (this.type = typeSelect.value as AccountType));
+		// The last four types (property, pension, loan, mortgage) don't behave like the others at all,
+		// so the picker says what each one is rather than leaving you to infer it from a word.
+		const typeHint = typeRow.createDiv({ cls: "fp-form-hint", text: ACCOUNT_TYPE_META[this.type].desc });
+		typeSelect.addEventListener("change", () => {
+			this.type = typeSelect.value as AccountType;
+			typeHint.setText(ACCOUNT_TYPE_META[this.type].desc);
+		});
 
 		const ibanRow = form.createDiv({ cls: "fp-form-row" });
 		ibanRow.createEl("label", { text: "IBAN (optional)" });

@@ -6,7 +6,31 @@ export interface Portfolio {
 	folder: string;
 }
 
-export type AccountType = "debit" | "credit" | "investing" | "saving" | "cash" | "crypto";
+/**
+ * Everything you own or owe that carries a balance. The first six are the accounts money actually
+ * moves through and gets imported into; the last four are the ones that make net worth true rather
+ * than merely bank-shaped — a mortgage you owe, a house you own, a pension you can't spend yet.
+ *
+ * `loan` and `mortgage` are liabilities: their balances count *against* net worth. See LIABILITY_TYPES.
+ */
+export type AccountType =
+	| "debit"
+	| "credit"
+	| "investing"
+	| "saving"
+	| "cash"
+	| "crypto"
+	| "loan"
+	| "mortgage"
+	| "property"
+	| "pension";
+
+/** Account types whose balance is money owed, not money held — netted out rather than added up. */
+export const LIABILITY_TYPES: readonly AccountType[] = ["loan", "mortgage"];
+
+export function isLiabilityType(type: AccountType): boolean {
+	return LIABILITY_TYPES.includes(type);
+}
 
 export interface Account {
 	id: string;
@@ -18,6 +42,49 @@ export interface Account {
 	openingDate?: string;
 	/** IBAN (or other bank account identifier), used to auto-attribute rows from combined multi-account exports. */
 	iban?: string;
+	/** Credit accounts: the agreed limit, so utilization (balance ÷ limit) can be shown. */
+	creditLimit?: number;
+	/** Credit accounts: day of the month the statement closes (1-31). */
+	statementDay?: number;
+	/** Credit accounts: day of the month payment is due (1-31). */
+	paymentDueDay?: number;
+	/** Annual interest rate as a fraction (0.1999 = 19.99% APR) — credit cards and loans. */
+	apr?: number;
+	/** Credit accounts: minimum payment as a fraction of the statement balance (0.02 = 2%). */
+	minPaymentPct?: number;
+}
+
+/**
+ * A balance you recorded by hand at a point in time — the fix for every account whose real worth
+ * isn't derivable from imported transactions: a house, a pension, a savings account you never export,
+ * a brokerage whose market value has drifted far from what you paid for it.
+ *
+ * Net worth uses the latest snapshot on or before the date being asked about, falling back to
+ * opening balance + transactions when there is none. Balances are in the account's own currency.
+ */
+export interface BalanceSnapshot {
+	id: string;
+	accountId: string;
+	/** "YYYY-MM-DD" — the date this balance was true. */
+	date: string;
+	/** The account's balance in its own currency. For a liability, the positive amount still owed. */
+	balance: number;
+	note?: string;
+}
+
+/**
+ * One run of the import wizard. Every transaction it created carries the batch's id, which is what
+ * makes an import undoable — without it, "I just imported the wrong file" has no clean answer.
+ */
+export interface ImportBatch {
+	id: string;
+	/** ISO timestamp of when the import ran. */
+	importedAt: string;
+	source: TransactionSource;
+	/** The file the rows came from, purely so the batch is recognizable in a list weeks later. */
+	fileName?: string;
+	format?: string;
+	count: number;
 }
 
 export interface Category {
@@ -38,6 +105,36 @@ export interface Category {
 	/** Primary categories only. Set once the default secondary categories have been seeded for this
 	 *  category, so deleting them all doesn't cause them to reappear on the next load. */
 	defaultSecondariesSeeded?: boolean;
+	/** "income" flips every budget reading for this category: the number is a target to reach rather
+	 *  than a ceiling to stay under, so 120% of an income budget is good news and 120% of an expense
+	 *  budget is bad. Unset means "expense", which is what almost every category is. */
+	kind?: "expense" | "income";
+	/** Carries whatever a month didn't spend (or overspent) into the next month's available budget,
+	 *  so an envelope you underspend in January is genuinely bigger in February. Off by default —
+	 *  budgets stay simple monthly limits unless you ask for this. */
+	rollover?: boolean;
+	/** A whole-year envelope, keyed by "YYYY" — for the costs that don't divide sensibly into months
+	 *  (annual insurance, road tax, a yearly software renewal). Tracked independently of budgetHistory. */
+	annualBudgets?: Record<string, number>;
+}
+
+/**
+ * A budget that isn't monthly and isn't annual: a named pot for one specific thing over one specific
+ * window — a holiday, a kitchen, a wedding. Kept as its own collection rather than as fields on
+ * Category because a one-off can span categories and must not disturb the monthly envelope it
+ * borrows from.
+ */
+export interface OneOffBudget {
+	id: string;
+	name: string;
+	amount: number;
+	/** "YYYY-MM-DD" bounds, inclusive on both ends. */
+	startDate: string;
+	endDate: string;
+	/** Restricts what counts toward it. Empty/absent means any spending in the window counts. */
+	categoryIds?: string[];
+	notes?: string;
+	archived?: boolean;
 }
 
 export interface CategoryRule {
@@ -74,6 +171,10 @@ export interface Subscription {
 	 *  a yearly-billed domain renewal you think of as "€15/yr", a monthly SaaS you think of as "€20/mo".
 	 *  Unset follows the Subscriptions page's own toggle. Never affects any total, only the wording. */
 	displayCycle?: "monthly" | "yearly";
+	/** Case-insensitive text matched against a transaction's description + counterparty to suggest
+	 *  which ledger rows are payments for this subscription. Set automatically when you link a
+	 *  transaction to a subscription (from that transaction's own merchant text), editable after. */
+	matchPattern?: string;
 }
 
 export type CardType = "debit" | "credit" | "prepaid" | "secured" | "charge";
@@ -108,7 +209,23 @@ export interface Card {
 	notes?: string;
 }
 
-export type TransactionSource = "ing" | "trade-republic" | "generic" | "manual";
+/**
+ * Where a transaction came from. Also the ledger's own filing system: one folder per source, one CSV
+ * per year inside it, so a source is a durable partition of the data rather than a label.
+ * "manual" is the one that isn't an importer — it's a row you typed yourself.
+ */
+export type TransactionSource =
+	| "ing"
+	| "trade-republic"
+	| "generic"
+	| "manual"
+	| "revolut"
+	| "bunq"
+	| "n26"
+	| "camt"
+	| "mt940"
+	| "ofx"
+	| "qif";
 
 /**
  * How far a transaction has got through your own review pass. "new" is the implicit state of anything
@@ -149,4 +266,16 @@ export interface Transaction {
 	/** Free-text note left while reviewing, e.g. why a row was flagged. Separate from `notes`, which
 	 *  describes the transaction itself rather than your handling of it. */
 	reviewNote?: string;
+	/**
+	 * Shared by the two sides of one movement between your own accounts. This is the field that makes
+	 * a transfer *knowable* rather than guessable: with both legs tagged, neither counts as income or
+	 * expense, and net worth stops moving when money merely changes pockets. Set by the transfer
+	 * matcher (src/transfers.ts) or by hand from the transaction detail modal.
+	 */
+	transferGroupId?: string;
+	/** The import run that created this row — see ImportBatch. Absent on manually entered transactions. */
+	importBatchId?: string;
+	/** The subscription this payment is an instance of, once linked. Drives "what have I actually paid
+	 *  for Netflix" and price-increase detection. */
+	subscriptionId?: string;
 }
