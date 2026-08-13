@@ -13,6 +13,7 @@ import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { renderAccountPage } from "./sections/AccountPage";
 import { renderBudgetsSection } from "./sections/BudgetsSection";
 import { renderCardsSection } from "./sections/CardsSection";
+import { renderCompareSection } from "./sections/CompareSection";
 import { renderReportsSection } from "./sections/ReportsSection";
 import { renderReviewSection } from "./sections/ReviewSection";
 import { renderSettingsSection } from "./sections/SettingsSection";
@@ -33,7 +34,7 @@ interface NavTabDef {
 	badgeCount?: number;
 }
 
-const DEFAULT_NAV_ORDER = ["all-accounts", "budgets", "subscriptions", "cards", "review", "reports"];
+const DEFAULT_NAV_ORDER = ["all-accounts", "budgets", "subscriptions", "cards", "review", "reports", "compare"];
 
 function possessive(name: string): string {
 	const trimmed = name.trim();
@@ -370,6 +371,13 @@ export class FinanceView extends ItemView {
 				isActive: activeView === "reports",
 				onClick: () => void this.selectView("reports"),
 			},
+			compare: {
+				id: "compare",
+				label: "Compare",
+				icon: "trending-up",
+				isActive: activeView === "compare",
+				onClick: () => void this.selectView("compare"),
+			},
 		};
 		this.navTabOrder().forEach((id) => this.renderDraggableTab(tabDefs[id]));
 
@@ -541,6 +549,9 @@ export class FinanceView extends ItemView {
 				break;
 			case "reports":
 				renderReportsSection(this.bodyEl, this.plugin);
+				break;
+			case "compare":
+				renderCompareSection(this.bodyEl, this.plugin);
 				break;
 			case "settings":
 				renderSettingsSection(this.bodyEl, this.plugin);

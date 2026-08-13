@@ -21,7 +21,7 @@ import type {
 } from "./types";
 
 /** The workspace pages that aren't scoped to a single account. */
-export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "reports" | "settings";
+export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "reports" | "compare" | "settings";
 
 export interface FinanceSettings {
 	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */

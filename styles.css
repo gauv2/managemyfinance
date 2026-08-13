@@ -5654,3 +5654,144 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+/* --- Compare: years side by side ------------------------------------------ */
+
+/* Controls stack as rows of label + control so the three axes of the page (which years, which
+   accounts, which categories) read top to bottom instead of competing on one line. */
+.fp-compare-controls {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-compare-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.fp-compare-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+
+/* Doubled class: Obsidian core styles bare buttons at (0,1,1), which outranks a single class. */
+.fp-compare-chip.fp-compare-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	cursor: pointer;
+}
+.fp-compare-chip.fp-compare-chip:hover {
+	color: var(--text-normal);
+	border-color: var(--fp-neutral);
+}
+.fp-compare-chip.fp-compare-chip.is-on {
+	background: var(--fp-neutral-bg);
+	border-color: var(--fp-neutral);
+	color: var(--fp-neutral);
+}
+.fp-compare-chip-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	background: var(--fp-chip-dot, var(--fp-neutral));
+	flex-shrink: 0;
+	display: inline-block;
+}
+
+.fp-compare-total-note {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+.fp-compare-total-note .fp-money {
+	font-size: var(--font-ui-medium);
+	font-weight: 700;
+	color: var(--text-normal);
+}
+
+/* Spending up is bad news, so the palette is inverted against the usual green-is-up convention. */
+.fp-compare-delta {
+	font-weight: 700;
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+.fp-compare-delta.is-up {
+	color: var(--fp-bad);
+}
+.fp-compare-delta.is-down {
+	color: var(--fp-good);
+}
+
+.fp-compare-movers {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 18px;
+}
+.fp-compare-mover-col h4 {
+	margin: 0 0 6px;
+	font-size: var(--font-ui-smaller);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-faint);
+}
+.fp-compare-mover {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 3px 0;
+	font-size: var(--font-ui-small);
+}
+.fp-compare-mover-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-compare-mover-abs {
+	font-variant-numeric: tabular-nums;
+	color: var(--text-normal);
+}
+
+.fp-compare-table td:first-child {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.fp-compare-row-icon {
+	color: var(--text-faint);
+	flex-shrink: 0;
+}
+.fp-compare-row-clickable {
+	cursor: pointer;
+}
+.fp-compare-row-clickable:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-compare-up {
+	color: var(--fp-bad);
+}
+.fp-compare-down {
+	color: var(--fp-good);
+}
+
+@media (max-width: 700px) {
+	.fp-compare-movers {
+		grid-template-columns: 1fr;
+	}
+}
