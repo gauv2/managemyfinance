@@ -6,6 +6,7 @@ import {
 	netWorth,
 	categoryTotals,
 	primaryCategoryTotals,
+	spendingYears,
 	categoryTransactions,
 	accountStats,
 	averageMonthlyExpenses,
@@ -317,6 +318,45 @@ describe("primaryCategoryTotals", () => {
 		});
 		expect(primaryCategoryTotals(s).get(catFood.id)).toBe(50);
 		expect(primaryCategoryTotals(s).has(catGroceries.id)).toBe(false);
+	});
+});
+
+describe("spendingYears", () => {
+	it("returns the years with spending, newest first, deduplicated", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+				tx({ date: "2024-06-01", accountId: checking.id, amount: -30, categoryId: catFood.id }),
+				tx({ date: "2026-02-01", accountId: checking.id, amount: -10, categoryId: catFood.id }),
+			],
+		});
+		expect(spendingYears(s)).toEqual(["2026", "2024"]);
+	});
+
+	it("ignores income and transfers, so no offered year comes back with an empty card", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2023-01-01", accountId: checking.id, amount: 5000, categoryId: catIncome.id }),
+				tx({ date: "2022-01-01", accountId: checking.id, amount: -400, categoryId: catTransfers.id }),
+				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+			],
+		});
+		expect(spendingYears(s)).toEqual(["2024"]);
+	});
+
+	it("scopes to one account when asked", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+				tx({ date: "2025-01-01", accountId: savings.id, amount: -20, categoryId: catFood.id }),
+			],
+		});
+		expect(spendingYears(s, checking.id)).toEqual(["2024"]);
+		expect(spendingYears(s, savings.id)).toEqual(["2025"]);
+	});
+
+	it("returns nothing when there is no spending at all", () => {
+		expect(spendingYears(store())).toEqual([]);
 	});
 });
 

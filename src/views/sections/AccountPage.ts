@@ -1,6 +1,7 @@
 import { ACCOUNT_TYPE_META } from "../../constants";
 import type FinancePlugin from "../../main";
 import { EditAccountModal } from "../../modals/EditAccountModal";
+import { ManageRulesModal } from "../../modals/ManageRulesModal";
 import type { Account } from "../../types";
 import { emptyState, icon } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
@@ -90,7 +91,15 @@ export function renderAccountPage(container: HTMLElement, plugin: FinancePlugin)
 	// each account's own page is where its ledger lives.
 	if (account) {
 		container.createDiv({ cls: "fp-account-page-divider" });
-		container.createEl("h3", { cls: "fp-account-page-ledger-title", text: "Transactions" });
+		// Rules belong to the ledger, so they sit on its heading rather than up in the page header a
+		// dashboard's worth of scrolling away — or in among the filters, which they are not one of.
+		const ledgerHead = container.createDiv({ cls: "fp-account-page-ledger-head" });
+		ledgerHead.createEl("h3", { cls: "fp-account-page-ledger-title", text: "Transactions" });
+		const rulesBtn = ledgerHead.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(rulesBtn, "list-filter");
+		rulesBtn.createSpan({ text: "Rules" });
+		rulesBtn.setAttribute("title", "Rules that categorize transactions automatically");
+		rulesBtn.addEventListener("click", () => new ManageRulesModal(plugin.app, plugin, () => plugin.refreshViews()).open());
 		renderLedger(container, plugin);
 	}
 }

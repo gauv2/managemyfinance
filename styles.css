@@ -1096,8 +1096,15 @@
 	border-top: 1px solid var(--background-modifier-border);
 	margin: 32px 0 20px;
 }
+.fp-account-page-ledger-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 14px;
+}
 .fp-account-page-ledger-title {
-	margin: 0 0 14px;
+	margin: 0;
 }
 
 /* ---------- Stat tiles ---------- */
@@ -1352,6 +1359,25 @@
 }
 .fp-filter-date-sep {
 	color: var(--text-muted);
+}
+.fp-filter-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+.fp-ledger-period,
+.fp-ledger-custom-range {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+/* Month waits on a year, week waits on a month — greyed rather than hidden, so the drill-down's
+   shape stays visible before you've started down it. */
+.fp-ledger-period .fp-filter-select:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.fp-ledger-custom-range.is-hidden {
+	display: none;
 }
 .fp-ledger-table-wrap {
 	overflow-x: auto;
@@ -2312,9 +2338,6 @@
 	justify-content: space-between;
 	gap: 10px;
 	margin-bottom: 10px;
-}
-.fp-ledger-rules-btn {
-	flex-shrink: 0;
 }
 .fp-ledger-bulk-bar {
 	display: none;

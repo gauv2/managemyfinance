@@ -1,13 +1,12 @@
-import { netWorth, netWorthAsOf, primaryCategoryTotals, summarizeByYear, yearSummaryFor } from "../../../kpi";
+import { netWorth, netWorthAsOf, summarizeByYear } from "../../../kpi";
 import type FinancePlugin from "../../../main";
 import { cardsForAccount } from "../../../cards";
-import { CategoryDrilldownModal } from "../../../modals/CategoryDrilldownModal";
 import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
 import type { Account } from "../../../types";
-import { barChart } from "../../../ui/charts";
 import { badge, statTile } from "../../../ui/dom";
 import { renderMeter } from "../../../ui/kpiCard";
 import { deltaRow, formatEUR, formatPct, metricRow, yearHeaderRow } from "../../../ui/metricsTable";
+import { renderSpendingByCategoryCard } from "./SpendingByCategoryCard";
 
 /**
  * A credit card is not a checking account with a different icon, which is exactly how it used to be
@@ -55,7 +54,6 @@ function daysBetween(fromISO: string, toISO: string): number {
 export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account): void {
 	const store = plugin.store;
 	const years = summarizeByYear(store, account.id);
-	const currentYear = yearSummaryFor(years);
 
 	// A credit account's balance is negative while you owe: purchases are money out, payments in.
 	const balance = netWorth(store, account.id);
@@ -170,31 +168,5 @@ export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlu
 	}
 
 	// --- Where it goes -----------------------------------------------------
-	const totals = primaryCategoryTotals(store, currentYear?.year, account.id);
-	if (totals.size > 0) {
-		const catCard = container.createDiv({ cls: "fp-card" });
-		catCard.createEl("h3", { text: `Spending by category — ${currentYear?.year}` });
-		const categoryById = new Map(store.categories.map((c) => [c.id, c]));
-		barChart(
-			catCard,
-			Array.from(totals.entries())
-				.sort((a, b) => b[1] - a[1])
-				.map(([catId, amount]) => {
-					const cat = categoryById.get(catId);
-					return {
-						label: cat?.name ?? "Uncategorized",
-						value: amount,
-						color: cat?.color ?? "#6b7280",
-						iconName: cat?.icon ?? "help-circle",
-						onClick: () =>
-							new CategoryDrilldownModal(plugin.app, plugin, {
-								categoryId: catId,
-								period: currentYear?.year,
-								accountId: account.id,
-								scopeLabel: account.name,
-							}).open(),
-					};
-				})
-		);
-	}
+	renderSpendingByCategoryCard(container, plugin, { accountId: account.id, scopeLabel: account.name });
 }

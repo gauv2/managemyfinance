@@ -1,12 +1,12 @@
 import { ACCOUNT_TYPE_META } from "../../constants";
-import { fiProjection, netWorth, primaryCategoryTotals, summarizeByYear, yearSummaryFor, YearSummary } from "../../kpi";
+import { fiProjection, netWorth, summarizeByYear, yearSummaryFor, YearSummary } from "../../kpi";
 import type FinancePlugin from "../../main";
-import { CategoryDrilldownModal } from "../../modals/CategoryDrilldownModal";
 import { MonthDrilldownModal } from "../../modals/MonthDrilldownModal";
-import { barChart, lineChart, stackedShareBar } from "../../ui/charts";
+import { lineChart, stackedShareBar } from "../../ui/charts";
 import { icon, tabSwitcher } from "../../ui/dom";
 import { renderKpiCard, renderMeter } from "../../ui/kpiCard";
 import { deltaRow, formatEUR, formatPct, metricRow, yearHeaderRow, yoy } from "../../ui/metricsTable";
+import { renderSpendingByCategoryCard } from "./dashboards/SpendingByCategoryCard";
 
 const CAT_COLORS = ["var(--fp-cat-1)", "var(--fp-cat-2)", "var(--fp-cat-3)", "var(--fp-cat-4)", "var(--fp-cat-5)"];
 
@@ -14,36 +14,6 @@ async function switchToAccount(plugin: FinancePlugin, accountId: string): Promis
 	plugin.settings.activeAccountId = accountId;
 	await plugin.saveSettings();
 	plugin.refreshViews();
-}
-
-/** Where this year's spending actually went, combined across every account — the "All Accounts" analogue of each account's own "Spending by category" card. */
-function renderExpenseCategoriesOverview(container: HTMLElement, plugin: FinancePlugin, year: string | undefined): void {
-	const store = plugin.store;
-	const totals = primaryCategoryTotals(store, year);
-	if (totals.size === 0) return;
-
-	const card = container.createDiv({ cls: "fp-card" });
-	card.createEl("h3", { text: `Spending by category — ${year}` });
-	const categoryById = new Map(store.categories.map((c) => [c.id, c]));
-	const rows = Array.from(totals.entries())
-		.sort((a, b) => b[1] - a[1])
-		.map(([catId, amount]) => {
-			const cat = categoryById.get(catId);
-			return {
-				label: cat?.name ?? "Uncategorized",
-				value: amount,
-				color: cat?.color ?? "#6b7280",
-				iconName: cat?.icon ?? "help-circle",
-				// Every bar is a way into the transactions behind it, across all accounts.
-				onClick: () =>
-					new CategoryDrilldownModal(plugin.app, plugin, {
-						categoryId: catId,
-						period: year,
-						scopeLabel: "All accounts",
-					}).open(),
-			};
-		});
-	barChart(card, rows);
 }
 
 /**
@@ -208,7 +178,7 @@ export function renderAllAccountsDashboard(container: HTMLElement, plugin: Finan
 		sparklineColor: "var(--fp-chart-expenses)",
 	});
 
-	renderExpenseCategoriesOverview(container, plugin, currentYear?.year);
+	renderSpendingByCategoryCard(container, plugin, { scopeLabel: "All accounts" });
 
 	const fiTail =
 		yearsToFi === undefined ? "" : ` · ${yearsToFi.toFixed(1)} years at current pace (${(plugin.settings.expectedReturn * 100).toFixed(0)}% return)`;

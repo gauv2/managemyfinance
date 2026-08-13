@@ -1,5 +1,6 @@
 import { descendantIds, resolvePrimaryId } from "./categories";
 import { convert, type FxContext } from "./currency";
+import { transactionYears } from "./period";
 import { isLiabilityType, type Account, type BalanceSnapshot, type Category, type Transaction } from "./types";
 
 /**
@@ -350,6 +351,22 @@ export function primaryCategoryTotals(store: KpiStore, year?: string, accountId?
 		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
 	}
 	return totals;
+}
+
+/**
+ * The years `primaryCategoryTotals` would return something for, newest first — the same expenses-only,
+ * transfers-excluded test, so a year picker built on this can never offer a year whose card comes back
+ * empty.
+ */
+export function spendingYears(store: KpiStore, accountId?: string): string[] {
+	const dates: (string | undefined)[] = [];
+	for (const tx of store.transactions) {
+		if (tx.amount >= 0) continue;
+		if (accountId && tx.accountId !== accountId) continue;
+		if (isTransfer(store, tx)) continue;
+		dates.push(tx.date);
+	}
+	return transactionYears(dates);
 }
 
 /**

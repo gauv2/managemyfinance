@@ -1,9 +1,19 @@
 import { Notice } from "obsidian";
 import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
-import { ManageRulesModal } from "../../modals/ManageRulesModal";
 import { TransactionEditModal } from "../../modals/TransactionEditModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import { formatMoney } from "../../money";
+import {
+	PERIOD_ALL,
+	PERIOD_CUSTOM,
+	monthOptions,
+	monthRange,
+	periodOptions,
+	periodRange,
+	transactionYears,
+	weekOptions,
+	weekRangeFrom,
+} from "../../period";
 import type FinancePlugin from "../../main";
 import type { ReviewStatus, Transaction } from "../../types";
 import { categoryChainChip, emptyState, icon, renderCategoryPicker, type CategoryPickerValue } from "../../ui/dom";
@@ -19,6 +29,12 @@ interface LedgerFilterState {
 	categoryPrimaryId: string;
 	/** A secondary category id nested under `categoryPrimaryId`, or "" for all of that primary's transactions. */
 	categorySecondaryId: string;
+	/** A `periodOptions` value — "" for all time, "custom" when the raw dates below are being edited by hand. */
+	period: string;
+	/** "YYYY-MM" once drilled into a month of `period`, else "". */
+	periodMonth: string;
+	/** The Monday ("YYYY-MM-DD") of a week inside `periodMonth`, else "". */
+	periodWeek: string;
 	dateFrom: string;
 	dateTo: string;
 	/** Review state to show: "" for all, otherwise a ReviewStatus. Mirrors the Review page's filter. */
@@ -41,6 +57,9 @@ const filterState: LedgerFilterState = {
 	accountId: "",
 	categoryPrimaryId: "",
 	categorySecondaryId: "",
+	period: "",
+	periodMonth: "",
+	periodWeek: "",
 	dateFrom: "",
 	dateTo: "",
 	reviewStatus: "",
@@ -112,30 +131,16 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	const accountById = new Map(store.accounts.map((a) => [a.id, a]));
 	const showAccountColumn = !activeAccountId;
 
-	const controls = container.createDiv({ cls: "fp-ledger-controls" });
-	const search = controls.createEl("input", {
+	// Search leads the filter row rather than holding a row of its own: it narrows the same set every
+	// control beside it narrows. Adding a transaction and editing rules are page-level actions and live
+	// in the page's own headers — repeating them here only made two places to look.
+	const filterRow = container.createDiv({ cls: "fp-ledger-filters" });
+	const search = filterRow.createEl("input", {
 		type: "text",
 		placeholder: "Search description or counterparty…",
 		cls: "fp-search",
 	});
 	search.value = filterState.search;
-
-	const addBtn = controls.createEl("button", { cls: "fp-btn fp-btn-secondary" });
-	icon(addBtn, "plus");
-	addBtn.createSpan({ text: "Add" });
-	addBtn.setAttribute("title", "Add a transaction by hand");
-	addBtn.addEventListener("click", () =>
-		new TransactionEditModal(plugin.app, plugin, { defaultAccountId: activeAccountId, onSaved: () => plugin.refreshViews() }).open()
-	);
-
-	const rulesBtn = controls.createEl("button", { cls: "fp-btn fp-btn-secondary fp-ledger-rules-btn" });
-	icon(rulesBtn, "list-filter");
-	rulesBtn.createSpan({ text: "Rules" });
-	rulesBtn.addEventListener("click", () => {
-		new ManageRulesModal(plugin.app, plugin, () => draw()).open();
-	});
-
-	const filterRow = container.createDiv({ cls: "fp-ledger-filters" });
 
 	let accountSelect: HTMLSelectElement | undefined;
 	if (showAccountColumn) {
@@ -181,10 +186,69 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	).forEach(([value, label]) => reviewSelect.createEl("option", { text: label, value }));
 	reviewSelect.value = filterState.reviewStatus;
 
-	const dateFrom = filterRow.createEl("input", { type: "date", cls: "fp-filter-date" });
+	// Year, then the months that year has, then the weeks that month has — each level populated from
+	// the data in scope, so no combination of the three can select an empty table.
+	const scopedDates = scopedTransactions.map((t) => t.date);
+	const periodGroup = filterRow.createDiv({ cls: "fp-ledger-period" });
+	periodGroup.createSpan({ cls: "fp-filter-label", text: "Period" });
+	const periodSelect = periodGroup.createEl("select", { cls: "fp-filter-select" });
+	const periodChoices = periodOptions(transactionYears(scopedDates));
+	periodChoices.forEach((o) => periodSelect.createEl("option", { text: o.label, value: o.value }));
+	periodSelect.value = periodChoices.some((o) => o.value === filterState.period) ? filterState.period : PERIOD_ALL;
+	if (periodSelect.value !== filterState.period) {
+		// The remembered period named a year this scope has nothing in — switching accounts can do that.
+		// Drop the dates with it, so the dropdown can't read "All time" over a range still being applied.
+		filterState.period = PERIOD_ALL;
+		filterState.periodMonth = "";
+		filterState.periodWeek = "";
+		filterState.dateFrom = "";
+		filterState.dateTo = "";
+	}
+
+	const monthSelect = periodGroup.createEl("select", { cls: "fp-filter-select" });
+	monthSelect.setAttribute("aria-label", "Month");
+	const weekSelect = periodGroup.createEl("select", { cls: "fp-filter-select" });
+	weekSelect.setAttribute("aria-label", "Week");
+
+	/** Months live under a chosen year only — the relative presets and the manual range own their own
+	 *  span, and drilling into them would just be a second way to say the same thing. */
+	function populateMonthSelect(year: string, selected: string): void {
+		monthSelect.empty();
+		const drillable = /^\d{4}$/.test(year);
+		monthSelect.disabled = !drillable;
+		if (!drillable) {
+			monthSelect.createEl("option", { text: "Month", value: "" });
+			return;
+		}
+		const choices = monthOptions(scopedDates, year);
+		choices.forEach((o) => monthSelect.createEl("option", { text: o.label, value: o.value }));
+		monthSelect.value = choices.some((o) => o.value === selected) ? selected : "";
+	}
+
+	function populateWeekSelect(month: string, selected: string): void {
+		weekSelect.empty();
+		const drillable = !monthSelect.disabled && month !== "";
+		weekSelect.disabled = !drillable;
+		if (!drillable) {
+			weekSelect.createEl("option", { text: "Week", value: "" });
+			return;
+		}
+		const choices = weekOptions(scopedDates, month);
+		choices.forEach((o) => weekSelect.createEl("option", { text: o.label, value: o.value }));
+		weekSelect.value = choices.some((o) => o.value === selected) ? selected : "";
+	}
+
+	populateMonthSelect(periodSelect.value, filterState.periodMonth);
+	populateWeekSelect(monthSelect.value, filterState.periodWeek);
+
+	// The raw range stays as the escape hatch the presets can't cover, but it only takes up room once
+	// you ask for it.
+	const customRange = filterRow.createDiv({ cls: "fp-ledger-custom-range" });
+	customRange.toggleClass("is-hidden", periodSelect.value !== PERIOD_CUSTOM);
+	const dateFrom = customRange.createEl("input", { type: "date", cls: "fp-filter-date" });
 	dateFrom.value = filterState.dateFrom;
-	filterRow.createSpan({ cls: "fp-filter-date-sep", text: "–" });
-	const dateTo = filterRow.createEl("input", { type: "date", cls: "fp-filter-date" });
+	customRange.createSpan({ cls: "fp-filter-date-sep", text: "–" });
+	const dateTo = customRange.createEl("input", { type: "date", cls: "fp-filter-date" });
 	dateTo.value = filterState.dateTo;
 
 	const clearBtn = filterRow.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Clear filters" });
@@ -395,6 +459,9 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		filterState.categoryPrimaryId = primarySelect.value;
 		filterState.categorySecondaryId = secondarySelect.value;
 		filterState.reviewStatus = reviewSelect.value as "" | ReviewStatus;
+		filterState.period = periodSelect.value;
+		filterState.periodMonth = monthSelect.disabled ? "" : monthSelect.value;
+		filterState.periodWeek = weekSelect.disabled ? "" : weekSelect.value;
 		filterState.dateFrom = dateFrom.value;
 		filterState.dateTo = dateTo.value;
 
@@ -516,6 +583,39 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	});
 	secondarySelect.addEventListener("change", redrawFromFirstPage);
 	reviewSelect.addEventListener("change", redrawFromFirstPage);
+	/** The deepest level that names a range wins: a week over its month, a month over its year. */
+	function applyPeriodToDates(): void {
+		const week = weekSelect.disabled ? "" : weekSelect.value;
+		const month = monthSelect.disabled ? "" : monthSelect.value;
+		const range = (week && weekRangeFrom(week)) || (month && monthRange(month)) || periodRange(periodSelect.value);
+		if (range) {
+			dateFrom.value = range.from;
+			dateTo.value = range.to;
+		} else if (periodSelect.value === PERIOD_ALL) {
+			dateFrom.value = "";
+			dateTo.value = "";
+		}
+		// "Custom range…" deliberately leaves the dates alone: it reveals whatever range you were
+		// already looking at, ready to be adjusted, rather than making you start from nothing.
+	}
+
+	periodSelect.addEventListener("change", () => {
+		customRange.toggleClass("is-hidden", periodSelect.value !== PERIOD_CUSTOM);
+		// A new year means new months, and the week that was showing belonged to the old one.
+		populateMonthSelect(periodSelect.value, "");
+		populateWeekSelect("", "");
+		applyPeriodToDates();
+		redrawFromFirstPage();
+	});
+	monthSelect.addEventListener("change", () => {
+		populateWeekSelect(monthSelect.value, "");
+		applyPeriodToDates();
+		redrawFromFirstPage();
+	});
+	weekSelect.addEventListener("change", () => {
+		applyPeriodToDates();
+		redrawFromFirstPage();
+	});
 	dateFrom.addEventListener("change", redrawFromFirstPage);
 	dateTo.addEventListener("change", redrawFromFirstPage);
 	clearBtn.addEventListener("click", () => {
@@ -524,6 +624,10 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		primarySelect.value = "";
 		populateSecondaryFilter("", "");
 		reviewSelect.value = "";
+		periodSelect.value = PERIOD_ALL;
+		populateMonthSelect(PERIOD_ALL, "");
+		populateWeekSelect("", "");
+		customRange.addClass("is-hidden");
 		dateFrom.value = "";
 		dateTo.value = "";
 		redrawFromFirstPage();
