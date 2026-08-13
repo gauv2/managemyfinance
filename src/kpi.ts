@@ -1,6 +1,6 @@
 import { descendantIds, resolvePrimaryId } from "./categories";
 import { convert, type FxContext } from "./currency";
-import { transactionYears } from "./period";
+import { inRange, transactionYears, type DateRange } from "./period";
 import { isLiabilityType, type Account, type BalanceSnapshot, type Category, type Transaction } from "./types";
 
 /**
@@ -41,6 +41,19 @@ export interface YearSummary {
 	savingsRate: number;
 	netWorthEOY: number;
 	passiveIncome: number;
+	/** True when a period filter clipped this year, so the figures cover only part of it. Views that
+	 *  print a year per column say so rather than letting a half-year read as a whole one. */
+	partial?: boolean;
+}
+
+/**
+ * Whether a transaction date falls in `period` — either a "YYYY"/"YYYY-MM" prefix, or an inclusive
+ * range (see `inRange`, so the range maths stays in one place).
+ */
+function inPeriod(date: string | undefined, period: string | DateRange | undefined): boolean {
+	if (!period) return true;
+	if (typeof period === "string") return !!date && date.startsWith(period);
+	return inRange(date, period);
 }
 
 /** Moving your own money between your own accounts (e.g. checking → savings) is neither income nor expense.
@@ -101,16 +114,30 @@ function savingsRateOf(income: number, expenses: number): number {
 	return Math.max(-1, Math.min(1, (income - expenses) / income));
 }
 
-/** When `accountId` is given, every KPI here is scoped to that one account instead of the whole store. */
-export function summarizeByYear(store: KpiStore, accountId?: string): YearSummary[] {
+/**
+ * When `accountId` is given, every KPI here is scoped to that one account instead of the whole store.
+ *
+ * With a `range`, only the years it covers come back and only its own transactions count toward them
+ * — a year the range clips is marked `partial`, and its closing net worth is taken at the end of the
+ * range rather than at a year end the range never reached. Activity *before* the range is still
+ * folded into the opening position (see `carried` below): a period filter narrows what's being
+ * measured, but it can't make money you already had disappear.
+ */
+export function summarizeByYear(store: KpiStore, accountId?: string, range?: DateRange): YearSummary[] {
 	const map = new Map<
 		string,
 		{ income: number; expenses: number; passiveIncome: number; netChange: number; transferAmount: number }
 	>();
+	/** Everything that happened before the range started, as a single opening figure. */
+	let carried = 0;
 	for (const tx of store.transactions) {
 		if (accountId && tx.accountId !== accountId) continue;
 		const year = tx.date?.slice(0, 4);
 		if (!year) continue;
+		if (!inPeriod(tx.date, range)) {
+			if (range?.from && tx.date! < range.from) carried += amountIn(store, tx);
+			continue;
+		}
 		if (!map.has(year)) map.set(year, { income: 0, expenses: 0, passiveIncome: 0, netChange: 0, transferAmount: 0 });
 		const bucket = map.get(year)!;
 		const amount = amountIn(store, tx);
@@ -129,6 +156,14 @@ export function summarizeByYear(store: KpiStore, accountId?: string): YearSummar
 
 	const years = Array.from(map.keys()).sort((a, b) => a.localeCompare(b));
 
+	/** A year's closing date, pulled back to the end of the range when the range stops inside it. */
+	const closingDate = (year: string): string => {
+		const yearEnd = `${year}-12-31`;
+		return range?.to && range.to < yearEnd ? range.to : yearEnd;
+	};
+	const isPartial = (year: string): boolean =>
+		!!range && ((!!range.from && range.from > `${year}-01-01`) || (!!range.to && range.to < `${year}-12-31`));
+
 	// With hand-recorded balances on file, each year's closing net worth is simply what the accounts
 	// were actually worth at that date — no walking, no inference. That's strictly better than the
 	// reconstruction below, which only exists because an untracked account's balance is otherwise a
@@ -142,15 +177,16 @@ export function summarizeByYear(store: KpiStore, accountId?: string): YearSummar
 				expenses,
 				net: income - expenses,
 				savingsRate: savingsRateOf(income, expenses),
-				netWorthEOY: netWorthAsOf(store, `${year}-12-31`, accountId),
+				netWorthEOY: netWorthAsOf(store, closingDate(year), accountId),
 				passiveIncome,
+				partial: isPartial(year),
 			};
 		});
 	}
 
-	let cumulative = store.accounts
-		.filter((a) => !accountId || a.id === accountId)
-		.reduce((sum, a) => sum + signedOpeningBalance(store, a), 0);
+	let cumulative =
+		carried +
+		store.accounts.filter((a) => !accountId || a.id === accountId).reduce((sum, a) => sum + signedOpeningBalance(store, a), 0);
 
 	// Aggregate ("All Accounts") mode only: a transfer between your own accounts must never move
 	// combined net worth. But an account with no transaction history of its own carries its
@@ -176,8 +212,30 @@ export function summarizeByYear(store: KpiStore, accountId?: string): YearSummar
 			savingsRate: savingsRateOf(income, expenses),
 			netWorthEOY: cumulative,
 			passiveIncome,
+			partial: isPartial(year),
 		};
 	});
+}
+
+/**
+ * Several years rolled into the one summary a period spanning them adds up to, or undefined when the
+ * period contains nothing at all. Closing net worth is the last year's — where the period ends.
+ */
+export function summarizeTotal(years: YearSummary[]): YearSummary | undefined {
+	if (years.length === 0) return undefined;
+	const income = years.reduce((sum, y) => sum + y.income, 0);
+	const expenses = years.reduce((sum, y) => sum + y.expenses, 0);
+	const last = years[years.length - 1];
+	return {
+		year: years.length === 1 ? last.year : `${years[0].year}–${last.year}`,
+		income,
+		expenses,
+		net: income - expenses,
+		savingsRate: savingsRateOf(income, expenses),
+		netWorthEOY: last.netWorthEOY,
+		passiveIncome: years.reduce((sum, y) => sum + y.passiveIncome, 0),
+		partial: years.some((y) => y.partial),
+	};
 }
 
 /**
@@ -339,34 +397,19 @@ export function categoryTotals(store: KpiStore, year?: string, accountId?: strin
 
 /** Same as `categoryTotals`, but a transaction tagged with a secondary category counts toward its
  *  primary category's total — the view budgets and dashboards want, so spend doesn't fragment across
- *  however many secondary categories a primary happens to have. */
-export function primaryCategoryTotals(store: KpiStore, year?: string, accountId?: string): Map<string, number> {
+ *  however many secondary categories a primary happens to have. `period` is a "YYYY"/"YYYY-MM" prefix
+ *  for the budgets that think in whole months and years, or a date range for the page period filter. */
+export function primaryCategoryTotals(store: KpiStore, period?: string | DateRange, accountId?: string): Map<string, number> {
 	const totals = new Map<string, number>();
 	for (const tx of store.transactions) {
 		if (tx.amount >= 0) continue;
-		if (year && !tx.date?.startsWith(year)) continue;
+		if (!inPeriod(tx.date, period)) continue;
 		if (accountId && tx.accountId !== accountId) continue;
 		if (isTransfer(store, tx)) continue;
 		const key = resolvePrimaryId(store.categories, tx.categoryId) ?? "uncategorized";
 		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
 	}
 	return totals;
-}
-
-/**
- * The years `primaryCategoryTotals` would return something for, newest first — the same expenses-only,
- * transfers-excluded test, so a year picker built on this can never offer a year whose card comes back
- * empty.
- */
-export function spendingYears(store: KpiStore, accountId?: string): string[] {
-	const dates: (string | undefined)[] = [];
-	for (const tx of store.transactions) {
-		if (tx.amount >= 0) continue;
-		if (accountId && tx.accountId !== accountId) continue;
-		if (isTransfer(store, tx)) continue;
-		dates.push(tx.date);
-	}
-	return transactionYears(dates);
 }
 
 /**

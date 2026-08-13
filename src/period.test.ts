@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
+	describeRange,
+	emptyPeriodSelection,
 	monthOptions,
 	monthRange,
+	monthsInRange,
 	periodOptions,
 	periodRange,
+	resolvePeriodRange,
+	selectionRange,
 	transactionYears,
 	weekOptions,
 	weekRangeFrom,
@@ -204,5 +209,95 @@ describe("weekOptions", () => {
 	it("returns nothing for a malformed month", () => {
 		expect(weekOptions(["2026-08-13"], "2026")).toEqual([]);
 		expect(weekOptions(["2026-08-13"], "2026-13")).toEqual([]);
+	});
+});
+
+describe("resolvePeriodRange", () => {
+	const at = (period: string, month = "", week = ""): ReturnType<typeof resolvePeriodRange> =>
+		resolvePeriodRange({ period, month, week }, on(2026, 8, 13));
+
+	it("takes the year when nothing under it is chosen", () => {
+		expect(at("2025")).toEqual({ from: "2025-01-01", to: "2025-12-31" });
+	});
+
+	it("lets a month beat the year it sits in", () => {
+		expect(at("2026", "2026-02")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
+	});
+
+	it("lets a week beat the month it sits in, spilling past the month's end", () => {
+		expect(at("2026", "2026-08", "2026-08-31")).toEqual({ from: "2026-08-31", to: "2026-09-06" });
+	});
+
+	it("resolves the relative presets against the day it is given", () => {
+		expect(at("week")).toEqual({ from: "2026-08-10", to: "2026-08-16" });
+		expect(at("month")).toEqual({ from: "2026-08-01", to: "2026-08-31" });
+		expect(at("last-month")).toEqual({ from: "2026-07-01", to: "2026-07-31" });
+	});
+
+	it("names no range for all time or a custom range", () => {
+		expect(at(PERIOD_ALL)).toBeUndefined();
+		expect(at(PERIOD_CUSTOM)).toBeUndefined();
+	});
+});
+
+describe("selectionRange", () => {
+	it("is undefined for a fresh selection", () => {
+		expect(selectionRange(emptyPeriodSelection())).toBeUndefined();
+	});
+
+	it("carries a half-open range through as it was typed", () => {
+		expect(selectionRange({ ...emptyPeriodSelection(), period: PERIOD_CUSTOM, from: "2026-03-01" })).toEqual({
+			from: "2026-03-01",
+			to: "",
+		});
+	});
+});
+
+describe("describeRange", () => {
+	it("says All time when there is no range", () => {
+		expect(describeRange()).toBe("All time");
+		expect(describeRange({ from: "", to: "" })).toBe("All time");
+	});
+
+	it("names whole years by their year alone", () => {
+		expect(describeRange({ from: "2026-01-01", to: "2026-12-31" })).toBe("2026");
+		expect(describeRange({ from: "2024-01-01", to: "2026-12-31" })).toBe("2024–2026");
+	});
+
+	it("names a whole month", () => {
+		expect(describeRange({ from: "2026-02-01", to: "2026-02-28" })).toBe("February 2026");
+	});
+
+	it("does not call a part of a month the whole month", () => {
+		expect(describeRange({ from: "2026-02-01", to: "2026-02-14" })).toBe("1 – 14 Feb 2026");
+	});
+
+	it("falls back to days for anything shorter", () => {
+		expect(describeRange({ from: "2026-08-10", to: "2026-08-16" })).toBe("10 – 16 Aug 2026");
+		expect(describeRange({ from: "2026-07-27", to: "2026-08-02" })).toBe("27 Jul – 2 Aug 2026");
+		expect(describeRange({ from: "2026-12-28", to: "2027-01-03" })).toBe("28 Dec 2026 – 3 Jan 2027");
+	});
+
+	it("describes an open end for a half-typed custom range", () => {
+		expect(describeRange({ from: "2026-03-01", to: "" })).toBe("from 2026-03-01");
+		expect(describeRange({ from: "", to: "2026-03-01" })).toBe("up to 2026-03-01");
+	});
+});
+
+describe("monthsInRange", () => {
+	it("counts the calendar months a range touches, both ends included", () => {
+		expect(monthsInRange({ from: "2026-01-01", to: "2026-12-31" })).toBe(12);
+		expect(monthsInRange({ from: "2026-03-01", to: "2026-04-30" })).toBe(2);
+		expect(monthsInRange({ from: "2025-11-01", to: "2026-02-28" })).toBe(4);
+	});
+
+	it("never divides by less than one month, however short the range", () => {
+		expect(monthsInRange({ from: "2026-08-10", to: "2026-08-16" })).toBe(1);
+		expect(monthsInRange({ from: "2026-08-10", to: "2026-08-10" })).toBe(1);
+	});
+
+	it("falls back to the end that is set when the other is open", () => {
+		expect(monthsInRange({ from: "2026-08-01", to: "" })).toBe(1);
+		expect(monthsInRange({ from: "", to: "" })).toBe(1);
 	});
 });

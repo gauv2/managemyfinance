@@ -1364,20 +1364,42 @@
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
 }
-.fp-ledger-period,
-.fp-ledger-custom-range {
+/* The one period control — see src/ui/periodFilter.ts. Used by the ledger, the account and
+   all-accounts pages, and the reports builder. */
+.fp-period-filter,
+.fp-period-filter-custom {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 }
 /* Month waits on a year, week waits on a month — greyed rather than hidden, so the drill-down's
    shape stays visible before you've started down it. */
-.fp-ledger-period .fp-filter-select:disabled {
+.fp-period-filter .fp-filter-select:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
 }
-.fp-ledger-custom-range.is-hidden {
+.fp-period-filter-custom.is-hidden {
 	display: none;
+}
+/* The page-level bar the account and all-accounts pages put it in: one period for the dashboard
+   cards and the ledger under them, above everything it drives. */
+.fp-page-filter {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 16px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.fp-table-note {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-top: 6px;
+}
+.fp-card-head-note {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
 }
 .fp-ledger-table-wrap {
 	overflow-x: auto;
@@ -5044,35 +5066,13 @@
 	flex-direction: column;
 	gap: 9px;
 }
-.fp-report-presets,
 .fp-report-chips,
 .fp-report-adder,
-.fp-report-scope,
-.fp-report-dates {
+.fp-report-scope {
 	display: flex;
 	align-items: center;
 	gap: 7px;
 	flex-wrap: wrap;
-}
-.fp-report-preset {
-	padding: 4px 11px;
-	border-radius: 999px;
-	border: 1px solid var(--background-modifier-border);
-	background: var(--background-primary);
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	font-weight: 600;
-	cursor: pointer;
-	box-shadow: none;
-}
-.fp-report-preset:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-}
-.fp-report-preset.is-active {
-	background: var(--fp-neutral);
-	border-color: var(--fp-neutral);
-	color: var(--text-on-accent);
 }
 .fp-report-chips-empty {
 	font-size: var(--font-ui-smaller);

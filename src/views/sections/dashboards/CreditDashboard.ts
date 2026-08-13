@@ -2,10 +2,11 @@ import { netWorth, netWorthAsOf, summarizeByYear } from "../../../kpi";
 import type FinancePlugin from "../../../main";
 import { cardsForAccount } from "../../../cards";
 import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
+import { describeRange, type DateRange } from "../../../period";
 import type { Account } from "../../../types";
 import { badge, statTile } from "../../../ui/dom";
 import { renderMeter } from "../../../ui/kpiCard";
-import { deltaRow, formatEUR, formatPct, metricRow, yearHeaderRow } from "../../../ui/metricsTable";
+import { deltaRow, formatEUR, formatPct, metricRow, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
 import { renderSpendingByCategoryCard } from "./SpendingByCategoryCard";
 
 /**
@@ -51,9 +52,10 @@ function daysBetween(fromISO: string, toISO: string): number {
 	return isNaN(from) || isNaN(to) ? 0 : Math.round((to - from) / 86_400_000);
 }
 
-export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account): void {
+export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account, range?: DateRange): void {
 	const store = plugin.store;
-	const years = summarizeByYear(store, account.id);
+	const periodLabel = describeRange(range);
+	const years = summarizeByYear(store, account.id, range);
 
 	// A credit account's balance is negative while you owe: purchases are money out, payments in.
 	const balance = netWorth(store, account.id);
@@ -158,6 +160,7 @@ export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlu
 		const table = historyCard.createEl("table", { cls: "fp-table fp-table-metrics" });
 		yearHeaderRow(table, years.map((y) => y.year), {
 			onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year, account.name, account.id).open(),
+			labelFor: yearLabeller(years),
 		});
 		const tbody = table.createEl("tbody");
 		metricRow(tbody, "Charged", years.map((y) => y.expenses), formatEUR, { heat: "invert" });
@@ -165,8 +168,9 @@ export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlu
 		metricRow(tbody, "Paid off", years.map((y) => y.income), formatEUR, { heat: "normal" });
 		metricRow(tbody, "Net", years.map((y) => y.net), formatEUR, { emphasize: true, heat: "normal" });
 		metricRow(tbody, "Savings rate", years.map((y) => y.savingsRate), (n) => formatPct(n), { heat: "normal" });
+		partialYearsNote(historyCard, years, periodLabel);
 	}
 
 	// --- Where it goes -----------------------------------------------------
-	renderSpendingByCategoryCard(container, plugin, { accountId: account.id, scopeLabel: account.name });
+	renderSpendingByCategoryCard(container, plugin, { accountId: account.id, scopeLabel: account.name, range, periodLabel });
 }

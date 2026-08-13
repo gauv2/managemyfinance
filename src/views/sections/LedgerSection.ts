@@ -3,17 +3,7 @@ import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategories
 import { TransactionEditModal } from "../../modals/TransactionEditModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import { formatMoney } from "../../money";
-import {
-	PERIOD_ALL,
-	PERIOD_CUSTOM,
-	monthOptions,
-	monthRange,
-	periodOptions,
-	periodRange,
-	transactionYears,
-	weekOptions,
-	weekRangeFrom,
-} from "../../period";
+import type { PeriodSelection } from "../../period";
 import type FinancePlugin from "../../main";
 import type { ReviewStatus, Transaction } from "../../types";
 import { categoryChainChip, emptyState, icon, renderCategoryPicker, type CategoryPickerValue } from "../../ui/dom";
@@ -29,16 +19,18 @@ interface LedgerFilterState {
 	categoryPrimaryId: string;
 	/** A secondary category id nested under `categoryPrimaryId`, or "" for all of that primary's transactions. */
 	categorySecondaryId: string;
-	/** A `periodOptions` value — "" for all time, "custom" when the raw dates below are being edited by hand. */
-	period: string;
-	/** "YYYY-MM" once drilled into a month of `period`, else "". */
-	periodMonth: string;
-	/** The Monday ("YYYY-MM-DD") of a week inside `periodMonth`, else "". */
-	periodWeek: string;
-	dateFrom: string;
-	dateTo: string;
 	/** Review state to show: "" for all, otherwise a ReviewStatus. Mirrors the Review page's filter. */
 	reviewStatus: "" | ReviewStatus;
+}
+
+export interface LedgerOptions {
+	/** The page's period filter — the ledger has none of its own, so the dashboard above it and the
+	 *  table below it can never end up showing two different windows onto the same account. */
+	period: PeriodSelection;
+	/** Puts that page-level filter back to "All time" and redraws what it feeds, this table included.
+	 *  Called from "Clear filters", which would otherwise leave a range in force that nothing on
+	 *  screen still claims to be applying. */
+	onResetPeriod: () => void;
 }
 
 interface LedgerSortState {
@@ -57,11 +49,6 @@ const filterState: LedgerFilterState = {
 	accountId: "",
 	categoryPrimaryId: "",
 	categorySecondaryId: "",
-	period: "",
-	periodMonth: "",
-	periodWeek: "",
-	dateFrom: "",
-	dateTo: "",
 	reviewStatus: "",
 };
 
@@ -98,8 +85,9 @@ const DEFAULT_SORT_DIRECTION: Record<LedgerSortColumn, LedgerSortDirection> = {
 	amount: "desc",
 };
 
-/** The transactions table for the current scope (one account, or all) — no page header of its own; the caller supplies that. */
-export function renderLedger(container: HTMLElement, plugin: FinancePlugin): void {
+/** The transactions table for the current scope (one account, or all) — no page header and no period
+ *  filter of its own; the caller supplies both. */
+export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts: LedgerOptions): void {
 	const store = plugin.store;
 
 	const activeAccountId = plugin.settings.activeAccountId;
@@ -185,71 +173,6 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		] as ["" | ReviewStatus, string][]
 	).forEach(([value, label]) => reviewSelect.createEl("option", { text: label, value }));
 	reviewSelect.value = filterState.reviewStatus;
-
-	// Year, then the months that year has, then the weeks that month has — each level populated from
-	// the data in scope, so no combination of the three can select an empty table.
-	const scopedDates = scopedTransactions.map((t) => t.date);
-	const periodGroup = filterRow.createDiv({ cls: "fp-ledger-period" });
-	periodGroup.createSpan({ cls: "fp-filter-label", text: "Period" });
-	const periodSelect = periodGroup.createEl("select", { cls: "fp-filter-select" });
-	const periodChoices = periodOptions(transactionYears(scopedDates));
-	periodChoices.forEach((o) => periodSelect.createEl("option", { text: o.label, value: o.value }));
-	periodSelect.value = periodChoices.some((o) => o.value === filterState.period) ? filterState.period : PERIOD_ALL;
-	if (periodSelect.value !== filterState.period) {
-		// The remembered period named a year this scope has nothing in — switching accounts can do that.
-		// Drop the dates with it, so the dropdown can't read "All time" over a range still being applied.
-		filterState.period = PERIOD_ALL;
-		filterState.periodMonth = "";
-		filterState.periodWeek = "";
-		filterState.dateFrom = "";
-		filterState.dateTo = "";
-	}
-
-	const monthSelect = periodGroup.createEl("select", { cls: "fp-filter-select" });
-	monthSelect.setAttribute("aria-label", "Month");
-	const weekSelect = periodGroup.createEl("select", { cls: "fp-filter-select" });
-	weekSelect.setAttribute("aria-label", "Week");
-
-	/** Months live under a chosen year only — the relative presets and the manual range own their own
-	 *  span, and drilling into them would just be a second way to say the same thing. */
-	function populateMonthSelect(year: string, selected: string): void {
-		monthSelect.empty();
-		const drillable = /^\d{4}$/.test(year);
-		monthSelect.disabled = !drillable;
-		if (!drillable) {
-			monthSelect.createEl("option", { text: "Month", value: "" });
-			return;
-		}
-		const choices = monthOptions(scopedDates, year);
-		choices.forEach((o) => monthSelect.createEl("option", { text: o.label, value: o.value }));
-		monthSelect.value = choices.some((o) => o.value === selected) ? selected : "";
-	}
-
-	function populateWeekSelect(month: string, selected: string): void {
-		weekSelect.empty();
-		const drillable = !monthSelect.disabled && month !== "";
-		weekSelect.disabled = !drillable;
-		if (!drillable) {
-			weekSelect.createEl("option", { text: "Week", value: "" });
-			return;
-		}
-		const choices = weekOptions(scopedDates, month);
-		choices.forEach((o) => weekSelect.createEl("option", { text: o.label, value: o.value }));
-		weekSelect.value = choices.some((o) => o.value === selected) ? selected : "";
-	}
-
-	populateMonthSelect(periodSelect.value, filterState.periodMonth);
-	populateWeekSelect(monthSelect.value, filterState.periodWeek);
-
-	// The raw range stays as the escape hatch the presets can't cover, but it only takes up room once
-	// you ask for it.
-	const customRange = filterRow.createDiv({ cls: "fp-ledger-custom-range" });
-	customRange.toggleClass("is-hidden", periodSelect.value !== PERIOD_CUSTOM);
-	const dateFrom = customRange.createEl("input", { type: "date", cls: "fp-filter-date" });
-	dateFrom.value = filterState.dateFrom;
-	customRange.createSpan({ cls: "fp-filter-date-sep", text: "–" });
-	const dateTo = customRange.createEl("input", { type: "date", cls: "fp-filter-date" });
-	dateTo.value = filterState.dateTo;
 
 	const clearBtn = filterRow.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Clear filters" });
 
@@ -459,18 +382,14 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 		filterState.categoryPrimaryId = primarySelect.value;
 		filterState.categorySecondaryId = secondarySelect.value;
 		filterState.reviewStatus = reviewSelect.value as "" | ReviewStatus;
-		filterState.period = periodSelect.value;
-		filterState.periodMonth = monthSelect.disabled ? "" : monthSelect.value;
-		filterState.periodWeek = weekSelect.disabled ? "" : weekSelect.value;
-		filterState.dateFrom = dateFrom.value;
-		filterState.dateTo = dateTo.value;
 
 		const needle = filterState.search.toLowerCase();
 		const accountFilter = filterState.accountId;
 		const primaryFilter = filterState.categoryPrimaryId;
 		const secondaryFilter = filterState.categorySecondaryId;
-		const from = filterState.dateFrom;
-		const to = filterState.dateTo;
+		// The window comes from the page's own period filter — see LedgerOptions.
+		const from = opts.period.from;
+		const to = opts.period.to;
 
 		const filtered = [...scopedTransactions]
 			.filter((t) => !needle || `${t.description} ${t.counterparty ?? ""}`.toLowerCase().includes(needle))
@@ -583,53 +502,15 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin): voi
 	});
 	secondarySelect.addEventListener("change", redrawFromFirstPage);
 	reviewSelect.addEventListener("change", redrawFromFirstPage);
-	/** The deepest level that names a range wins: a week over its month, a month over its year. */
-	function applyPeriodToDates(): void {
-		const week = weekSelect.disabled ? "" : weekSelect.value;
-		const month = monthSelect.disabled ? "" : monthSelect.value;
-		const range = (week && weekRangeFrom(week)) || (month && monthRange(month)) || periodRange(periodSelect.value);
-		if (range) {
-			dateFrom.value = range.from;
-			dateTo.value = range.to;
-		} else if (periodSelect.value === PERIOD_ALL) {
-			dateFrom.value = "";
-			dateTo.value = "";
-		}
-		// "Custom range…" deliberately leaves the dates alone: it reveals whatever range you were
-		// already looking at, ready to be adjusted, rather than making you start from nothing.
-	}
-
-	periodSelect.addEventListener("change", () => {
-		customRange.toggleClass("is-hidden", periodSelect.value !== PERIOD_CUSTOM);
-		// A new year means new months, and the week that was showing belonged to the old one.
-		populateMonthSelect(periodSelect.value, "");
-		populateWeekSelect("", "");
-		applyPeriodToDates();
-		redrawFromFirstPage();
-	});
-	monthSelect.addEventListener("change", () => {
-		populateWeekSelect(monthSelect.value, "");
-		applyPeriodToDates();
-		redrawFromFirstPage();
-	});
-	weekSelect.addEventListener("change", () => {
-		applyPeriodToDates();
-		redrawFromFirstPage();
-	});
-	dateFrom.addEventListener("change", redrawFromFirstPage);
-	dateTo.addEventListener("change", redrawFromFirstPage);
 	clearBtn.addEventListener("click", () => {
-		search.value = "";
-		if (accountSelect) accountSelect.value = "";
-		primarySelect.value = "";
-		populateSecondaryFilter("", "");
-		reviewSelect.value = "";
-		periodSelect.value = PERIOD_ALL;
-		populateMonthSelect(PERIOD_ALL, "");
-		populateWeekSelect("", "");
-		customRange.addClass("is-hidden");
-		dateFrom.value = "";
-		dateTo.value = "";
-		redrawFromFirstPage();
+		filterState.search = "";
+		filterState.accountId = "";
+		filterState.categoryPrimaryId = "";
+		filterState.categorySecondaryId = "";
+		filterState.reviewStatus = "";
+		pageState.page = 1;
+		// The period is the page's, not this row's, so clearing hands back to the page — which redraws
+		// this whole section from the state just cleared.
+		opts.onResetPeriod();
 	});
 }

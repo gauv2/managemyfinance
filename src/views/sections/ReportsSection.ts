@@ -4,6 +4,7 @@ import { writeExport } from "../../data/backup";
 import type FinancePlugin from "../../main";
 import { formatMoney } from "../../money";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
+import { emptyPeriodSelection, periodRange } from "../../period";
 import {
 	buildReportCsv,
 	buildReportHtml,
@@ -25,10 +26,12 @@ import {
 } from "../../reports/query";
 import { openNote, writeReportNote } from "../../reports/write";
 import { badge, categoryChip, emptyState, icon, statTile } from "../../ui/dom";
+import { renderPeriodFilter } from "../../ui/periodFilter";
 
 type Grouping = "category" | "month" | "merchant" | "account";
 
-interface ReportState extends ReportQuery {
+/** Everything about the report except its window, which lives in `period` below. */
+interface ReportState extends Omit<ReportQuery, "from" | "to"> {
 	/** Which breakdown the summary table shows. Purely presentational — every breakdown is computed. */
 	grouping: Grouping;
 	/** Rows currently drawn in the preview; grows via "Show more" rather than paginating. */
@@ -42,8 +45,6 @@ const PAGE_SIZE = 50;
  * from elsewhere must not silently throw away a report you spent a minute assembling.
  */
 const state: ReportState = {
-	from: "",
-	to: "",
 	categoryIds: [],
 	accountIds: [],
 	search: "",
@@ -52,6 +53,14 @@ const state: ReportState = {
 	grouping: "category",
 	shown: PAGE_SIZE,
 };
+
+/**
+ * The report's window, held in the same shape every other period filter in the plugin uses — see
+ * src/ui/periodFilter.ts. This page used to carry its own row of preset buttons, which had already
+ * drifted from the ledger's ("2026 (this year)" against "This month", no month or week drill-down at
+ * all) and computed the same month boundaries a second time.
+ */
+const period = emptyPeriodSelection();
 
 /** Whether the default period has been applied yet this session — see the note where it's used. */
 let initialized = false;
@@ -63,12 +72,15 @@ const GROUPING_LABEL: Record<Grouping, string> = {
 	account: "Account",
 };
 
-function thisYear(): string {
-	return String(new Date().getFullYear());
-}
-
-function yearBounds(year: string): { from: string; to: string } {
-	return { from: `${year}-01-01`, to: `${year}-12-31` };
+/** Selects the whole of this calendar year — the report the page opens on, and what Reset returns to. */
+function selectThisYear(): void {
+	const year = String(new Date().getFullYear());
+	const bounds = periodRange(year)!;
+	period.period = year;
+	period.month = "";
+	period.week = "";
+	period.from = bounds.from;
+	period.to = bounds.to;
 }
 
 /**
@@ -92,8 +104,8 @@ export function renderReportsSection(container: HTMLElement, plugin: FinancePlug
 
 	function query(): ReportQuery {
 		return {
-			from: state.from || undefined,
-			to: state.to || undefined,
+			from: period.from || undefined,
+			to: period.to || undefined,
 			categoryIds: state.categoryIds,
 			accountIds: state.accountIds,
 			search: state.search,
@@ -104,7 +116,7 @@ export function renderReportsSection(container: HTMLElement, plugin: FinancePlug
 
 	/** The filter chips reprinted as words, so a PDF read months later says what it was asking. */
 	function filterSummary(result: ReportResult): string[] {
-		const out: string[] = [describePeriod(state.from || undefined, state.to || undefined)];
+		const out: string[] = [describePeriod(period.from || undefined, period.to || undefined)];
 		for (const id of state.categoryIds ?? []) {
 			if (id === UNCATEGORIZED) {
 				out.push("Uncategorized");
@@ -127,7 +139,7 @@ export function renderReportsSection(container: HTMLElement, plugin: FinancePlug
 	function exportContext(result: ReportResult): ExportContext {
 		return {
 			title: describeQuery(source(), query()),
-			period: describePeriod(state.from || undefined, state.to || undefined),
+			period: describePeriod(period.from || undefined, period.to || undefined),
 			categories: store.categories,
 			accounts: store.accounts,
 			generatedAt: new Date().toISOString(),
@@ -190,53 +202,16 @@ export function renderReportsSection(container: HTMLElement, plugin: FinancePlug
 
 	function renderPeriodRow(card: HTMLElement): void {
 		const control = fieldRow(card, "Period", "The window the report covers");
-
-		const presets = control.createDiv({ cls: "fp-report-presets" });
-		const years = Array.from(new Set(store.transactions.map((t) => (t.date || "").slice(0, 4)).filter(Boolean))).sort().reverse();
-
-		function presetBtn(label: string, from: string, to: string): void {
-			const active = state.from === from && state.to === to;
-			const btn = presets.createEl("button", { cls: "fp-report-preset" + (active ? " is-active" : ""), text: label });
-			btn.addEventListener("click", () => {
-				state.from = from;
-				state.to = to;
+		// The same control the ledger and the dashboards use — year, then month, then week, with the
+		// raw from/to behind "Custom range…" for the arbitrary windows a report legitimately needs.
+		renderPeriodFilter(control, {
+			dates: store.transactions.map((t) => t.date),
+			selection: period,
+			label: "",
+			onChange: () => {
 				state.shown = PAGE_SIZE;
 				render();
-			});
-		}
-
-		const now = new Date();
-		const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-		const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-		presetBtn("This month", `${month}-01`, `${month}-${String(lastDay).padStart(2, "0")}`);
-		for (const year of years.slice(0, 5)) {
-			const bounds = yearBounds(year);
-			presetBtn(year === thisYear() ? `${year} (this year)` : year, bounds.from, bounds.to);
-		}
-		const allActive = !state.from && !state.to;
-		const allBtn = presets.createEl("button", { cls: "fp-report-preset" + (allActive ? " is-active" : ""), text: "All time" });
-		allBtn.addEventListener("click", () => {
-			state.from = "";
-			state.to = "";
-			state.shown = PAGE_SIZE;
-			render();
-		});
-
-		const dates = control.createDiv({ cls: "fp-report-dates" });
-		const from = dates.createEl("input", { type: "date", cls: "fp-filter-date" });
-		from.value = state.from ?? "";
-		from.addEventListener("change", () => {
-			state.from = from.value;
-			state.shown = PAGE_SIZE;
-			render();
-		});
-		dates.createSpan({ cls: "fp-filter-date-sep", text: "–" });
-		const to = dates.createEl("input", { type: "date", cls: "fp-filter-date" });
-		to.value = state.to ?? "";
-		to.addEventListener("change", () => {
-			state.to = to.value;
-			state.shown = PAGE_SIZE;
-			render();
+			},
 		});
 	}
 
@@ -365,9 +340,7 @@ export function renderReportsSection(container: HTMLElement, plugin: FinancePlug
 
 		const reset = line.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Reset" });
 		reset.addEventListener("click", () => {
-			const bounds = yearBounds(thisYear());
-			state.from = bounds.from;
-			state.to = bounds.to;
+			selectThisYear();
 			state.categoryIds = [];
 			state.accountIds = [];
 			state.search = "";
@@ -395,7 +368,7 @@ export function renderReportsSection(container: HTMLElement, plugin: FinancePlug
 			iconName: "list",
 			money: false,
 			tone: result.count > 0 ? "neutral" : "warn",
-			sub: describePeriod(state.from || undefined, state.to || undefined),
+			sub: describePeriod(period.from || undefined, period.to || undefined),
 		});
 		statTile(tiles, { label: "Total out", value: money(result.spent, result), iconName: "arrow-down-left", tone: "bad" });
 		statTile(tiles, { label: "Total in", value: money(result.received, result), iconName: "arrow-up-right", tone: "good" });
@@ -588,9 +561,7 @@ export function renderReportsSection(container: HTMLElement, plugin: FinancePlug
 	// inferring intent from them would silently undo that choice every time the page re-mounted.
 	if (!initialized) {
 		initialized = true;
-		const bounds = yearBounds(thisYear());
-		state.from = bounds.from;
-		state.to = bounds.to;
+		selectThisYear();
 	}
 
 	render();

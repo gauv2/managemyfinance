@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
 	summarizeByYear,
 	summarizeByMonth,
+	summarizeTotal,
 	yearSummaryFor,
 	netWorth,
 	categoryTotals,
 	primaryCategoryTotals,
-	spendingYears,
 	categoryTransactions,
 	accountStats,
 	averageMonthlyExpenses,
@@ -199,6 +199,103 @@ describe("summarizeByYear", () => {
 	});
 });
 
+// ---------- summarizeByYear under a period filter ----------
+
+describe("summarizeByYear — ranges", () => {
+	const spanningStore = (): KpiStore =>
+		store({
+			accounts: [{ ...checking, openingBalance: 100 }],
+			transactions: [
+				tx({ date: "2024-05-01", accountId: checking.id, amount: 1000, categoryId: catIncome.id }),
+				tx({ date: "2024-05-02", accountId: checking.id, amount: -400, categoryId: catFood.id }),
+				tx({ date: "2025-03-01", accountId: checking.id, amount: 2000, categoryId: catIncome.id }),
+				tx({ date: "2025-09-01", accountId: checking.id, amount: -500, categoryId: catFood.id }),
+			],
+		});
+
+	it("returns only the years the range covers", () => {
+		const years = summarizeByYear(spanningStore(), undefined, { from: "2025-01-01", to: "2025-12-31" });
+		expect(years.map((y) => y.year)).toEqual(["2025"]);
+		expect(years[0]).toMatchObject({ income: 2000, expenses: 500 });
+	});
+
+	it("counts only the transactions inside the range within a year it clips", () => {
+		const years = summarizeByYear(spanningStore(), undefined, { from: "2025-01-01", to: "2025-06-30" });
+		expect(years[0]).toMatchObject({ income: 2000, expenses: 0, partial: true });
+	});
+
+	it("marks a year the range covers in full as not partial", () => {
+		const years = summarizeByYear(spanningStore(), undefined, { from: "2025-01-01", to: "2025-12-31" });
+		expect(years[0].partial).toBe(false);
+	});
+
+	it("carries everything before the range into the opening position rather than starting from zero", () => {
+		// Opening 100, then 2024 leaves 700 on the books — 2025's closing worth has to build on that.
+		const years = summarizeByYear(spanningStore(), undefined, { from: "2025-01-01", to: "2025-12-31" });
+		expect(years[0].netWorthEOY).toBe(2200);
+	});
+
+	it("closes a clipped year at the end of the range, not at a year end the range never reached", () => {
+		const years = summarizeByYear(spanningStore(), undefined, { from: "2025-01-01", to: "2025-06-30" });
+		// The September expense is outside the range, so it hasn't happened yet as far as this reads.
+		expect(years[0].netWorthEOY).toBe(2700);
+	});
+
+	it("leaves an unfiltered call exactly as it was", () => {
+		const years = summarizeByYear(spanningStore());
+		expect(years.map((y) => y.year)).toEqual(["2024", "2025"]);
+		expect(years.at(-1)!.netWorthEOY).toBeCloseTo(netWorth(spanningStore()), 6);
+		expect(years[0].partial).toBe(false);
+	});
+
+	it("takes a clipped year's closing worth from the snapshot path too", () => {
+		const s: KpiStore = {
+			...spanningStore(),
+			snapshots: [{ id: "snap-1", accountId: checking.id, date: "2025-02-01", balance: 5000 }],
+		};
+		const years = summarizeByYear(s, undefined, { from: "2025-01-01", to: "2025-06-30" });
+		// Snapshot of 5000 on 1 February, plus the March income that followed it.
+		expect(years[0].netWorthEOY).toBe(7000);
+	});
+
+	it("comes back empty when the range contains nothing", () => {
+		expect(summarizeByYear(spanningStore(), undefined, { from: "2019-01-01", to: "2019-12-31" })).toEqual([]);
+	});
+});
+
+describe("summarizeTotal", () => {
+	it("rolls several years into one summary spanning them", () => {
+		const years = summarizeByYear(
+			store({
+				transactions: [
+					tx({ date: "2024-01-01", accountId: checking.id, amount: 1000, categoryId: catIncome.id }),
+					tx({ date: "2024-01-02", accountId: checking.id, amount: -400, categoryId: catFood.id }),
+					tx({ date: "2025-01-01", accountId: checking.id, amount: 1000, categoryId: catIncome.id }),
+					tx({ date: "2025-01-02", accountId: checking.id, amount: -600, categoryId: catFood.id }),
+				],
+			})
+		);
+		expect(summarizeTotal(years)).toMatchObject({
+			year: "2024–2025",
+			income: 2000,
+			expenses: 1000,
+			net: 1000,
+			savingsRate: 0.5,
+			// Where the period ends, i.e. the last year's closing figure — not the sum of them.
+			netWorthEOY: 1000,
+		});
+	});
+
+	it("keeps a single year's own label", () => {
+		const years = summarizeByYear(store({ transactions: [tx({ date: "2025-01-01", accountId: checking.id, amount: 100 })] }));
+		expect(summarizeTotal(years)?.year).toBe("2025");
+	});
+
+	it("is undefined when the period holds nothing", () => {
+		expect(summarizeTotal([])).toBeUndefined();
+	});
+});
+
 describe("yearSummaryFor", () => {
 	it("returns the matching year", () => {
 		const years = summarizeByYear(
@@ -319,44 +416,31 @@ describe("primaryCategoryTotals", () => {
 		expect(primaryCategoryTotals(s).get(catFood.id)).toBe(50);
 		expect(primaryCategoryTotals(s).has(catGroceries.id)).toBe(false);
 	});
-});
 
-describe("spendingYears", () => {
-	it("returns the years with spending, newest first, deduplicated", () => {
+	it("still matches a plain year or month as a date prefix", () => {
 		const s = store({
 			transactions: [
-				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
-				tx({ date: "2024-06-01", accountId: checking.id, amount: -30, categoryId: catFood.id }),
-				tx({ date: "2026-02-01", accountId: checking.id, amount: -10, categoryId: catFood.id }),
+				tx({ date: "2024-01-15", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+				tx({ date: "2024-02-15", accountId: checking.id, amount: -30, categoryId: catFood.id }),
+				tx({ date: "2025-01-15", accountId: checking.id, amount: -40, categoryId: catFood.id }),
 			],
 		});
-		expect(spendingYears(s)).toEqual(["2026", "2024"]);
+		expect(primaryCategoryTotals(s, "2024").get(catFood.id)).toBe(50);
+		expect(primaryCategoryTotals(s, "2024-02").get(catFood.id)).toBe(30);
 	});
 
-	it("ignores income and transfers, so no offered year comes back with an empty card", () => {
+	it("takes a date range, so a page period filter can drive it", () => {
 		const s = store({
 			transactions: [
-				tx({ date: "2023-01-01", accountId: checking.id, amount: 5000, categoryId: catIncome.id }),
-				tx({ date: "2022-01-01", accountId: checking.id, amount: -400, categoryId: catTransfers.id }),
-				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+				tx({ date: "2024-01-15", accountId: checking.id, amount: -20, categoryId: catFood.id }),
+				tx({ date: "2024-03-10", accountId: checking.id, amount: -30, categoryId: catFood.id }),
+				tx({ date: "2024-06-01", accountId: checking.id, amount: -40, categoryId: catFood.id }),
 			],
 		});
-		expect(spendingYears(s)).toEqual(["2024"]);
-	});
-
-	it("scopes to one account when asked", () => {
-		const s = store({
-			transactions: [
-				tx({ date: "2024-01-01", accountId: checking.id, amount: -20, categoryId: catFood.id }),
-				tx({ date: "2025-01-01", accountId: savings.id, amount: -20, categoryId: catFood.id }),
-			],
-		});
-		expect(spendingYears(s, checking.id)).toEqual(["2024"]);
-		expect(spendingYears(s, savings.id)).toEqual(["2025"]);
-	});
-
-	it("returns nothing when there is no spending at all", () => {
-		expect(spendingYears(store())).toEqual([]);
+		expect(primaryCategoryTotals(s, { from: "2024-02-01", to: "2024-04-30" }).get(catFood.id)).toBe(30);
+		// Either end can be left open — a half-typed custom range still filters on the end that's set.
+		expect(primaryCategoryTotals(s, { from: "2024-03-01", to: "" }).get(catFood.id)).toBe(70);
+		expect(primaryCategoryTotals(s, { from: "", to: "2024-02-01" }).get(catFood.id)).toBe(20);
 	});
 });
 

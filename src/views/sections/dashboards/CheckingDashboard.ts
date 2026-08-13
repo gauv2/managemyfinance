@@ -1,39 +1,44 @@
-import { netWorth, summarizeByYear, yearSummaryFor } from "../../../kpi";
+import { netWorth, summarizeByYear, summarizeTotal, yearSummaryFor } from "../../../kpi";
 import type FinancePlugin from "../../../main";
 import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
+import { describeRange, monthsInRange, type DateRange } from "../../../period";
 import type { Account } from "../../../types";
 import { statTile } from "../../../ui/dom";
-import { deltaRow, formatEUR, formatPct, metricRow, yearHeaderRow } from "../../../ui/metricsTable";
+import { deltaRow, formatEUR, formatPct, metricRow, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
 import { renderSpendingByCategoryCard } from "./SpendingByCategoryCard";
 
 /**
  * A checking account is the everyday spending/income hub, so its KPIs are cash-flow first:
  * balance, savings rate, and where the money actually goes.
  */
-export function renderCheckingDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account): void {
+export function renderCheckingDashboard(container: HTMLElement, plugin: FinancePlugin, account: Account, range?: DateRange): void {
 	const store = plugin.store;
-	const years = summarizeByYear(store, account.id);
-	const currentYear = yearSummaryFor(years);
+	const periodLabel = describeRange(range);
+	const years = summarizeByYear(store, account.id, range);
+	// The page filter's window, or this calendar year when it covers everything.
+	const currentYear = range ? summarizeTotal(years) : yearSummaryFor(years);
+	const scopeWord = range ? periodLabel : "this year";
 	const balance = netWorth(store, account.id);
 
 	const tiles = container.createDiv({ cls: "fp-stat-grid" });
 	statTile(tiles, { label: "Current balance", value: formatEUR(balance), iconName: "landmark" });
 	statTile(tiles, {
-		label: "Savings rate (this year)",
+		label: `Savings rate (${scopeWord})`,
 		value: currentYear ? formatPct(currentYear.savingsRate) : "—",
 		iconName: "piggy-bank",
 		tone: !currentYear ? "neutral" : currentYear.savingsRate >= 0.4 ? "good" : currentYear.savingsRate >= 0.15 ? "warn" : "bad",
 		money: false,
 	});
 	statTile(tiles, {
-		label: "Net this year",
+		label: range ? `Net · ${periodLabel}` : "Net this year",
 		value: currentYear ? formatEUR(currentYear.net) : "—",
 		iconName: "trending-up",
 		tone: !currentYear ? "neutral" : currentYear.net >= 0 ? "good" : "bad",
 	});
 	statTile(tiles, {
 		label: "Avg. monthly expenses",
-		value: currentYear ? formatEUR(currentYear.expenses / 12) : "—",
+		value: currentYear ? formatEUR(currentYear.expenses / (range ? monthsInRange(range) : 12)) : "—",
+		sub: range ? `over ${periodLabel}` : undefined,
 		iconName: "receipt",
 	});
 
@@ -43,6 +48,7 @@ export function renderCheckingDashboard(container: HTMLElement, plugin: FinanceP
 		const table = historyCard.createEl("table", { cls: "fp-table fp-table-metrics" });
 		yearHeaderRow(table, years.map((y) => y.year), {
 			onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year, account.name, account.id).open(),
+			labelFor: yearLabeller(years),
 		});
 		const tbody = table.createEl("tbody");
 
@@ -57,7 +63,8 @@ export function renderCheckingDashboard(container: HTMLElement, plugin: FinanceP
 
 		metricRow(tbody, "Balance (EOY)", years.map((y) => y.netWorthEOY), formatEUR, { emphasize: true, heat: "normal" });
 		deltaRow(tbody, years.map((y) => y.netWorthEOY));
+		partialYearsNote(historyCard, years, periodLabel);
 	}
 
-	renderSpendingByCategoryCard(container, plugin, { accountId: account.id, scopeLabel: account.name });
+	renderSpendingByCategoryCard(container, plugin, { accountId: account.id, scopeLabel: account.name, range, periodLabel });
 }

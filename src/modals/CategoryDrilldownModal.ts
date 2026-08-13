@@ -3,6 +3,7 @@ import { categoryChain, descendantIds, secondaryCategoriesOf } from "../categori
 import { convert } from "../currency";
 import type FinancePlugin from "../main";
 import { formatMoney } from "../money";
+import { inRange, type DateRange } from "../period";
 import type { Category, Transaction } from "../types";
 import { barChart } from "../ui/charts";
 import { categoryChainChip, icon } from "../ui/dom";
@@ -28,6 +29,10 @@ export class CategoryDrilldownModal extends Modal {
 			categoryId: string;
 			/** "YYYY" or "YYYY-MM" — matched as a date prefix, so either granularity works. */
 			period?: string;
+			/** The page period filter's window, for the callers that have one — takes over from `period`. */
+			range?: DateRange;
+			/** How that window reads in the header; defaults to `period`. */
+			periodLabel?: string;
 			accountId?: string;
 			/** Shown in the header so it's obvious what the figures are scoped to. */
 			scopeLabel?: string;
@@ -56,7 +61,7 @@ export class CategoryDrilldownModal extends Modal {
 		return store.transactions
 			.filter((tx) => {
 				if (tx.amount >= 0) return false;
-				if (this.opts.period && !tx.date?.startsWith(this.opts.period)) return false;
+				if (this.opts.range ? !inRange(tx.date, this.opts.range) : this.opts.period && !tx.date?.startsWith(this.opts.period)) return false;
 				if (this.opts.accountId && tx.accountId !== this.opts.accountId) return false;
 				if (uncategorized) return !tx.categoryId;
 				return !!tx.categoryId && ids.has(tx.categoryId);
@@ -84,7 +89,7 @@ export class CategoryDrilldownModal extends Modal {
 		else titleRow.createEl("h3", { text: "Uncategorized" });
 		headText.createDiv({
 			cls: "fp-section-subtitle",
-			text: [this.opts.scopeLabel, this.opts.period].filter(Boolean).join(" · ") || "All time",
+			text: [this.opts.scopeLabel, this.opts.periodLabel ?? this.opts.period].filter(Boolean).join(" · ") || "All time",
 		});
 		head.createDiv({ cls: "fp-detail-amount fp-money", text: formatMoney(total) });
 
