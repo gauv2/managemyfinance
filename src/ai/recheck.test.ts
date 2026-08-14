@@ -277,7 +277,7 @@ describe("describeRecheck", () => {
 			agreed: [],
 			proposals: [],
 			unsettled: [],
-			skipped: { splitAcrossCategories: 0, alreadyReviewed: 0 },
+			skipped: { splitAcrossCategories: 0, alreadyReviewed: 0, noReadableName: 0 },
 			rejected: [],
 			truncated: false,
 			model: "claude-opus-5",
@@ -296,7 +296,7 @@ describe("describeRecheck", () => {
 		const line = describeRecheck(
 			result({
 				agreed: agreedList(50),
-				skipped: { splitAcrossCategories: 12, alreadyReviewed: 30 },
+				skipped: { splitAcrossCategories: 12, alreadyReviewed: 30, noReadableName: 0 },
 				unsettled: [...unsettledList(4, "uncertain"), ...unsettledList(2, "unrecognized")],
 			})
 		);
@@ -311,7 +311,7 @@ describe("describeRecheck", () => {
 	});
 
 	it("explains an empty run caused by everything already being confirmed", () => {
-		const line = describeRecheck(result({ checked: 0, skipped: { splitAcrossCategories: 0, alreadyReviewed: 55 } }));
+		const line = describeRecheck(result({ checked: 0, skipped: { splitAcrossCategories: 0, alreadyReviewed: 55, noReadableName: 0 } }));
 		expect(line).toContain("all 55 categorized merchants have already been confirmed");
 	});
 });

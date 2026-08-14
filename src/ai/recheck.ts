@@ -94,7 +94,7 @@ export interface RecheckResult {
 	 */
 	unsettled: UnsettledMerchant[];
 	/** Merchants deliberately left out — see buildRecheckTargets. */
-	skipped: { splitAcrossCategories: number; alreadyReviewed: number };
+	skipped: { splitAcrossCategories: number; alreadyReviewed: number; noReadableName: number };
 	/** Answers thrown out by validation, with the reason. */
 	rejected: { merchant: string; reason: string }[];
 	/** True when the cap bit, or a batch failed, so the pass covered only part of the ledger. */
@@ -113,7 +113,7 @@ export interface RecheckTargets {
 	targets: RecheckTarget[];
 	available: number;
 	truncated: boolean;
-	skipped: { splitAcrossCategories: number; alreadyReviewed: number };
+	skipped: { splitAcrossCategories: number; alreadyReviewed: number; noReadableName: number };
 }
 
 /**
@@ -157,7 +157,7 @@ export function buildRecheckTargets(
 		if (candidate && candidate.length > (names.get(key) ?? "").length) names.set(key, candidate);
 	}
 
-	const skipped = { splitAcrossCategories: 0, alreadyReviewed: 0 };
+	const skipped = { splitAcrossCategories: 0, alreadyReviewed: 0, noReadableName: 0 };
 	const all: RecheckTarget[] = [];
 
 	for (const [key, byCategory] of votes) {
@@ -176,7 +176,12 @@ export function buildRecheckTargets(
 
 		const name = names.get(key);
 		// No readable name means nothing a model could judge — the same reason the matcher refuses.
-		if (!name) continue;
+		// Counted rather than dropped in silence: these used to vanish from every total, so the tallies
+		// on screen added up to fewer merchants than the vault holds and the difference was unexplained.
+		if (!name) {
+			skipped.noReadableName++;
+			continue;
+		}
 
 		all.push({
 			key,

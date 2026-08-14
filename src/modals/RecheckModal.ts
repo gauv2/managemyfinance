@@ -8,11 +8,11 @@ import {
 	type CategoryProposal,
 	type RecheckResult,
 } from "../ai/recheck";
-import { categoryChain } from "../categories";
-import { markReviewed } from "../import/merchantMemory";
+import { categoryChain, secondaryCategoriesOf } from "../categories";
+import { markReviewed, remember } from "../import/merchantMemory";
 import type FinancePlugin from "../main";
 import type { Transaction } from "../types";
-import { categoryChainChip, icon } from "../ui/dom";
+import { categoryChainChip, icon, renderCategoryPicker, type CategoryPickerValue } from "../ui/dom";
 
 /**
  * Claude's second opinion on categories you already have, as a list you rule on.
@@ -32,8 +32,20 @@ export class RecheckModal extends Modal {
 	private accepted = new Set<string>();
 	private progress = { done: 0, total: 0 };
 	private includeReviewed = false;
+	/** How many were confirmed while the option was off — the count the label keeps quoting once it is on. */
+	private confirmedWhenExcluded = 0;
 
-	constructor(app: App, private plugin: FinancePlugin, private opts: { onDone?: () => void } = {}) {
+	constructor(
+		app: App,
+		private plugin: FinancePlugin,
+		/**
+		 * `scope` narrows the recheck to a subset of the ledger. Without it the modal examines every
+		 * categorized merchant, which is the maintenance job it was built for. With it, the Review page
+		 * can ask the same question of just the rows still waiting on you — the case where "have another
+		 * look at these" is a review action rather than a spring clean.
+		 */
+		private opts: { onDone?: () => void; scope?: { transactions: Transaction[]; label: string } } = {}
+	) {
 		super(app);
 	}
 
@@ -46,7 +58,7 @@ export class RecheckModal extends Modal {
 	private render(): void {
 		const c = this.contentEl;
 		c.empty();
-		c.createEl("h3", { text: "Recheck categories" });
+		c.createEl("h3", { text: this.opts.scope ? `Recheck ${this.opts.scope.label}` : "Recheck categories" });
 
 		if (this.phase === "intro") this.renderIntro(c);
 		else if (this.phase === "running") this.renderRunning(c);
@@ -57,61 +69,100 @@ export class RecheckModal extends Modal {
 
 	private renderIntro(c: HTMLElement): void {
 		const store = this.plugin.store;
-		const prepared = buildRecheckTargets(store.transactions, store.merchants, { includeReviewed: this.includeReviewed });
+		const source = this.opts.scope?.transactions ?? store.transactions;
+		const prepared = buildRecheckTargets(source, store.merchants, { includeReviewed: this.includeReviewed });
 
 		c.createDiv({
 			cls: "fp-step-desc",
 			text: "Claude re-classifies merchants you've already categorized, without being told what they're currently filed as, and anything it disagrees with is listed here for you to accept or reject. Nothing is changed until you say so.",
 		});
 
-		const stats = c.createDiv({ cls: "fp-recheck-stats" });
-		const tile = (label: string, value: string, sub: string): void => {
-			const box = stats.createDiv({ cls: "fp-recheck-stat" });
-			box.createDiv({ cls: "fp-recheck-stat-value", text: value });
-			box.createDiv({ cls: "fp-recheck-stat-label", text: label });
-			box.createDiv({ cls: "fp-recheck-stat-sub", text: sub });
-		};
-		// Merchants and transactions are wildly different numbers — a few hundred shops account for
-		// thousands of rows — so the count is useless, and actively misleading, without its unit and
-		// its reach both on screen.
+		// One sentence, not a scoreboard. The earlier version put four tiles here — merchants, the
+		// transactions behind them, the split-category ones left out, and the already-confirmed ones
+		// skipped — which described the machinery rather than the decision. Three of those four are
+		// facts about what the recheck *declines* to do, and none of them changes the answer to the
+		// only question this dialog asks: shall I look, yes or no.
 		const coveredRows = prepared.targets.reduce((sum, t) => sum + t.transactions.length, 0);
-		tile(
-			"Merchants to check",
-			String(prepared.targets.length),
-			prepared.truncated ? `busiest ${prepared.targets.length} of ${prepared.available}` : "distinct shops, not transactions"
-		);
-		tile("Transactions behind them", String(coveredRows), "rows a change here could move");
-		tile("Left alone", String(prepared.skipped.splitAcrossCategories), "split across categories on purpose");
-		tile("Already confirmed", String(prepared.skipped.alreadyReviewed), this.includeReviewed ? "included this run" : "skipped");
 
-		this.note(
-			c,
-			"Merchants whose transactions are genuinely split between categories are left out: a supermarket you buy both groceries and petrol from has no single category to disagree with, and proposing one would flatten a distinction you drew on purpose."
-		);
+		if (prepared.targets.length === 0) {
+			c.createDiv({
+				cls: "fp-step-desc",
+				text: this.includeReviewed
+					? "Nothing to re-examine — every merchant here is either confirmed or split across categories on purpose."
+					: "Nothing new to re-examine. Every categorized merchant has already been confirmed; tick the box below to go over them again anyway.",
+			});
+		} else {
+			const headline = c.createDiv({ cls: "fp-recheck-headline" });
+			headline.createSpan({ cls: "fp-recheck-headline-value", text: String(prepared.targets.length) });
+			headline.createSpan({
+				cls: "fp-recheck-headline-label",
+				text: `merchant${prepared.targets.length === 1 ? "" : "s"} to re-examine, covering ${coveredRows} transaction${
+					coveredRows === 1 ? "" : "s"
+				}`,
+			});
+		}
 
-		// The number people reach for is the Review tab's badge, and it counts something else entirely.
-		// Saying so here is cheaper than letting the two be silently compared.
-		const unapproved = store.transactions.filter((t) => (t.review ?? "new") !== "approved").length;
-		if (unapproved > 0) {
-			this.note(
-				c,
-				`Not to be confused with the ${unapproved} transaction${unapproved === 1 ? "" : "s"} waiting in the Review queue. That is a count of rows by approval status; this is a count of shops by category. A recheck ignores approval entirely, and only looks at transactions that already have a category — rows with no category at all belong to "Auto-categorize" and "Ask Claude" instead.`
+		// What is deliberately left out, as prose and only when it applies — a count of exclusions is
+		// reassurance, not a control, and it does not deserve the same weight as the thing being done.
+		const excluded: string[] = [];
+		if (prepared.skipped.splitAcrossCategories > 0) {
+			excluded.push(
+				`${prepared.skipped.splitAcrossCategories} merchant${prepared.skipped.splitAcrossCategories === 1 ? " is" : "s are"} split across categories on purpose — a supermarket you buy both groceries and petrol from has no single category to disagree with`
 			);
 		}
+		if (!this.includeReviewed && prepared.skipped.alreadyReviewed > 0) {
+			excluded.push(`${prepared.skipped.alreadyReviewed} you have already confirmed`);
+		}
+		if (prepared.skipped.noReadableName > 0) {
+			excluded.push(
+				`${prepared.skipped.noReadableName} carry no readable shop name — a bare payment reference gives a classifier nothing to judge`
+			);
+		}
+		if (excluded.length > 0) this.note(c, `Left alone: ${excluded.join("; ")}.`);
+
 		if (prepared.truncated) {
 			this.note(
 				c,
-				`This portfolio has ${prepared.available} merchants to check and one pass covers ${prepared.targets.length}, busiest first. Run it again afterwards to reach the rest — confirmed merchants drop out each time.`
+				`One pass covers ${prepared.targets.length} of ${prepared.available}, busiest first. Run it again afterwards to reach the rest.`
 			);
 		}
 
-		if (prepared.skipped.alreadyReviewed > 0) {
+		// Settle them here, without asking Claude anything.
+		//
+		// The same button existed only on the results screen, which meant the way to stop being asked
+		// about a handful of merchants was to run the very query you were trying to stop running. If you
+		// are happy with how these are filed, that is a decision you can make now, and this dialog
+		// should let you make it and be finished.
+		if (prepared.targets.length > 0) {
+			const settleRow = c.createDiv({ cls: "fp-recheck-settle" });
+			const settleBtn = settleRow.createEl("button", { cls: "fp-btn fp-btn-secondary fp-btn-tiny" });
+			icon(settleBtn, "check-check");
+			settleBtn.createSpan({
+				text: `They're fine — stop asking about these ${prepared.targets.length}`,
+			});
+			settleBtn.setAttribute(
+				"title",
+				"Marks them settled with the categories they already have. No AI request, nothing re-filed — they simply stop appearing here."
+			);
+			settleBtn.addEventListener("click", () =>
+				void this.settleAll(prepared.targets.map((t) => ({ key: t.key, categoryId: t.currentCategoryId })))
+			);
+		}
+
+		// Rendered whenever there is anything confirmed to fold in, OR whenever it is already switched
+		// on. Gating solely on `skipped.alreadyReviewed > 0` made the control delete itself: ticking it
+		// moves those merchants out of "skipped" and into the run, the count drops to zero, and on the
+		// re-render the checkbox vanishes — leaving the option on with no way to turn it back off short
+		// of closing the dialog.
+		const confirmedCount = prepared.skipped.alreadyReviewed || this.confirmedWhenExcluded;
+		if (!this.includeReviewed) this.confirmedWhenExcluded = prepared.skipped.alreadyReviewed;
+		if (confirmedCount > 0 || this.includeReviewed) {
 			const row = c.createDiv({ cls: "fp-recheck-toggle-row" });
 			const box = row.createEl("input", { type: "checkbox", cls: "fp-review-check" });
 			box.id = "fp-recheck-include";
 			box.checked = this.includeReviewed;
 			row.createEl("label", {
-				text: `Include the ${prepared.skipped.alreadyReviewed} merchant${prepared.skipped.alreadyReviewed === 1 ? "" : "s"} already confirmed`,
+				text: `Also re-examine the ${confirmedCount} merchant${confirmedCount === 1 ? "" : "s"} I have already confirmed`,
 				attr: { for: "fp-recheck-include" },
 			});
 			box.addEventListener("change", () => {
@@ -132,7 +183,16 @@ export class RecheckModal extends Modal {
 			run.disabled = true;
 			this.note(c, "AI is switched off. Turn it on in Vault settings → AI to run a recheck.");
 		} else if (prepared.targets.length === 0) {
+			// Disabled, and said out loud. A greyed button with no reason reads as a bug rather than as
+			// "there is nothing here to do", and the way to get work back is not guessable from a button
+			// that refuses to respond.
 			run.disabled = true;
+			run.setAttribute(
+				"title",
+				this.includeReviewed
+					? "Nothing left to examine — every merchant is either confirmed or deliberately split across categories."
+					: "Nothing new to examine. Tick the box above to go over the merchants you have already confirmed."
+			);
 		} else {
 			run.setAttribute("title", "Sends merchant names and your category tree — no amounts, dates or account details.");
 			run.addEventListener("click", () => void this.run(prepared));
@@ -157,7 +217,16 @@ export class RecheckModal extends Modal {
 			title: string;
 			hint: string;
 			open?: boolean;
-			items: { name: string; categoryId: string; count: number; suggestion?: { categoryId: string; confidence: number } }[];
+			/** Offers "stop asking about these" — see the button below. */
+			settleable?: boolean;
+			items: {
+				key: string;
+				name: string;
+				categoryId: string;
+				count: number;
+				transactions: Transaction[];
+				suggestion?: { categoryId: string; confidence: number };
+			}[];
 		}
 	): void {
 		if (opts.items.length === 0) return;
@@ -168,6 +237,26 @@ export class RecheckModal extends Modal {
 		const summary = group.createEl("summary", { cls: "fp-recheck-group-summary" });
 		summary.createSpan({ cls: "fp-recheck-group-title", text: `${opts.title} (${opts.items.length})` });
 		summary.createSpan({ cls: "fp-recheck-group-hint", text: opts.hint });
+
+		// A way to be finished.
+		//
+		// Merchants the model was unsure about, or could not place, were deliberately never recorded so
+		// that "a future run retries these" — which means a run can never reach zero. If it is
+		// persistently unsure about twenty shops, those twenty come back on every single pass, forever,
+		// and the tool becomes something you stop opening. Saying "leave these alone" is a person's
+		// decision about them, so recording it is honest in a way that stamping them silently would not
+		// have been: you looked, and you decided nothing needs to change.
+		if (opts.settleable && opts.items.length > 0) {
+			const settle = group.createDiv({ cls: "fp-recheck-settle" });
+			const btn = settle.createEl("button", { cls: "fp-btn fp-btn-secondary fp-btn-tiny" });
+			icon(btn, "check-check");
+			btn.createSpan({ text: `Stop asking about these ${opts.items.length}` });
+			btn.setAttribute(
+				"title",
+				"Keeps their current categories and marks them settled, so future rechecks skip them. Re-tick \"also re-examine confirmed\" to revisit."
+			);
+			btn.addEventListener("click", () => void this.settleAll(opts.items));
+		}
 
 		const list = group.createDiv({ cls: "fp-recheck-list" });
 		for (const item of opts.items) {
@@ -192,7 +281,108 @@ export class RecheckModal extends Modal {
 				categoryChainChip(wrap, suggested.primary, suggested.secondary);
 				change.createSpan({ cls: "fp-recheck-withheld-tag", text: "below the bar — not proposed" });
 			}
+
+			// Every row can be overridden here.
+			//
+			// Without this the dialog was read-only unless Claude happened to raise a proposal above the
+			// bar: a merchant it agreed with could not be corrected, and a near-miss it showed you the
+			// exact answer for — "Ring → Shopping › Electronics, 55% sure" — could not be taken. Both
+			// left the same dead end, closing the dialog and hunting the merchant down in the ledger.
+			//
+			// Anything set here is written as a person's decision (source "user", reviewedAt stamped), so
+			// it outranks a rule or a model on any later pass and the merchant stops being re-asked.
+			const actions = row.createDiv({ cls: "fp-recheck-row-actions" });
+
+			if (item.suggestion) {
+				const take = actions.createEl("button", { cls: "fp-btn fp-btn-secondary fp-btn-tiny" });
+				icon(take, "check");
+				take.createSpan({ text: "Use this" });
+				take.setAttribute("title", `Apply ${categoryChain(store.categories, item.suggestion.categoryId).primary?.name ?? "the suggestion"} to all ${item.count}`);
+				take.addEventListener("click", () => void this.applyToMerchant(item, item.suggestion!.categoryId));
+			}
+
+			// Choosing stages; the button commits. Applying on the picker's change event re-filed every
+			// row of the merchant the instant a category was selected — including the moment a primary
+			// with subcategories was picked, before its subcategory could be reached.
+			let staged: string | undefined;
+			const pickWrap = actions.createDiv({ cls: "fp-recheck-row-picker" });
+			const confirm = actions.createEl("button", { cls: "fp-btn fp-btn-primary fp-btn-tiny" });
+			confirm.hide();
+
+			const paint = (): void => {
+				confirm.empty();
+				if (!staged) {
+					confirm.hide();
+					return;
+				}
+				const chain = categoryChain(store.categories, staged);
+				const label = `Confirm: ${chain.secondary?.name ?? chain.primary?.name ?? "category"} for all ${item.count}`;
+				icon(confirm, "check");
+				confirm.createSpan({ text: label });
+				confirm.setAttribute("title", label);
+				confirm.show();
+			};
+
+			renderCategoryPicker(pickWrap, {
+				categories: store.categories,
+				primaryPlaceholder: "Change to…",
+				onChange: (value: CategoryPickerValue) => {
+					const chosen = value.secondaryId ?? value.primaryId;
+					// A primary that has subcategories is half a choice — wait for the rest rather than
+					// staging the parent and having the button change under the cursor.
+					staged =
+						!chosen || (!value.secondaryId && secondaryCategoriesOf(store.categories, value.primaryId ?? "").length > 0)
+							? undefined
+							: chosen;
+					paint();
+				},
+			});
+			confirm.addEventListener("click", () => {
+				if (staged) void this.applyToMerchant(item, staged);
+			});
 		}
+	}
+
+	/**
+	 * Files a merchant under a category chosen here, and records that a person chose it.
+	 *
+	 * Writes all three things a decision needs to stick: the rows themselves, the merchant memory that
+	 * future imports read, and the reviewed stamp that keeps the merchant out of the next recheck.
+	 * Anything less and the choice survives until the next pass and then quietly asks again.
+	 */
+	private async applyToMerchant(
+		item: { key: string; name: string; transactions: Transaction[] },
+		categoryId: string
+	): Promise<void> {
+		const store = this.plugin.store;
+		const patches = new Map<string, Partial<Transaction>>();
+		for (const tx of item.transactions) patches.set(tx.id, { categoryId });
+		const changed = await store.updateTransactions(patches);
+
+		store.merchants = markReviewed(remember(store.merchants, item.key, categoryId, "user"), item.key, categoryId);
+		await store.saveMerchants();
+
+		const name = store.categories.find((c) => c.id === categoryId)?.name ?? "category";
+		new Notice(`${item.name} → ${name} (${changed} transaction${changed === 1 ? "" : "s"})`);
+		this.plugin.refreshViews();
+		this.render();
+	}
+
+	/**
+	 * Marks a whole group settled without changing a single category.
+	 *
+	 * The statement being recorded is "I have looked at these and they are fine as they are", which is
+	 * exactly what `reviewedAt` means everywhere else. Nothing is re-filed; only the re-asking stops.
+	 */
+	private async settleAll(items: { key: string; categoryId: string }[]): Promise<void> {
+		const store = this.plugin.store;
+		let memory = store.merchants;
+		for (const item of items) memory = markReviewed(memory, item.key, item.categoryId);
+		store.merchants = memory;
+		await store.saveMerchants();
+		new Notice(`${items.length} merchant${items.length === 1 ? "" : "s"} settled — future rechecks will skip them`);
+		this.plugin.refreshViews();
+		this.render();
 	}
 
 	/** The two lists every finished pass can show, in both the proposals and the no-proposals branch. */
@@ -201,17 +391,20 @@ export class RecheckModal extends Modal {
 			title: "Confirming as-is",
 			hint: "Claude returned the category you already have — marking these confirmed only stops them being re-asked",
 			open: opts.agreedOpen,
-			items: result.agreed.map((a) => ({ name: a.name, categoryId: a.categoryId, count: a.transactions.length })),
+			items: result.agreed.map((a) => ({ key: a.key, name: a.name, categoryId: a.categoryId, count: a.transactions.length, transactions: a.transactions })),
 		});
 
 		const uncertain = result.unsettled.filter((u) => u.reason === "uncertain");
 		this.renderMerchantList(c, {
 			title: "Left unconfirmed — too uncertain",
-			hint: "It disagreed, but below the confidence bar. Nothing is recorded, so a future run retries these",
+			hint: "It disagreed, but below the confidence bar. These come back on every run until you settle them",
+			settleable: true,
 			items: uncertain.map((u) => ({
+				key: u.key,
 				name: u.name,
 				categoryId: u.currentCategoryId,
 				count: u.transactions.length,
+				transactions: u.transactions,
 				suggestion: u.suggestedCategoryId ? { categoryId: u.suggestedCategoryId, confidence: u.confidence ?? 0 } : undefined,
 			})),
 		});
@@ -219,8 +412,9 @@ export class RecheckModal extends Modal {
 		const unrecognized = result.unsettled.filter((u) => u.reason === "unrecognized");
 		this.renderMerchantList(c, {
 			title: "Left unconfirmed — not recognized",
-			hint: "It couldn't place these from the name at all. Nothing is recorded, so a future run retries them",
-			items: unrecognized.map((u) => ({ name: u.name, categoryId: u.currentCategoryId, count: u.transactions.length })),
+			hint: "It couldn't place these from the name at all. These come back on every run until you settle them",
+			settleable: true,
+			items: unrecognized.map((u) => ({ key: u.key, name: u.name, categoryId: u.currentCategoryId, count: u.transactions.length, transactions: u.transactions })),
 		});
 	}
 
