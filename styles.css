@@ -819,7 +819,8 @@
 
 .fp-cat-row {
 	display: grid;
-	grid-template-columns: 26px minmax(0, 1fr) 34px 130px 150px 32px 30px;
+	/* Eight tracks for eight cells: archive sits next to delete as the softer of the two. */
+	grid-template-columns: 26px minmax(0, 1fr) 34px 130px 150px 32px 30px 30px;
 	align-items: center;
 	gap: 8px;
 	padding: 5px 0;
@@ -948,6 +949,32 @@
 	background: var(--fp-bad-bg);
 	color: var(--fp-bad);
 }
+
+/* Archive is the softer sibling of delete, so it reads neutral rather than destructive, and an
+   already-archived row shows the restore affordance highlighted instead. */
+.fp-cat-archive {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: var(--fp-radius-sm);
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.fp-cat-archive:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.fp-cat-archive.is-archived {
+	color: var(--fp-accent, var(--interactive-accent));
+}
 .fp-cat-delete svg {
 	width: 15px;
 	height: 15px;
@@ -960,7 +987,7 @@
 /* Narrow screens: the move and count columns are the first to go. */
 @media (max-width: 720px) {
 	.fp-cat-row {
-		grid-template-columns: 26px minmax(0, 1fr) 34px 100px 32px;
+		grid-template-columns: 26px minmax(0, 1fr) 34px 100px 32px 30px;
 	}
 	.fp-cat-row .fp-cat-move,
 	.fp-cat-row .fp-cat-count {

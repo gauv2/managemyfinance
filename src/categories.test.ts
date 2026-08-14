@@ -9,6 +9,8 @@ import {
 	reparented,
 	resolvePrimaryId,
 	secondaryCategoriesOf,
+	withArchived,
+	offerableCategories,
 } from "./categories";
 import type { Category } from "./types";
 
@@ -148,5 +150,61 @@ describe("reparented", () => {
 	it("does not mutate the input list", () => {
 		reparented(categories, FUEL.id, FOOD.id);
 		expect(FUEL.parentId).toBe(CAR.id);
+	});
+});
+
+
+describe("withArchived", () => {
+	it("archives a primary and takes its secondaries with it", () => {
+		const next = withArchived(categories, CAR.id, true);
+		expect(next.find((c) => c.id === CAR.id)!.archived).toBe(true);
+		expect(next.find((c) => c.id === FUEL.id)!.archived).toBe(true);
+		expect(next.find((c) => c.id === CAR_WASH.id)!.archived).toBe(true);
+		// An unrelated primary is untouched.
+		expect(next.find((c) => c.id === FOOD.id)!.archived).toBeUndefined();
+	});
+
+	it("archives a secondary on its own without touching its parent or siblings", () => {
+		const next = withArchived(categories, FUEL.id, true);
+		expect(next.find((c) => c.id === FUEL.id)!.archived).toBe(true);
+		expect(next.find((c) => c.id === CAR.id)!.archived).toBeUndefined();
+		expect(next.find((c) => c.id === CAR_WASH.id)!.archived).toBeUndefined();
+	});
+
+	it("restores a primary and its secondaries together", () => {
+		const restored = withArchived(withArchived(categories, CAR.id, true), CAR.id, false);
+		expect(restored.find((c) => c.id === CAR.id)!.archived).toBeUndefined();
+		expect(restored.find((c) => c.id === FUEL.id)!.archived).toBeUndefined();
+	});
+
+	it("drops the flag rather than storing false, so an unarchived category serialises as it always did", () => {
+		const restored = withArchived(withArchived(categories, FOOD.id, true), FOOD.id, false);
+		expect("archived" in restored.find((c) => c.id === FOOD.id)!).toBe(false);
+	});
+
+	it("leaves the input list alone", () => {
+		withArchived(categories, CAR.id, true);
+		expect(CAR.archived).toBeUndefined();
+		expect(FUEL.archived).toBeUndefined();
+	});
+});
+
+describe("offerableCategories", () => {
+	const withArchivedFuel = withArchived(categories, FUEL.id, true);
+
+	it("leaves archived categories out of the choices", () => {
+		const offered = offerableCategories(secondaryCategoriesOf(withArchivedFuel, CAR.id), undefined);
+		expect(offered.map((c) => c.id)).toEqual([CAR_WASH.id]);
+	});
+
+	it("still offers an archived category that is the one already selected", () => {
+		// Otherwise the select would fall to some other category, and saving from there silently
+		// re-tags a transaction nobody meant to touch — archiving would rewrite history.
+		const offered = offerableCategories(secondaryCategoriesOf(withArchivedFuel, CAR.id), FUEL.id);
+		expect(offered.map((c) => c.id).sort()).toEqual([CAR_WASH.id, FUEL.id].sort());
+	});
+
+	it("offers everything when nothing is archived", () => {
+		expect(offerableCategories(categories, undefined)).toHaveLength(categories.length);
 	});
 });
