@@ -674,3 +674,83 @@ describe("accountBalanceParts", () => {
 		expect(parts).toEqual({ anchor: 0, movement: 0, snapshot: undefined, counted: 0, ignored: 0 });
 	});
 });
+
+// ---------- refunds vs income ----------
+
+describe("money coming in against an expense category", () => {
+	const income: Category = { ...catIncome, kind: "income" };
+	/** A store that has opted in by flagging one category as income. */
+	function flagged(transactions: Transaction[]): KpiStore {
+		return { ...store({ transactions }), categories: [catFood, income, catTransfers, catCashAtm] };
+	}
+
+	it("is treated as income when nothing is flagged, exactly as before", () => {
+		// Backwards compatibility: a vault that never set `kind` can't tell salary from a refund, so it
+		// must keep the old sign-only reading rather than reclassify someone's salary.
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: -100, categoryId: catFood.id }),
+				tx({ date: "2024-01-02", accountId: checking.id, amount: 30, categoryId: catFood.id }),
+			],
+		});
+		const y = summarizeByYear(s)[0];
+		expect(y.income).toBe(30);
+		expect(y.expenses).toBe(100);
+	});
+
+	it("reduces that category's expenses instead of counting as income", () => {
+		const s = flagged([
+			tx({ date: "2024-01-01", accountId: checking.id, amount: -100, categoryId: catFood.id }),
+			tx({ date: "2024-01-02", accountId: checking.id, amount: 30, categoryId: catFood.id }),
+		]);
+		const y = summarizeByYear(s)[0];
+		expect(y.income).toBe(0);
+		expect(y.expenses).toBe(70);
+	});
+
+	it("still counts a credit in the income category as income", () => {
+		const s = flagged([tx({ date: "2024-01-01", accountId: checking.id, amount: 2500, categoryId: income.id })]);
+		const y = summarizeByYear(s)[0];
+		expect(y.income).toBe(2500);
+		expect(y.expenses).toBe(0);
+	});
+
+	it("leaves an uncategorized credit as income, having nothing to net it against", () => {
+		const s = flagged([tx({ date: "2024-01-01", accountId: checking.id, amount: 40 })]);
+		expect(summarizeByYear(s)[0].income).toBe(40);
+	});
+
+	it("stops a refund flattering the savings rate", () => {
+		const s = flagged([
+			tx({ date: "2024-01-01", accountId: checking.id, amount: 1000, categoryId: income.id }),
+			tx({ date: "2024-01-02", accountId: checking.id, amount: -500, categoryId: catFood.id }),
+			tx({ date: "2024-01-03", accountId: checking.id, amount: 100, categoryId: catFood.id }),
+		]);
+		const y = summarizeByYear(s)[0];
+		// Earned 1000, spent 500 and got 100 back: 600 kept of 1000, not 1100/600 of an inflated 1100.
+		expect(y.income).toBe(1000);
+		expect(y.expenses).toBe(400);
+		expect(y.savingsRate).toBeCloseTo(0.6, 6);
+	});
+
+	it("nets the refund off the category total too, so the two views agree", () => {
+		const s = flagged([
+			tx({ date: "2024-01-01", accountId: checking.id, amount: -100, categoryId: catFood.id }),
+			tx({ date: "2024-01-02", accountId: checking.id, amount: 30, categoryId: catFood.id }),
+		]);
+		expect(categoryTotals(s).get(catFood.id)).toBe(70);
+		expect(primaryCategoryTotals(s).get(catFood.id)).toBe(70);
+		// The headline expense figure and the category breakdown must not disagree.
+		expect(summarizeByYear(s)[0].expenses).toBe(categoryTotals(s).get(catFood.id));
+	});
+
+	it("applies the same rule month by month", () => {
+		const s = flagged([
+			tx({ date: "2024-03-01", accountId: checking.id, amount: -80, categoryId: catFood.id }),
+			tx({ date: "2024-03-05", accountId: checking.id, amount: 20, categoryId: catFood.id }),
+		]);
+		const march = summarizeByMonth(s, "2024")[2];
+		expect(march.income).toBe(0);
+		expect(march.expenses).toBe(60);
+	});
+});

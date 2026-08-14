@@ -96,6 +96,37 @@ export function isTransfer(store: KpiStore, tx: Transaction): boolean {
 	return false;
 }
 
+/**
+ * Whether this store can tell income apart from a refund at all.
+ *
+ * The distinction rests entirely on `Category.kind`. A vault where nothing is flagged as income has
+ * no way to know a salary from a returned purchase, so it keeps the old sign-only reading rather than
+ * quietly reclassifying someone's salary as a negative expense — a silent, catastrophic change to
+ * every figure they have. Flagging one category as income opts the whole vault in.
+ */
+function refundsDistinguishable(store: KpiStore): boolean {
+	return store.categories.some((c) => c.kind === "income");
+}
+
+/**
+ * Money coming *in* against an expense category — a returned purchase, a cancelled hotel, a duplicate
+ * charge reversed.
+ *
+ * It is not income. Counting it as income overstates what you earned and flatters the savings rate
+ * derived from it, while leaving the category it came back into showing the full original spend. A
+ * refund undoes a purchase, so it belongs against that purchase.
+ *
+ * An uncategorized credit stays income: with nothing to net it against, guessing would be worse than
+ * the status quo.
+ */
+function isRefund(store: KpiStore, tx: Transaction, enabled: boolean): boolean {
+	if (!enabled || tx.amount < 0) return false;
+	const primaryId = resolvePrimaryId(store.categories, tx.categoryId);
+	if (!primaryId) return false;
+	const category = store.categories.find((c) => c.id === primaryId);
+	return !!category && category.kind !== "income";
+}
+
 /** Dividends and interest payouts, identified from the broker action/type text (e.g. Trade Republic exports). */
 function isPassiveIncome(tx: Transaction): boolean {
 	const text = `${tx.action ?? ""} ${tx.type ?? ""}`.toLowerCase();
@@ -130,6 +161,7 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 	>();
 	/** Everything that happened before the range started, as a single opening figure. */
 	let carried = 0;
+	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
 		if (accountId && tx.accountId !== accountId) continue;
 		const year = tx.date?.slice(0, 4);
@@ -147,8 +179,12 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 			continue;
 		}
 		if (amount >= 0) {
-			bucket.income += amount;
-			if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
+			// A refund reduces what that category cost rather than counting as money earned.
+			if (isRefund(store, tx, refunds)) bucket.expenses -= amount;
+			else {
+				bucket.income += amount;
+				if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
+			}
 		} else {
 			bucket.expenses += -amount;
 		}
@@ -264,6 +300,7 @@ export function summarizeByMonth(store: KpiStore, year: string, accountId?: stri
 		expenses: 0,
 		passiveIncome: 0,
 	}));
+	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
 		if (accountId && tx.accountId !== accountId) continue;
 		if (!tx.date?.startsWith(year)) continue;
@@ -273,8 +310,11 @@ export function summarizeByMonth(store: KpiStore, year: string, accountId?: stri
 		if (isTransfer(store, tx)) continue;
 		const amount = amountIn(store, tx);
 		if (amount >= 0) {
-			bucket.income += amount;
-			if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
+			if (isRefund(store, tx, refunds)) bucket.expenses -= amount;
+			else {
+				bucket.income += amount;
+				if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
+			}
 		} else {
 			bucket.expenses += -amount;
 		}
@@ -438,8 +478,12 @@ export function fiProjection(
  *  separate keys here. Use `primaryCategoryTotals` when you want secondaries rolled up into their parent. */
 export function categoryTotals(store: KpiStore, year?: string, accountId?: string): Map<string, number> {
 	const totals = new Map<string, number>();
+	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
-		if (tx.amount >= 0) continue;
+		// A refund nets off the category it came back into, exactly as it does in the year and month
+		// summaries — otherwise a returned purchase leaves the category showing the full original spend
+		// while the headline expense figure has already dropped, and the two views disagree.
+		if (tx.amount >= 0 && !isRefund(store, tx, refunds)) continue;
 		if (year && !tx.date?.startsWith(year)) continue;
 		if (accountId && tx.accountId !== accountId) continue;
 		if (isTransfer(store, tx)) continue;
@@ -455,8 +499,9 @@ export function categoryTotals(store: KpiStore, year?: string, accountId?: strin
  *  for the budgets that think in whole months and years, or a date range for the page period filter. */
 export function primaryCategoryTotals(store: KpiStore, period?: string | DateRange, accountId?: string): Map<string, number> {
 	const totals = new Map<string, number>();
+	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
-		if (tx.amount >= 0) continue;
+		if (tx.amount >= 0 && !isRefund(store, tx, refunds)) continue;
 		if (!inPeriod(tx.date, period)) continue;
 		if (accountId && tx.accountId !== accountId) continue;
 		if (isTransfer(store, tx)) continue;
