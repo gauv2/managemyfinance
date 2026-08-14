@@ -50,6 +50,36 @@ export class ManageRulesModal extends Modal {
 		if (uncategorized.length === 0 || store.rules.length === 0) applyBtn.setAttr("disabled", "true");
 		applyBtn.addEventListener("click", () => void this.applyToUncategorized());
 
+		// Re-filing rows that already have a category.
+		//
+		// Rules could only ever fill blanks: `applyToUncategorized` skips anything already categorized,
+		// so writing a rule to correct a merchant you had filed wrongly did nothing to the rows that were
+		// already there — it only affected future imports. That makes rules useless for the thing people
+		// reach for them for, which is bulk-fixing a mistake across years of ledger.
+		//
+		// Kept as a separate button, and it says how many rows it would MOVE rather than how many it
+		// matches: a rule matching 400 rows that are already filed correctly changes nothing, and the
+		// number that matters before pressing this is the number that would end up somewhere new.
+		const wouldMove = this.countWouldMove();
+		const reapplyBtn = applyBar.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(reapplyBtn, "refresh-cw");
+		reapplyBtn.createSpan({ text: wouldMove === 0 ? "Re-file categorized rows" : `Re-file ${wouldMove} categorized row${wouldMove === 1 ? "" : "s"}` });
+		if (wouldMove === 0 || store.rules.length === 0) {
+			reapplyBtn.setAttr("disabled", "true");
+			reapplyBtn.setAttribute(
+				"title",
+				store.rules.length === 0
+					? "Add a rule first."
+					: "Every categorized row already matches what the rules say — there is nothing to move."
+			);
+		} else {
+			reapplyBtn.setAttribute(
+				"title",
+				`Applies the rules to rows that already have a category, moving the ${wouldMove} whose current category disagrees with a rule. Rows no rule matches are left alone.`
+			);
+			reapplyBtn.addEventListener("click", () => void this.reapplyToCategorized(wouldMove));
+		}
+
 		const addRow = c.createDiv({ cls: "fp-rule-add-row" });
 		const patternWrap = addRow.createDiv({ cls: "fp-rule-pattern-wrap" });
 		const patternInput = patternWrap.createEl("input", {
@@ -252,6 +282,51 @@ export class ManageRulesModal extends Modal {
 		this.plugin.store.rules = this.plugin.store.rules.filter((r) => r.id !== id);
 		await this.plugin.store.saveRules();
 		new Notice("Rule removed");
+		this.render();
+		this.onChange?.();
+	}
+
+	/** Categorized rows a rule would move somewhere else. The number worth showing before pressing. */
+	private countWouldMove(): number {
+		const store = this.plugin.store;
+		let n = 0;
+		for (const tx of store.transactions) {
+			if (!tx.categoryId) continue;
+			const match = applyRules(tx, store.rules);
+			if (match && match !== tx.categoryId) n++;
+		}
+		return n;
+	}
+
+	/**
+	 * Re-files already-categorized rows that a rule disagrees with.
+	 *
+	 * Confirmed first, because this is the one action here that can overwrite decisions made by hand,
+	 * and the count is of rows that actually change rather than rows that match.
+	 */
+	private async reapplyToCategorized(expected: number): Promise<void> {
+		const store = this.plugin.store;
+		const ok = confirm(
+			`Re-file ${expected} transaction${expected === 1 ? "" : "s"} that already have a category, using your rules?\n\n` +
+				"This overwrites categories on rows a rule disagrees with, including any you set by hand. Rows no rule matches are untouched."
+		);
+		if (!ok) return;
+
+		const patches = new Map<string, string>();
+		for (const tx of store.transactions) {
+			if (!tx.categoryId) continue;
+			const match = applyRules(tx, store.rules);
+			if (match && match !== tx.categoryId) patches.set(tx.id, match);
+		}
+		if (patches.size === 0) {
+			new Notice("Nothing to move — every categorized row already agrees with the rules");
+			return;
+		}
+		const count = await store.recategorize(patches);
+		// The merchants involved are now known for good, so the next import lands the same way.
+		await this.plugin.rememberMerchantsForRules(patches);
+		new Notice(`Re-filed ${count} transaction${count === 1 ? "" : "s"}`);
+		this.plugin.refreshViews();
 		this.render();
 		this.onChange?.();
 	}

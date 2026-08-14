@@ -3,12 +3,13 @@ import {
 	applyMemory,
 	dismissSuggestion,
 	learnFromHistory,
+	markReviewed,
 	pruneMemory,
 	remember,
 	rememberSuggestion,
 	siblingsOf,
-	unknownMerchants,
 	type MerchantMap,
+	unknownMerchants,
 } from "./merchantMemory";
 import type { Category, Transaction } from "../types";
 
@@ -228,5 +229,29 @@ describe("dismissSuggestion", () => {
 		map = remember(map, "vats prague", FOOD.id, "user");
 		expect(map["vats prague"].dismissedAt).toBeUndefined();
 		expect(map["vats prague"].categoryId).toBe(FOOD.id);
+	});
+});
+
+describe("remember() and a human's confirmation", () => {
+	// The recheck dialog's "already confirmed" count moved on its own between openings, because every
+	// path that re-wrote a merchant's category rebuilt the entry without reviewedAt and quietly undid
+	// the confirmation. Writing a category is not a reason to forget that someone ruled on it.
+	it("keeps reviewedAt when the category is written again", () => {
+		let map = markReviewed({}, "ah", "groceries");
+		expect(map.ah.reviewedAt).toBeDefined();
+		map = remember(map, "ah", "groceries", "user");
+		expect(map.ah.reviewedAt).toBeDefined();
+	});
+
+	it("keeps it even when the category itself changes", () => {
+		let map = markReviewed({}, "ah", "groceries");
+		map = remember(map, "ah", "supermarket", "user");
+		expect(map.ah.categoryId).toBe("supermarket");
+		expect(map.ah.reviewedAt).toBeDefined();
+	});
+
+	it("does not invent one for a merchant nobody has confirmed", () => {
+		const map = remember({}, "new-shop", "food", "rule");
+		expect(map["new-shop"].reviewedAt).toBeUndefined();
 	});
 });

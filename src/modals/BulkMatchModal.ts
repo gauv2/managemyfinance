@@ -26,6 +26,13 @@ import { categoryChainChip, icon, renderCategoryPicker, type CategoryPickerValue
  * Nothing is written until a button is pressed, and the button always says how many rows it will
  * touch, so "apply to all of these" is never a leap of faith.
  */
+/**
+ * Above this, a fuzzy match is treated as certain enough to arrive pre-selected. Chosen well clear of
+ * similarity.ts's 0.55 listing threshold: that one decides what is worth showing, this one decides
+ * what is worth acting on without being asked twice.
+ */
+const CONFIDENT_MATCH = 0.85;
+
 export class BulkMatchModal extends Modal {
 	private groups: MatchGroups;
 	private selected = new Set<string>();
@@ -60,9 +67,16 @@ export class BulkMatchModal extends Modal {
 			// "12 more" read as a lie when nine of them were already approved.
 			filter: (t) => (t.review ?? "new") !== opts.status,
 		});
-		// The exact tier starts ticked; the guesses do not. That difference is the whole design.
+		// The exact tier starts ticked. So does anything the fuzzy tier is nearly certain about: a 96%
+		// match on the payee text is not a guess in any sense the user cares about, and leaving it
+		// unticked made "apply to all of these" work on some openings of this sheet and not others,
+		// with nothing on screen explaining which kind you had. Everything below that line still waits
+		// for a human, and every row shows its score, so the boundary is visible rather than felt.
 		for (const tx of this.groups.sameMerchant) this.selected.add(tx.id);
-		this.similarOpen = this.groups.sameMerchant.length === 0 && this.groups.similar.length > 0;
+		for (const m of this.groups.similar) if (m.score >= CONFIDENT_MATCH) this.selected.add(m.tx.id);
+		this.similarOpen =
+			(this.groups.sameMerchant.length === 0 && this.groups.similar.length > 0) ||
+			this.groups.similar.some((m) => m.score >= CONFIDENT_MATCH);
 
 		/**
 		 * Whether the row this was opened from is itself part of the action.
@@ -178,7 +192,10 @@ export class BulkMatchModal extends Modal {
 		const section = c.createDiv({ cls: "fp-match-section" });
 		const head = section.createDiv({ cls: "fp-match-section-head" });
 		const all = head.createEl("input", { type: "checkbox", cls: "fp-review-check" });
-		all.checked = true;
+		// Derived, not assumed. Hardcoding this to true left the header ticked after you had unticked
+		// rows underneath it, so the box claimed a selection that the button count contradicted.
+		all.checked = rows.every((tx) => this.selected.has(tx.id));
+		all.indeterminate = !all.checked && rows.some((tx) => this.selected.has(tx.id));
 		all.setAttribute("aria-label", "Select every same-merchant match");
 		all.addEventListener("change", () => {
 			for (const tx of rows) {
@@ -201,13 +218,34 @@ export class BulkMatchModal extends Modal {
 		const matches = this.groups.similar;
 		if (matches.length === 0) return;
 
+		const confident = matches.filter((m) => m.score >= CONFIDENT_MATCH).length;
+
 		const section = c.createDiv({ cls: "fp-match-section fp-match-section-similar" });
 		const head = section.createDiv({ cls: "fp-match-section-head is-toggle" });
+
+		// A select-all here as well: with part of this tier arriving ticked, "take the rest too" is a
+		// single decision and should cost a single click, the same as it does for the exact tier.
+		const all = head.createEl("input", { type: "checkbox", cls: "fp-review-check" });
+		all.checked = matches.every((m) => this.selected.has(m.tx.id));
+		all.indeterminate = !all.checked && matches.some((m) => this.selected.has(m.tx.id));
+		all.setAttribute("aria-label", "Select every similar match");
+		all.addEventListener("click", (ev: MouseEvent) => ev.stopPropagation());
+		all.addEventListener("change", () => {
+			for (const m of matches) {
+				if (all.checked) this.selected.add(m.tx.id);
+				else this.selected.delete(m.tx.id);
+			}
+			this.similarOpen = true;
+			this.redraw();
+		});
+
 		icon(head, this.similarOpen ? "chevron-down" : "chevron-right", "fp-match-section-icon");
 		head.createSpan({ cls: "fp-match-section-title", text: `Similar description (${matches.length})` });
 		head.createSpan({
 			cls: "fp-match-section-hint",
-			text: "A guess from the text alone — nothing here is selected until you say so.",
+			text: confident > 0
+				? `Matched on the text. The ${confident} above ${Math.round(CONFIDENT_MATCH * 100)}% start selected; the rest are yours to judge.`
+				: "A guess from the text alone — nothing here is selected until you say so.",
 		});
 		head.setAttribute("role", "button");
 		head.setAttribute("aria-expanded", String(this.similarOpen));

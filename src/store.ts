@@ -21,7 +21,7 @@ import type {
 } from "./types";
 
 /** The workspace pages that aren't scoped to a single account. */
-export type FinanceViewId = "budgets" | "subscriptions" | "cards" | "review" | "reports" | "compare" | "settings";
+export type FinanceViewId = "budgets" | "categories" | "subscriptions" | "cards" | "review" | "reports" | "compare" | "settings";
 
 export interface FinanceSettings {
 	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */
@@ -154,6 +154,22 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 ];
 
 const NUMERIC_COLUMNS: (keyof Transaction)[] = ["amount", "shares", "price", "fee", "tax"];
+
+/**
+ * The columns `Transaction` declares as always present, which a blank cell must therefore come back
+ * from as `""` and not `undefined`.
+ *
+ * A row with no date is a real thing — the ledger files undated rows under `unknown.csv` on purpose —
+ * but the type says `date: string`, so every reader downstream is entitled to call `.localeCompare`
+ * or `.slice` on it without a guard. Blanking it to `undefined` behind this function's
+ * `as unknown as Transaction` cast turned that entitlement into a TypeError thrown far from the CSV
+ * that caused it: the category drill-down rendered an empty modal on "All time", because that is the
+ * one scope whose period filter doesn't discard undated rows before the sort.
+ *
+ * `""` reads as "not known" everywhere that already mattered — `!tx.date` and `inPeriod` treat it
+ * exactly as they treated `undefined` — so this narrows the blanking without changing any filter.
+ */
+const REQUIRED_TX_STRINGS = new Set<string>(["id", "date", "accountId", "description", "currency", "source"]);
 
 /**
  * Loads/persists all Finance data inside the vault: accounts/categories/rules as JSON,
@@ -325,7 +341,7 @@ export class FinanceStore {
 			tx[col as string] = raw === undefined || raw === "" ? undefined : parseFloat(raw);
 		}
 		for (const key of Object.keys(tx)) {
-			if (tx[key] === "") tx[key] = undefined;
+			if (tx[key] === "" && !REQUIRED_TX_STRINGS.has(key)) tx[key] = undefined;
 		}
 		return tx as unknown as Transaction;
 	}
@@ -352,6 +368,23 @@ export class FinanceStore {
 
 	async saveMerchants(): Promise<void> {
 		await this.app.vault.adapter.write(this.path("data", "merchants.json"), JSON.stringify(this.merchants, null, "\t"));
+	}
+
+	/**
+	 * Copies merchant memory aside before something destructive overwrites it.
+	 *
+	 * Merchant memory is the only place a categorization decision survives once the rows that taught it
+	 * are gone, and every write here replaces the whole file — there is no per-entry history to fall
+	 * back on. A snapshot costs one small file and turns "I clicked the wrong button" from permanent
+	 * into a rename. Returns the path so the caller can say where it went.
+	 */
+	async backupMerchants(reason: string): Promise<string> {
+		const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+		const folder = this.path("data", "backups");
+		await this.ensureFolder(folder);
+		const file = normalizePath(`${folder}/merchants-${stamp}-${reason}.json`);
+		await this.app.vault.adapter.write(file, JSON.stringify(this.merchants, null, "\t"));
+		return file;
 	}
 
 	async saveSnapshots(): Promise<void> {
@@ -540,16 +573,14 @@ export class FinanceStore {
 		if (!tx) return;
 		Object.assign(tx, patch);
 
-		const year = tx.date.slice(0, 4) || "unknown";
-		const folder = this.path("data", "ledger", tx.source);
-		await this.ensureFolder(folder);
-		const file = normalizePath(`${folder}/${year}.csv`);
-
-		const rows: (string | number | undefined)[][] = [TX_COLUMNS];
-		for (const t of this.transactions) {
-			if (t.source === tx.source && (t.date || "").slice(0, 4) === year) rows.push(this.serializeTx(t));
-		}
-		await this.app.vault.adapter.write(file, toCSV(rows));
+		// Was a hand-inlined copy of rewriteLedgerFile that derived the year twice, and differently:
+		// the filename used `tx.date.slice(0,4) || "unknown"` while the row filter compared against
+		// that same string. For a row with no date the two disagreed — the file was named "unknown"
+		// but the predicate asked for rows whose year equalled "unknown", which no row satisfies — so
+		// the file was rewritten empty and every dateless row of that source was dropped from disk.
+		// It also dereferenced tx.date unguarded, throwing outright once the row round-tripped through
+		// readLedger as undefined. One helper, one definition of the key, neither failure possible.
+		await this.rewriteLedgerFile(this.ledgerKey(tx));
 	}
 
 	/**

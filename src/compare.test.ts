@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildComparison, cagr, pctChange, topCategories, type CategoryMeta } from "./compare";
+import { buildComparison, cagr, missingYears, pctChange, spanYears, topCategories, type CategoryMeta } from "./compare";
 
 const meta = new Map<string, CategoryMeta>([
 	["food", { id: "food", label: "Food", color: "#f00" }],
@@ -187,5 +187,66 @@ describe("a long span", () => {
 		const c = buildComparison(years, totals, meta);
 		expect(c.fallers.map((r) => r.categoryId)).toContain("travel");
 		expect(c.risers.map((r) => r.categoryId)).toContain("food");
+	});
+});
+
+describe("movers over a longer selection", () => {
+	// Iwan selected 2024-2026 and "What moved" still said "2025 -> 2026": the ranking ignored a third of
+	// what was on screen, so a category that doubled in 2025 and held there did not appear to move.
+	const years = ["2024", "2025", "2026"];
+	const totals = [
+		year([["food", 1000], ["travel", 5000]]),
+		year([["food", 4000], ["travel", 3000]]),
+		year([["food", 4000], ["travel", 1000]]),
+	];
+
+	it("ranks across the whole span once more than two years are selected", () => {
+		const c = buildComparison(years, totals, meta);
+		expect(c.moversSpanned).toBe(true);
+		// food is flat 2025->2026 but +3000 across the span, so it must still register as a riser.
+		expect(c.risers.map((r) => r.categoryId)).toContain("food");
+		expect(c.fallers.map((r) => r.categoryId)).toContain("travel");
+	});
+
+	it("falls back to the last step for a two-year selection", () => {
+		const c = buildComparison(["2025", "2026"], totals.slice(1), meta);
+		expect(c.moversSpanned).toBe(false);
+		// Across just these two, food is flat and must not be ranked as moving at all.
+		expect(c.risers.map((r) => r.categoryId)).not.toContain("food");
+	});
+
+	it("carries the span change in currency for every row", () => {
+		const c = buildComparison(years, totals, meta);
+		expect(c.rows.find((r) => r.categoryId === "food")?.spanChangeAbs).toBe(3000);
+		expect(c.rows.find((r) => r.categoryId === "travel")?.spanChangeAbs).toBe(-4000);
+	});
+});
+
+describe("selections with holes in them", () => {
+	// Ticking 2023 and 2026 and skipping the two between is one step in the list and three years in the
+	// world. Counting list positions compounded three years of growth into one.
+	it("measures the span in calendar years, not ticked boxes", () => {
+		expect(spanYears(["2023", "2026"])).toBe(3);
+		expect(spanYears(["2023", "2024", "2025", "2026"])).toBe(3);
+		expect(spanYears(["2026"])).toBe(0);
+	});
+
+	it("names the years left out", () => {
+		expect(missingYears(["2023", "2026"])).toEqual(["2024", "2025"]);
+		expect(missingYears(["2023", "2024"])).toEqual([]);
+		expect(missingYears(["2026"])).toEqual([]);
+	});
+
+	it("gives the same rate whether or not the middle years are ticked", () => {
+		const totals = (v: number) => new Map([["food", v]]);
+		const gapped = buildComparison(["2023", "2026"], [totals(1000), totals(1331)], meta);
+		const full = buildComparison(
+			["2023", "2024", "2025", "2026"],
+			[totals(1000), totals(1100), totals(1210), totals(1331)],
+			meta
+		);
+		// 1000 -> 1331 over three years is 10% a year either way.
+		expect(gapped.rows[0].cagr).toBeCloseTo(0.1, 6);
+		expect(full.rows[0].cagr).toBeCloseTo(0.1, 6);
 	});
 });

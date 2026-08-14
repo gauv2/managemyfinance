@@ -53,9 +53,23 @@ export function remember(map: MerchantMap, key: string, categoryId: string, sour
 	const existing = map[key];
 	if (existing?.categoryId && !outranks(source, existing.source)) return map;
 	// Choosing a category clears any dismissal — the merchant is settled now.
+	//
+	// `reviewedAt` is carried across rather than dropped. It records that a person has ruled on this
+	// merchant, which remains true after the category is written again by an import, an auto-categorize
+	// pass or a fan-out from a sibling row. Rebuilding the entry without it silently un-confirmed
+	// merchants, so the count of "already confirmed" moved on its own depending on which code path had
+	// run last — and the recheck dialog kept re-offering work that had already been done by hand.
 	return {
 		...map,
-		[key]: { key, categoryId, source, at: today(), suggestion: undefined, dismissedAt: undefined },
+		[key]: {
+			key,
+			categoryId,
+			source,
+			at: today(),
+			reviewedAt: existing?.reviewedAt,
+			suggestion: undefined,
+			dismissedAt: undefined,
+		},
 	};
 }
 

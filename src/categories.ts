@@ -80,6 +80,44 @@ export function reparentTargets(categories: Category[], categoryId: string): Cat
 }
 
 /**
+ * Applies an archive or restore, returning a new list.
+ *
+ * Archiving is the softer alternative to deleting a category you've stopped using: it hides the
+ * category from budgets and pickers while every transaction tagged with it keeps its category and
+ * every historical figure stays exactly as it was — the one guarantee deleting can't make, however
+ * carefully it reassigns.
+ *
+ * A primary takes its secondaries with it. Leaving them active under an archived parent would put
+ * them in pickers with no parent to sit under, which reads as orphaned rather than tidy; restoring
+ * the parent brings them back the same way.
+ */
+export function withArchived(categories: Category[], categoryId: string, archived: boolean): Category[] {
+	const isPrimary = categories.some((c) => c.id === categoryId && !c.parentId);
+	return categories.map((c) => {
+		const applies = c.id === categoryId || (isPrimary && c.parentId === categoryId);
+		if (!applies) return c;
+		const next: Category = { ...c };
+		// Stored as absent rather than `false`, so an un-archived category serialises exactly as it did
+		// before archiving existed and no ledger churns on upgrade.
+		if (archived) next.archived = true;
+		else delete next.archived;
+		return next;
+	});
+}
+
+/**
+ * The categories a picker should offer: everything still active, plus whatever is already selected
+ * even if that has since been archived.
+ *
+ * The exception is the whole point. Dropping an archived-but-selected option would leave the select
+ * showing some *other* category, and saving from there silently re-tags a transaction nobody meant to
+ * touch — archiving would quietly rewrite history, which is precisely what it exists to avoid.
+ */
+export function offerableCategories<T extends Pick<Category, "id" | "archived">>(categories: T[], selectedId: string | undefined): T[] {
+	return categories.filter((c) => !c.archived || c.id === selectedId);
+}
+
+/**
  * Applies a move, returning a new list. Also drops `budgetMode` when a category stops being a primary,
  * since "budget is the sum of my subcategories" is meaningless for something that can't have any.
  */

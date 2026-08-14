@@ -129,6 +129,11 @@
 	--fp-chip-color: var(--fp-neutral);
 	display: inline-flex;
 	align-items: center;
+	/* Never squeezed by a neighbour. In the settings group headers the chip sits beside a flexible
+	   title block, and without this it shrank below its own text — "26 categories, 48 sub" rendered
+	   as "26 categories, 48 su". */
+	flex-shrink: 0;
+	white-space: nowrap;
 	gap: 6px;
 	padding: 3px 10px 3px 8px;
 	border-radius: 999px;
@@ -812,6 +817,7 @@
    ========================================================================== */
 
 .fp-cat-table {
+	overflow-x: auto;
 	display: flex;
 	flex-direction: column;
 	margin: 6px 0 4px;
@@ -819,7 +825,15 @@
 
 .fp-cat-row {
 	display: grid;
-	grid-template-columns: 26px minmax(0, 1fr) 34px 130px 150px 32px 30px;
+	/* The name column must never collapse. It was minmax(0, 1fr), which permits exactly that: once the
+	   fixed columns and gaps exceeded the settings pane, the name input shrank to nothing and the row
+	   read as a colour swatch followed by the icon field, with the category's actual name invisible and
+	   uneditable. A floor of 140px keeps it legible and lets the row scroll instead of eating itself.
+
+	   Eight tracks for eight cells — the subcategory count now sits beside the expander it belongs to
+	   rather than occupying a column of its own, which left a dead gap on every row that has no
+	   children, and archive sits next to delete as the softer of the two. */
+	grid-template-columns: 26px minmax(140px, 1fr) 34px minmax(0, 130px) minmax(0, 150px) 32px 30px 30px;
 	align-items: center;
 	gap: 8px;
 	padding: 5px 0;
@@ -948,6 +962,32 @@
 	background: var(--fp-bad-bg);
 	color: var(--fp-bad);
 }
+
+/* Archive is the softer sibling of delete, so it reads neutral rather than destructive, and an
+   already-archived row shows the restore affordance highlighted instead. */
+.fp-cat-archive {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: var(--fp-radius-sm);
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.fp-cat-archive:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.fp-cat-archive.is-archived {
+	color: var(--fp-accent, var(--interactive-accent));
+}
 .fp-cat-delete svg {
 	width: 15px;
 	height: 15px;
@@ -960,7 +1000,7 @@
 /* Narrow screens: the move and count columns are the first to go. */
 @media (max-width: 720px) {
 	.fp-cat-row {
-		grid-template-columns: 26px minmax(0, 1fr) 34px 100px 32px;
+		grid-template-columns: 26px minmax(0, 1fr) 34px 100px 32px 30px;
 	}
 	.fp-cat-row .fp-cat-move,
 	.fp-cat-row .fp-cat-count {
@@ -2220,8 +2260,17 @@
 	font-size: var(--font-ui-small);
 	color: var(--text-normal);
 	overflow: hidden;
+	/* min-width:0 so this flex item may actually shrink below its content width — without it the
+	   label pushes the row wider instead of letting the text inside it ellipsize. */
+	min-width: 0;
+}
+/* The ellipsis belongs on the text, not on the flex container above it: text-overflow has no effect
+   on a flex box, so a long label was hard-clipped mid-word rather than trailing off with a "…". */
+.fp-barchart-label-text {
+	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	min-width: 0;
 }
 .fp-barchart-icon {
 	flex-shrink: 0;
@@ -5955,10 +6004,21 @@
 	color: var(--fp-good);
 }
 
+/* Stacked, not side by side: two tables each carrying a column per selected year do not fit in half a
+   pane, and squeezing them was what made the numbers unreadable in the first place. */
 .fp-compare-movers {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: 1fr;
 	gap: 18px;
+}
+.fp-compare-mover-table th:first-child,
+.fp-compare-mover-table td:first-child {
+	white-space: nowrap;
+}
+.fp-compare-mover-table td:first-child {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 }
 .fp-compare-mover-col h4 {
 	margin: 0 0 6px;
@@ -6012,4 +6072,219 @@
 	.fp-compare-movers {
 		grid-template-columns: 1fr;
 	}
+}
+
+/* --- Recheck: one headline instead of a scoreboard ------------------------ */
+.fp-recheck-headline {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin: 10px 0 4px;
+}
+.fp-recheck-headline-value {
+	font-size: var(--font-ui-large);
+	font-weight: 700;
+	color: var(--text-normal);
+	font-variant-numeric: tabular-nums;
+}
+.fp-recheck-headline-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+/* --- Compare: the records card -------------------------------------------- */
+.fp-records-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+	gap: 12px;
+}
+.fp-record {
+	padding: 10px 12px;
+	border-radius: var(--fp-radius-sm, 6px);
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	min-width: 0;
+}
+.fp-record-label {
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+	margin-bottom: 2px;
+}
+.fp-record-value {
+	font-size: var(--font-ui-medium);
+	font-weight: 700;
+	color: var(--text-normal);
+	font-variant-numeric: tabular-nums;
+}
+.fp-record-value.is-bad { color: var(--fp-bad); }
+.fp-record-value.is-good { color: var(--fp-good); }
+/* One line, ellipsised: a long payee string must not stretch the grid track it sits in. */
+.fp-record-sub {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-top: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* --- Settings: rows must wrap, never crush -------------------------------- */
+
+/* Obsidian's .setting-item-control is a non-wrapping flex row, and every item in it defaults to
+   shrinkable. A row carrying several controls therefore squeezes them all rather than moving one to
+   the next line: on Accounts → Add an account (two text fields, a type dropdown and a button) the
+   dropdown collapsed to a bare chevron and the button was pushed off the edge of the pane entirely.
+   Wrapping costs a line when space is tight and keeps every control usable at any width. */
+.fp-sgroup-body .setting-item-control {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+/* Nothing in a settings row shrinks below its own content. Buttons, dropdowns and colour swatches
+   have a natural size that already is their minimum; letting flex take it away leaves a control that
+   is present, focusable and impossible to read. */
+.fp-sgroup-body .setting-item-control > * {
+	flex-shrink: 0;
+}
+
+/* A text field keeps a usable width instead of collapsing towards a caret. */
+.fp-sgroup-body .setting-item-control input[type="text"],
+.fp-sgroup-body .setting-item-control input[type="number"],
+.fp-sgroup-body .setting-item-control input[type="password"] {
+	min-width: 150px;
+}
+
+/* The same guarantee for the plugin's own settings rows, which are hand-built rather than Setting()s
+   and share the failure mode: an actions cluster at the end of a flexible header. */
+.fp-keyrow > *,
+.fp-schedule-head > *,
+.fp-schedule-actions > *,
+.fp-setting-links > * {
+	flex-shrink: 0;
+}
+.fp-keyrow,
+.fp-schedule-head,
+.fp-schedule-actions,
+.fp-setting-links {
+	flex-wrap: wrap;
+}
+
+/* --- Recheck: acting on a row without leaving the dialog ------------------ */
+.fp-recheck-row-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 6px;
+}
+.fp-recheck-row-actions > * {
+	flex-shrink: 0;
+}
+.fp-recheck-row-picker {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+.fp-recheck-row-picker select {
+	max-width: 190px;
+}
+.fp-recheck-settle {
+	display: flex;
+	justify-content: flex-end;
+	padding: 4px 0 6px;
+}
+
+/* --- Settings: health check ---------------------------------------------- */
+/* Description above, controls below. Side by side, the controls block is a single flex item carrying
+   two selects and a button whose label ends in a category name — "File all as Movies & Streaming" —
+   so it is routinely wider than the space left beside the text and overflowed the card instead of
+   wrapping. Its own row is always wide enough, and costs nothing but vertical space. */
+.fp-health-row {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+	padding: 12px 0;
+	border-top: 1px solid var(--background-modifier-border);
+	min-width: 0;
+}
+.fp-health-main {
+	min-width: 0;
+}
+.fp-health-label {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-health-detail {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-top: 2px;
+}
+.fp-health-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	margin-top: 2px;
+	font-variant-numeric: tabular-nums;
+}
+.fp-health-actions {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	align-items: center;
+	min-width: 0;
+}
+/* A long category name truncates rather than pushing the button past the edge of the card. */
+.fp-health-actions .fp-btn {
+	max-width: 100%;
+	overflow: hidden;
+}
+.fp-health-actions .fp-btn span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-health-picker {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.fp-health-picker select {
+	max-width: 170px;
+}
+.fp-health-rules-link {
+	display: flex;
+	justify-content: flex-end;
+	padding-bottom: 4px;
+}
+/* Per-year figures inside a mover row: small, tabular, and allowed to wrap onto their own line. */
+.fp-compare-mover {
+	flex-wrap: wrap;
+}
+.fp-compare-mover-years {
+	flex: 1 1 100%;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	padding-left: 17px;
+	order: 3;
+}
+.fp-compare-mover-year {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 4px;
+	font-size: var(--font-ui-smaller);
+}
+.fp-compare-mover-year-label {
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+.fp-compare-mover-year-value {
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
 }

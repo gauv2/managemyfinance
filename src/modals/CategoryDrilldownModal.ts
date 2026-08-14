@@ -66,7 +66,9 @@ export class CategoryDrilldownModal extends Modal {
 				if (uncategorized) return !tx.categoryId;
 				return !!tx.categoryId && ids.has(tx.categoryId);
 			})
-			.sort((a, b) => b.date.localeCompare(a.date));
+			// `|| ""` rather than a bare compare: a row whose date never parsed is still counted in the
+			// bar this drilled from, so it has to survive to the list, and an undated row sorts last.
+			.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 	}
 
 	/** Amounts are summed in base currency, exactly as the chart that led here did. */
@@ -131,7 +133,9 @@ export class CategoryDrilldownModal extends Modal {
 				}));
 				if (direct > 0) {
 					chartRows.push({
-						label: `${category!.name} (not subcategorized)`,
+						// Not "<Name> (not subcategorized)": the header already says which category this
+						// is, so repeating it only made the longest label in the chart longer still.
+						label: "Not subcategorized",
 						value: direct,
 						color: category!.color,
 						iconName: category!.icon,
@@ -174,7 +178,9 @@ export class CategoryDrilldownModal extends Modal {
 			const tbody = table.createEl("tbody");
 			transactions.slice(0, 200).forEach((tx) => {
 				const tr = tbody.createEl("tr", { cls: "fp-table-row-clickable" });
-				tr.createEl("td", { text: tx.date });
+				// An undated row counts toward the total above, so say the date is missing rather than
+				// leaving a blank cell that reads like a rendering fault.
+				tr.createEl("td", { text: tx.date || "No date" });
 				tr.createEl("td", { text: tx.counterparty?.trim() || tx.description || "—" });
 				if (showAccount) tr.createEl("td", { text: accountById.get(tx.accountId) ?? "—" });
 				if (!this.secondaryId && secondaries.length > 0) {

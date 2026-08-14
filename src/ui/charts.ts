@@ -4,7 +4,12 @@ import { formatMoneyRounded } from "../money";
 export interface ChartSeries {
 	label: string;
 	color: string;
-	values: number[];
+	/**
+	 * `null` means "no reading here", which is not the same as zero and must not be drawn as one. The
+	 * line breaks across a null rather than joining the points either side, because joining them draws
+	 * a straight run through a period nothing is known about and reads exactly like measured data.
+	 */
+	values: (number | null)[];
 }
 
 function formatCompact(n: number): string {
@@ -50,7 +55,7 @@ export function lineChart(
 	const formatValue = opts?.formatValue ?? ((n) => formatMoneyRounded(n));
 	const formatLabel = opts?.formatValue ?? formatCompact;
 
-	const allValues = series.flatMap((s) => s.values);
+	const allValues = series.flatMap((s) => s.values).filter((v): v is number => v !== null);
 	const dataMin = Math.min(0, ...allValues);
 	const dataMax = Math.max(0, ...allValues);
 	const ticks = niceTicks(dataMin, dataMax, 4);
@@ -66,7 +71,7 @@ export function lineChart(
 	// they're built and read back here once the toggle actually fires (always after the
 	// whole chart has finished its synchronous render, so the arrays are never read empty).
 	const visible = series.map(() => true);
-	const lineEls: SVGPolylineElement[] = [];
+	const lineEls: SVGGElement[] = [];
 	const dotEls: SVGCircleElement[][] = [];
 	const endLabelEls: (SVGTextElement | undefined)[] = [];
 
@@ -139,19 +144,36 @@ export function lineChart(
 		svg.appendChild(label);
 	});
 
-	// Lines + markers
+	// Lines + markers. One <g> per series holding however many segments the gaps leave behind, so the
+	// legend toggle still has a single element to show and hide.
 	series.forEach((s) => {
-		const points = s.values.map((v, i) => `${scaleX(i)},${scaleY(v)}`).join(" ");
-		const polyline = document.createElementNS(NS, "polyline");
-		polyline.setAttribute("points", points);
-		polyline.setAttribute("class", "fp-chart-line");
-		polyline.setAttribute("vector-effect", "non-scaling-stroke");
-		polyline.style.setProperty("--fp-line-color", s.color);
-		svg.appendChild(polyline);
-		lineEls.push(polyline);
+		const group = document.createElementNS(NS, "g");
+		svg.appendChild(group);
+
+		// Split into runs of consecutive readings. A single reading with nulls either side gets no
+		// polyline at all — there is nothing to join it to — but still gets its dot below.
+		let run: string[] = [];
+		const flush = (): void => {
+			if (run.length > 1) {
+				const polyline = document.createElementNS(NS, "polyline");
+				polyline.setAttribute("points", run.join(" "));
+				polyline.setAttribute("class", "fp-chart-line");
+				polyline.setAttribute("vector-effect", "non-scaling-stroke");
+				polyline.style.setProperty("--fp-line-color", s.color);
+				group.appendChild(polyline);
+			}
+			run = [];
+		};
+		s.values.forEach((v, i) => {
+			if (v === null) flush();
+			else run.push(`${scaleX(i)},${scaleY(v)}`);
+		});
+		flush();
+		lineEls.push(group);
 
 		const dots: SVGCircleElement[] = [];
 		s.values.forEach((v, i) => {
+			if (v === null) return;
 			const dot = document.createElementNS(NS, "circle");
 			dot.setAttribute("cx", String(scaleX(i)));
 			dot.setAttribute("cy", String(scaleY(v)));
@@ -171,8 +193,13 @@ export function lineChart(
 	const lastIdx = categories.length - 1;
 	if (lastIdx >= 0) {
 		const MIN_GAP = 14;
+		// The last slot can be a gap, so each label anchors to that series' final actual reading.
 		const endLabels = series
-			.map((s, i) => ({ i, y: scaleY(s.values[lastIdx]), text: formatLabel(s.values[lastIdx]) }))
+			.map((s, i) => {
+				const v = s.values[lastIdx];
+				return v === null ? undefined : { i, y: scaleY(v), text: formatLabel(v) };
+			})
+			.filter((e): e is { i: number; y: number; text: string } => e !== undefined)
 			.sort((a, b) => a.y - b.y);
 		for (let i = 1; i < endLabels.length; i++) {
 			const min = endLabels[i - 1].y + MIN_GAP;
@@ -230,7 +257,8 @@ export function lineChart(
 			const swatch = row.createSpan({ cls: "fp-chart-swatch" });
 			swatch.style.setProperty("--fp-swatch-color", s.color);
 			row.createSpan({ text: s.label });
-			row.createSpan({ cls: "fp-chart-tooltip-value", text: formatValue(s.values[clamped]) });
+			const v = s.values[clamped];
+			row.createSpan({ cls: "fp-chart-tooltip-value", text: v === null ? "—" : formatValue(v) });
 		});
 
 		const leftPct = (scaleX(clamped) / width) * 100;
@@ -340,7 +368,11 @@ export function barChart(
 		}
 		const labelEl = row.createDiv({ cls: "fp-barchart-label" });
 		if (r.iconName) icon(labelEl, r.iconName, "fp-barchart-icon");
-		labelEl.createSpan({ text: r.label });
+		// The ellipsis rules have to live on this span, not on its flex parent, where text-overflow has
+		// no effect and a long label is simply chopped mid-word. Titled too, so the full text is still
+		// reachable on hover once it is shortened.
+		const textEl = labelEl.createSpan({ cls: "fp-barchart-label-text", text: r.label });
+		textEl.setAttribute("title", r.label);
 
 		const track = row.createDiv({ cls: "fp-barchart-track" });
 		const fill = track.createDiv({ cls: "fp-barchart-fill" });
