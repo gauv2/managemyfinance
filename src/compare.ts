@@ -32,6 +32,10 @@ export interface CategoryYearRow {
 	 *  previous year, or when the previous year was zero — a jump from nothing is not a percentage. */
 	changeAbs?: number;
 	changePct?: number;
+	/** Change from the first selected year to the last, in currency. The movers rank on this once more
+	 *  than two years are on screen: with a 2024-2026 selection, ranking on 2025-2026 alone answers a
+	 *  question nobody asked and quietly ignores a third of what was selected. */
+	spanChangeAbs?: number;
 	/** Last selected year against the first, for the whole span rather than the final step. */
 	spanChangePct?: number;
 	/** Compound annual growth across the span. Comparable between selections of different lengths,
@@ -51,6 +55,8 @@ export interface Comparison {
 	/** Sorted by absolute change against the previous year — the categories that moved the needle. */
 	risers: CategoryYearRow[];
 	fallers: CategoryYearRow[];
+	/** Whether the movers were ranked across the whole span rather than the final step. */
+	moversSpanned: boolean;
 }
 
 /** Relative change, or undefined when there is nothing to divide by. */
@@ -77,6 +83,37 @@ export function cagr(first: number, last: number, periods: number): number | und
  * table stays rectangular and a category that only exists in one year is still visible rather than
  * silently dropped.
  */
+/** Calendar years between the first and last selection — 2023..2026 is 3, however many are ticked. */
+export function spanYears(years: string[]): number {
+	if (years.length < 2) return 0;
+	const first = Number(years[0]);
+	const last = Number(years[years.length - 1]);
+	return Number.isFinite(first) && Number.isFinite(last) ? Math.max(0, last - first) : years.length - 1;
+}
+
+/** Years inside the selected range that were left out — the gaps the chart cannot show. */
+export function missingYears(years: string[]): string[] {
+	if (years.length < 2) return [];
+	const present = new Set(years);
+	const first = Number(years[0]);
+	const last = Number(years[years.length - 1]);
+	if (!Number.isFinite(first) || !Number.isFinite(last)) return [];
+	const gaps: string[] = [];
+	for (let y = first + 1; y < last; y++) if (!present.has(String(y))) gaps.push(String(y));
+	return gaps;
+}
+
+/** Every calendar year from the first selection to the last, ticked or not. */
+export function allYearsBetween(years: string[]): string[] {
+	if (years.length < 2) return [...years];
+	const first = Number(years[0]);
+	const last = Number(years[years.length - 1]);
+	if (!Number.isFinite(first) || !Number.isFinite(last)) return [...years];
+	const out: string[] = [];
+	for (let y = first; y <= last; y++) out.push(String(y));
+	return out;
+}
+
 export function buildComparison(
 	years: string[],
 	totalsByYear: Map<string, number>[],
@@ -110,8 +147,12 @@ export function buildComparison(
 			total: values.reduce((a, b) => a + b, 0),
 			changeAbs: prev === undefined ? undefined : last - prev,
 			changePct: pctChange(last, prev),
+			spanChangeAbs: years.length > 1 ? last - first : undefined,
 			spanChangePct: years.length > 1 ? pctChange(last, first) : undefined,
-			cagr: years.length > 1 ? cagr(first, last, years.length - 1) : undefined,
+			// Calendar distance, not the number of years ticked. Selecting 2023 and 2026 and skipping the
+			// two between is one step in the list and three years in the world; counting list positions
+			// compounded three years of growth into one and overstated every rate on screen.
+			cagr: years.length > 1 ? cagr(first, last, spanYears(years)) : undefined,
 			shareOfLast: lastTotal > 0 ? last / lastTotal : 0,
 		};
 	});
@@ -119,9 +160,14 @@ export function buildComparison(
 	// Biggest spend first: the eye should land on what dominates the bill, not on an alphabet.
 	rows.sort((a, b) => b.total - a.total);
 
-	const moved = rows.filter((r) => r.changeAbs !== undefined && r.changeAbs !== 0);
-	const risers = [...moved].sort((a, b) => (b.changeAbs ?? 0) - (a.changeAbs ?? 0)).filter((r) => (r.changeAbs ?? 0) > 0);
-	const fallers = [...moved].sort((a, b) => (a.changeAbs ?? 0) - (b.changeAbs ?? 0)).filter((r) => (r.changeAbs ?? 0) < 0);
+	// Over a two-year selection these are the same measure; over three or more, the span is the honest
+	// one — a category that doubled in 2025 and held there has not "stopped moving" just because the
+	// final step is flat, and ranking on that final step alone hides it.
+	const useSpan = years.length > 2;
+	const metric = (r: CategoryYearRow): number => (useSpan ? (r.spanChangeAbs ?? 0) : (r.changeAbs ?? 0));
+	const moved = rows.filter((r) => (useSpan ? r.spanChangeAbs !== undefined : r.changeAbs !== undefined) && metric(r) !== 0);
+	const risers = [...moved].sort((a, b) => metric(b) - metric(a)).filter((r) => metric(r) > 0);
+	const fallers = [...moved].sort((a, b) => metric(a) - metric(b)).filter((r) => metric(r) < 0);
 
 	return {
 		years,
@@ -131,6 +177,7 @@ export function buildComparison(
 		totalSpanChangePct: years.length > 1 ? pctChange(lastTotal, totals[0]) : undefined,
 		risers,
 		fallers,
+		moversSpanned: useSpan,
 	};
 }
 

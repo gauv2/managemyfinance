@@ -1,8 +1,10 @@
-import { buildComparison, topCategories, type CategoryMeta, type Comparison } from "../../compare";
-import { primaryCategoryTotals } from "../../kpi";
+import { allYearsBetween, buildComparison, missingYears, topCategories, type CategoryMeta, type Comparison } from "../../compare";
+import { isTransfer, primaryCategoryTotals } from "../../kpi";
 import type FinancePlugin from "../../main";
 import { CategoryDrilldownModal } from "../../modals/CategoryDrilldownModal";
 import { transactionYears } from "../../period";
+import { merchantDisplayName } from "../../import/merchantKey";
+import { buildStats, type LedgerStats } from "../../stats";
 import { lineChart, type ChartSeries } from "../../ui/charts";
 import { icon } from "../../ui/dom";
 import { formatEUR, formatPct, heatColor } from "../../ui/metricsTable";
@@ -97,6 +99,7 @@ export function renderCompareSection(container: HTMLElement, plugin: FinancePlug
 	renderChart(container, comparison);
 	renderMovers(container, comparison);
 	renderTable(container, plugin, comparison);
+	renderRecords(container, plugin);
 }
 
 /** Primary categories only — the rows the totals are keyed by — plus the bucket for uncategorized spend. */
@@ -180,8 +183,7 @@ function renderChart(container: HTMLElement, comparison: Comparison): void {
 		text: state.mode === "index" ? `Indexed — ${comparison.years[0]} = 100` : "Per category, per year",
 	});
 
-	const plotted = comparison.rows.filter((r) => state.plotted.includes(r.categoryId));
-	if (plotted.length === 0 || comparison.years.length === 0) {
+	if (state.plotted.length === 0 || comparison.years.length === 0) {
 		card.createEl("p", { cls: "fp-step-desc", text: "Pick a category above to plot it." });
 		return;
 	}
@@ -193,15 +195,37 @@ function renderChart(container: HTMLElement, comparison: Comparison): void {
 		return;
 	}
 
-	const series: ChartSeries[] = plotted.map((row) => ({
-		label: row.label,
-		color: row.color,
-		values: state.mode === "index" ? indexed(row.values) : row.values,
-	}));
-
 	// Card padding is 18px 20px in styles.css — the same inset the chart should sit at on every side.
 	const chartWidth = card.clientWidth > 0 ? card.clientWidth - 40 : 640;
-	lineChart(card, comparison.years, series, {
+	// The axis is the whole calendar span, not just the ticked years.
+	//
+	// Plotting only the selection spaced it evenly, so 2023 and 2026 sat side by side as though one
+	// followed the other — a three-year jump drawn as a single step, which is a straightforwardly false
+	// picture. The unticked years keep their place on the axis and carry no reading, so the line breaks
+	// across them rather than running through a period nothing was asked about.
+	const gaps = missingYears(comparison.years);
+	const axis = gaps.length === 0 ? comparison.years : allYearsBetween(comparison.years);
+	const slotOf = new Map(axis.map((y, i) => [y, i]));
+
+	const plotted = comparison.rows.filter((r) => state.plotted.includes(r.categoryId));
+	const series: ChartSeries[] = plotted.map((row) => {
+		const values = state.mode === "index" ? indexed(row.values) : row.values;
+		const byYear = new Map(comparison.years.map((y, i) => [y, values[i]]));
+		return {
+			label: row.label,
+			color: row.color,
+			values: axis.map((y) => (byYear.has(y) ? byYear.get(y)! : null)),
+		};
+	});
+
+	if (gaps.length > 0) {
+		card.createDiv({
+			cls: "fp-step-desc",
+			text: `${gaps.join(", ")} ${gaps.length === 1 ? "is" : "are"} not selected, so the line breaks there. Percentages and the per-year rate use the real distance.`,
+		});
+	}
+
+	lineChart(card, axis, series, {
 		height: 260,
 		width: chartWidth,
 		money: state.mode === "amount",
@@ -228,7 +252,7 @@ function renderMovers(container: HTMLElement, comparison: Comparison): void {
 	const card = container.createDiv({ cls: "fp-card" });
 	const head = card.createDiv({ cls: "fp-card-head-row" });
 	head.createEl("h3", { text: "What moved" });
-	head.createSpan({ cls: "fp-card-head-note", text: `${prev} → ${last}` });
+	head.createSpan({ cls: "fp-card-head-note", text: comparison.moversSpanned ? `${first} → ${last}` : `${prev} → ${last}` });
 
 	const totalNote = card.createDiv({ cls: "fp-compare-total-note" });
 	const totalLast = comparison.totals[comparison.totals.length - 1] ?? 0;
@@ -250,26 +274,61 @@ function renderMovers(container: HTMLElement, comparison: Comparison): void {
 	}
 
 	const cols = card.createDiv({ cls: "fp-compare-movers" });
-	moverList(cols, "Grew the most", comparison.risers.slice(0, 5), true);
-	moverList(cols, "Shrank the most", comparison.fallers.slice(0, 5), false);
+	const spanned = comparison.moversSpanned;
+	moverList(cols, "Grew the most", comparison.risers.slice(0, 5), true, spanned, comparison.years);
+	moverList(cols, "Shrank the most", comparison.fallers.slice(0, 5), false, spanned, comparison.years);
 }
 
-function moverList(parent: HTMLElement, title: string, rows: Comparison["risers"], up: boolean): void {
+/**
+ * The movers as a table, one column per selected year.
+ *
+ * A single net figure — "+€23,417 since 2023" — cannot say whether that arrived steadily or landed in
+ * one year, which is the first thing anyone asks of a mover. Laid out in columns the shape of the
+ * change is readable at a glance, and the numbers line up with the chart above and the full table
+ * below rather than being a third, differently-shaped summary.
+ */
+function moverList(
+	parent: HTMLElement,
+	title: string,
+	rows: Comparison["risers"],
+	up: boolean,
+	spanned: boolean,
+	years: string[]
+): void {
 	const col = parent.createDiv({ cls: "fp-compare-mover-col" });
 	col.createEl("h4", { text: title });
 	if (rows.length === 0) {
 		col.createEl("p", { cls: "fp-step-desc", text: up ? "Nothing grew." : "Nothing shrank." });
 		return;
 	}
+
+	const wrap = col.createDiv({ cls: "fp-table-scroll" });
+	const table = wrap.createEl("table", { cls: "fp-table fp-compare-mover-table" });
+	const head = table.createEl("thead").createEl("tr");
+	head.createEl("th", { text: "Category" });
+	years.forEach((y) => head.createEl("th", { text: y, cls: "fp-table-num" }));
+	head.createEl("th", { text: "Change", cls: "fp-table-num" });
+	head.createEl("th", { text: "%", cls: "fp-table-num" });
+
+	const body = table.createEl("tbody");
 	rows.forEach((row) => {
-		const line = col.createDiv({ cls: "fp-compare-mover" });
-		const dot = line.createSpan({ cls: "fp-compare-chip-dot" });
+		const tr = body.createEl("tr");
+		const label = tr.createEl("td");
+		const dot = label.createSpan({ cls: "fp-compare-chip-dot" });
 		dot.style.setProperty("--fp-chip-dot", row.color);
-		line.createSpan({ cls: "fp-compare-mover-label", text: row.label });
-		line.createSpan({ cls: "fp-compare-mover-abs fp-money", text: `${up ? "+" : ""}${formatEUR(row.changeAbs ?? 0)}` });
-		line.createSpan({
-			cls: "fp-compare-delta " + (up ? "is-up" : "is-down"),
-			text: row.changePct === undefined ? "new" : formatPctSize(row.changePct, 0),
+		label.createSpan({ text: row.label });
+
+		row.values.forEach((v) => tr.createEl("td", { cls: "fp-table-num fp-money", text: formatEUR(v) }));
+
+		const abs = spanned ? (row.spanChangeAbs ?? 0) : (row.changeAbs ?? 0);
+		const pct = spanned ? row.spanChangePct : row.changePct;
+		tr.createEl("td", {
+			cls: "fp-table-num fp-money " + (up ? "fp-compare-up" : "fp-compare-down"),
+			text: `${up ? "+" : ""}${formatEUR(abs)}`,
+		});
+		tr.createEl("td", {
+			cls: "fp-table-num " + (up ? "fp-compare-up" : "fp-compare-down"),
+			text: pct === undefined ? "new" : formatPctSize(pct, 0),
 		});
 	});
 }
@@ -364,4 +423,74 @@ function formatPctSize(n: number, digits = 0): string {
 function numCell(tr: HTMLTableRowElement, text: string, value: number | undefined): void {
 	const cls = value === undefined || value === 0 ? "" : value > 0 ? " fp-compare-up" : " fp-compare-down";
 	tr.createEl("td", { cls: "fp-table-num" + cls, text });
+}
+
+/**
+ * The records card: the firsts and the biggests.
+ *
+ * Deliberately whole-ledger rather than following the year selection above it. "The first thing in
+ * here" and "the most that ever left in one go" are facts about the ledger, and narrowing them to a
+ * two-year window turns them into something much less interesting that reads the same.
+ */
+function renderRecords(container: HTMLElement, plugin: FinancePlugin): void {
+	const store = plugin.store;
+	const stats = buildStats(
+		store.transactions,
+		(tx) => merchantDisplayName(tx.description || tx.counterparty || ""),
+		(tx) => isTransfer(store, tx)
+	);
+	if (stats.counted === 0) return;
+
+	const card = container.createDiv({ cls: "fp-card" });
+	const head = card.createDiv({ cls: "fp-card-head-row" });
+	head.createEl("h3", { text: "Records" });
+	head.createSpan({
+		cls: "fp-card-head-note",
+		text: stats.spanDays
+			? `${stats.counted.toLocaleString()} transactions over ${Math.floor(stats.spanDays / 365)} years`
+			: `${stats.counted.toLocaleString()} transactions`,
+	});
+
+	const grid = card.createDiv({ cls: "fp-records-grid" });
+
+	const record = (label: string, value: string, sub?: string, tone?: "good" | "bad"): void => {
+		const box = grid.createDiv({ cls: "fp-record" });
+		box.createDiv({ cls: "fp-record-label", text: label });
+		box.createDiv({ cls: "fp-record-value fp-money" + (tone ? ` is-${tone}` : ""), text: value });
+		if (sub) box.createDiv({ cls: "fp-record-sub fp-sensitive", text: sub });
+	};
+
+	const describe = (tx: { description?: string; counterparty?: string } | undefined): string =>
+		(tx?.description || tx?.counterparty || "—").slice(0, 46);
+
+	if (stats.first) record("First record", stats.first.date ?? "—", describe(stats.first));
+	if (stats.latest) record("Most recent", stats.latest.date ?? "—", describe(stats.latest));
+
+	if (stats.biggestExpense) {
+		record("Biggest single spend", formatEUR(stats.biggestExpense.amount), `${stats.biggestExpense.transaction.date} · ${describe(stats.biggestExpense.transaction)}`, "bad");
+	}
+	if (stats.biggestIncome) {
+		record("Biggest single receipt", formatEUR(stats.biggestIncome.amount), `${stats.biggestIncome.transaction.date} · ${describe(stats.biggestIncome.transaction)}`, "good");
+	}
+	if (stats.heaviestDay) record("Heaviest day", formatEUR(stats.heaviestDay.total), stats.heaviestDay.date, "bad");
+	if (stats.busiestDay) record("Busiest day", `${stats.busiestDay.count} transactions`, stats.busiestDay.date);
+	if (stats.costliestMonth) record("Costliest month", formatEUR(stats.costliestMonth.total), stats.costliestMonth.month, "bad");
+	if (stats.topMerchantBySpend) {
+		record("Most spent at", formatEUR(stats.topMerchantBySpend.total), `${stats.topMerchantBySpend.name} · ${stats.topMerchantBySpend.count} visits`);
+	}
+	if (stats.topMerchantByVisits) {
+		record("Most visited", `${stats.topMerchantByVisits.count} times`, `${stats.topMerchantByVisits.name} · ${formatEUR(stats.topMerchantByVisits.total)}`);
+	}
+	record("Typical spend", formatEUR(stats.averageExpense), "per transaction");
+	if (stats.longestQuietStreakDays > 0) {
+		record("Longest quiet run", `${stats.longestQuietStreakDays} days`, "with nothing going out");
+	}
+	record("Shops on record", String(stats.distinctMerchants), "distinct payees");
+
+	if (stats.undated > 0) {
+		card.createDiv({
+			cls: "fp-step-desc",
+			text: `${stats.undated} transaction${stats.undated === 1 ? " has" : "s have"} no usable date and sit outside every figure here.`,
+		});
+	}
 }

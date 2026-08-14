@@ -78,7 +78,7 @@ const TRANSFER_ACCOUNT_MARKERS = new Set(["deposit", "withdraw", "withdrawal"]);
  * category and broker-marker heuristics below remain for the many rows whose sibling leg was never
  * imported — a transfer to an account this vault doesn't track has only one half to go on.
  */
-function isTransfer(store: KpiStore, tx: Transaction): boolean {
+export function isTransfer(store: KpiStore, tx: Transaction): boolean {
 	if (tx.transferGroupId) return true;
 	if (tx.categoryId) {
 		// Resolve through a secondary category to its primary first, so e.g. a "Savings Transfer"
