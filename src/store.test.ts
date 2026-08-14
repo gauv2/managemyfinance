@@ -55,6 +55,41 @@ describe("FinanceStore — ledger round-trip", () => {
 		});
 	});
 
+	it("reads an undated row back as an empty date, never undefined", async () => {
+		const { store, app } = newStore();
+		await store.load();
+
+		// The importers file a row whose date never parsed under unknown.csv rather than dropping it,
+		// so this is a shape the ledger genuinely holds — not a hypothetical.
+		await store.importTransactions([tx({ id: "undated", date: "", amount: -9.99 })]);
+
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+
+		const row = reloaded.transactions.find((t) => t.id === "undated");
+		expect(row).toBeDefined();
+		// `date` is declared `string`, so every reader is entitled to call string methods on it without
+		// a guard. Handing back undefined threw a TypeError far from the CSV that caused it — the
+		// category drill-down rendered an empty modal on "All time", the one scope that doesn't filter
+		// undated rows out before sorting them.
+		expect(row!.date).toBe("");
+		expect(() => [row!].sort((a, b) => b.date.localeCompare(a.date))).not.toThrow();
+	});
+
+	it("keeps every other blank cell as undefined rather than an empty string", async () => {
+		const { store, app } = newStore();
+		await store.load();
+
+		await store.importTransactions([tx({ id: "sparse", counterparty: "", notes: "" })]);
+
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+
+		const row = reloaded.transactions.find((t) => t.id === "sparse");
+		expect(row!.counterparty).toBeUndefined();
+		expect(row!.notes).toBeUndefined();
+	});
+
 	it("files transactions by source and year, one file each", async () => {
 		const { store, app } = newStore();
 		await store.load();
