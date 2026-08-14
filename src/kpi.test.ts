@@ -13,6 +13,7 @@ import {
 	investingHoldings,
 	investingActivityByYear,
 	fiProjection,
+	accountBalanceParts,
 	type KpiStore,
 } from "./kpi";
 import type { Account, Category, Transaction } from "./types";
@@ -587,5 +588,89 @@ describe("fiProjection", () => {
 	it("returns a positive number of years when contributions alone can reach the target", () => {
 		const years = fiProjection(0, 1000, 0, 12_000);
 		expect(years).toBeCloseTo(1, 1);
+	});
+});
+
+// ---------- accountBalanceParts ----------
+
+describe("accountBalanceParts", () => {
+	const revolut: Account = { id: "acc-revolut", name: "Revolut", type: "debit", currency: "EUR", openingBalance: -2278.38 };
+	const fx = { baseCurrency: "EUR", rates: { USD: 0.9, GBP: 1.2 } };
+
+	function multiCurrencyStore(overrides: Partial<KpiStore> = {}): KpiStore {
+		return {
+			accounts: [revolut],
+			categories: [],
+			fx,
+			transactions: [
+				tx({ date: "2025-01-01", accountId: revolut.id, amount: 1000 }),
+				tx({ date: "2025-01-02", accountId: revolut.id, amount: 500, currency: "USD" }),
+				tx({ date: "2025-01-03", accountId: revolut.id, amount: 200, currency: "GBP" }),
+			],
+			...overrides,
+		};
+	}
+
+	it("converts foreign rows instead of adding them in at face value", () => {
+		const parts = accountBalanceParts(multiCurrencyStore(), revolut.id, "EUR");
+		// 1000 EUR + (500 USD * 0.9) + (200 GBP * 1.2) = 1000 + 450 + 240.
+		expect(parts.movement).toBeCloseTo(1690, 6);
+		// The naive sum this replaced would have read 1700 — dollars and pounds counted as euros.
+		expect(parts.movement).not.toBeCloseTo(1700, 6);
+		expect(parts.counted).toBe(3);
+		expect(parts.ignored).toBe(0);
+	});
+
+	it("agrees with the net worth the dashboard shows for the same account", () => {
+		const s = multiCurrencyStore();
+		const parts = accountBalanceParts(s, revolut.id, "EUR");
+		expect(parts.anchor + parts.movement).toBeCloseTo(netWorth(s, revolut.id), 6);
+	});
+
+	it("leaves out rows whose date never parsed, exactly as net worth does", () => {
+		const s = multiCurrencyStore({
+			transactions: [
+				tx({ date: "2025-01-01", accountId: revolut.id, amount: 1000 }),
+				tx({ date: "", accountId: revolut.id, amount: -1445.79 }),
+			],
+		});
+		const parts = accountBalanceParts(s, revolut.id, "EUR");
+		expect(parts.movement).toBeCloseTo(1000, 6);
+		expect(parts.counted).toBe(1);
+		expect(parts.ignored).toBe(1);
+		expect(parts.anchor + parts.movement).toBeCloseTo(netWorth(s, revolut.id), 6);
+	});
+
+	it("counts from a recorded balance rather than the opening one, ignoring what it already covers", () => {
+		const s = multiCurrencyStore({
+			snapshots: [{ id: "snap-1", accountId: revolut.id, date: "2025-01-02", balance: 5000 }],
+		});
+		const parts = accountBalanceParts(s, revolut.id, "EUR");
+		expect(parts.snapshot?.balance).toBe(5000);
+		expect(parts.anchor).toBe(5000);
+		// Only the 200 GBP row on 3 January falls after the snapshot: 200 * 1.2.
+		expect(parts.movement).toBeCloseTo(240, 6);
+		expect(parts.counted).toBe(1);
+		expect(parts.ignored).toBe(2);
+		expect(parts.anchor + parts.movement).toBeCloseTo(netWorth(s, revolut.id), 6);
+	});
+
+	it("reads the same account in another currency without touching the stored opening balance", () => {
+		const parts = accountBalanceParts(multiCurrencyStore(), revolut.id, "USD");
+		// Into dollars: 1000 EUR / 0.9, 500 USD as-is, 200 GBP * 1.2 / 0.9.
+		expect(parts.movement).toBeCloseTo(1000 / 0.9 + 500 + (200 * 1.2) / 0.9, 6);
+		expect(parts.anchor).toBe(-2278.38);
+	});
+
+	it("falls through untouched when the store has no rate table at all", () => {
+		const s = multiCurrencyStore({ fx: undefined });
+		const parts = accountBalanceParts(s, revolut.id, "EUR");
+		expect(parts.movement).toBeCloseTo(1700, 6);
+		expect(parts.anchor + parts.movement).toBeCloseTo(netWorth(s, revolut.id), 6);
+	});
+
+	it("reports an account it has never heard of as empty rather than throwing", () => {
+		const parts = accountBalanceParts(multiCurrencyStore(), "acc-nope", "EUR");
+		expect(parts).toEqual({ anchor: 0, movement: 0, snapshot: undefined, counted: 0, ignored: 0 });
 	});
 });

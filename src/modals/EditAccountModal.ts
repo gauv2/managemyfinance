@@ -1,5 +1,6 @@
 import { App, Modal, Notice } from "obsidian";
 import { ACCOUNT_TYPE_META, ACCOUNT_TYPE_ORDER, CURRENCIES } from "../constants";
+import { accountBalanceParts, type AccountBalanceParts } from "../kpi";
 import type FinancePlugin from "../main";
 import { formatMoney, parseMoney } from "../money";
 import type { Account, AccountType } from "../types";
@@ -29,6 +30,12 @@ function fraction(raw: string): number | undefined {
  *
  *     opening balance + sum of imported transactions = current balance
  *
+ * That sum comes from accountBalanceParts, the same function the dashboard totals go through, because
+ * summing it here by hand is how this dialog came to show a different current balance than every other
+ * view of the same account. Where a recorded balance exists it supersedes the opening one and the
+ * current field goes read-only — the opening balance no longer feeds that total, so back-solving it
+ * would rewrite every historical figure while moving nothing you can see.
+ *
  * Changing the type is a pure relabel: it changes which dashboard the account gets and how it's
  * treated in transfer detection, and touches no transaction.
  */
@@ -43,6 +50,7 @@ export class EditAccountModal extends Modal {
 	private currentField!: MoneyInputHandle;
 	/** Guards the two balance fields against re-entrantly rewriting each other. */
 	private syncing = false;
+	private partsCache?: { currency: string; parts: AccountBalanceParts };
 
 	constructor(app: App, private plugin: FinancePlugin, private account: Account, private onSaved?: () => void) {
 		super(app);
@@ -58,13 +66,31 @@ export class EditAccountModal extends Modal {
 		this.minPaymentPct = account.minPaymentPct !== undefined ? String(account.minPaymentPct) : "";
 	}
 
+	/**
+	 * The balance equation's fixed half, straight from the same function the dashboard totals go
+	 * through — so this dialog can't quietly disagree with every other view of the same account.
+	 * Recomputed only when the currency dropdown moves; the balance fields re-read it on every keystroke.
+	 */
+	private get balanceParts(): AccountBalanceParts {
+		if (!this.partsCache || this.partsCache.currency !== this.currency) {
+			this.partsCache = { currency: this.currency, parts: accountBalanceParts(this.plugin.store, this.account.id, this.currency) };
+		}
+		return this.partsCache.parts;
+	}
+
 	/** Everything already imported for this account — the fixed part of the balance equation. */
 	private get transactionsTotal(): number {
-		return this.plugin.store.transactions.filter((t) => t.accountId === this.account.id).reduce((sum, t) => sum + t.amount, 0);
+		return this.balanceParts.movement;
 	}
 
 	private get transactionCount(): number {
-		return this.plugin.store.transactions.filter((t) => t.accountId === this.account.id).length;
+		return this.balanceParts.counted;
+	}
+
+	/** The figure the current-balance field counts up from — a recorded balance outranks the opening one. */
+	private get balanceAnchor(): number {
+		const { snapshot } = this.balanceParts;
+		return snapshot ? snapshot.balance : this.openingBalance ?? 0;
 	}
 
 	onOpen(): void {
@@ -114,6 +140,11 @@ export class EditAccountModal extends Modal {
 			this.currency = currencySelect.value;
 			this.openingField.setCurrency(this.currency);
 			this.currentField.setCurrency(this.currency);
+			// Foreign rows convert into whichever currency this account is now read in, so the total
+			// they add up to moves with the dropdown — not just the symbol in front of it.
+			this.syncing = true;
+			this.currentField.setValue(this.balanceAnchor + this.transactionsTotal);
+			this.syncing = false;
 			this.renderBalanceSummary();
 		});
 
@@ -135,7 +166,11 @@ export class EditAccountModal extends Modal {
 				if (this.syncing) return;
 				this.openingBalance = v;
 				this.syncing = true;
-				this.currentField.setValue(v === undefined ? undefined : v + this.transactionsTotal);
+				// A recorded balance supersedes the opening one, so with one on file the opening balance
+				// no longer moves the current total and writing to that field would be a lie.
+				if (!this.balanceParts.snapshot) {
+					this.currentField.setValue(v === undefined ? undefined : v + this.transactionsTotal);
+				}
 				this.syncing = false;
 				this.renderBalanceSummary();
 			},
@@ -145,10 +180,11 @@ export class EditAccountModal extends Modal {
 			text: "What this account held before the first imported transaction.",
 		});
 
+		const anchoredTo = this.balanceParts.snapshot;
 		const currentRow = form.createDiv({ cls: "fp-form-row" });
 		currentRow.createEl("label", { text: "Current balance" });
 		this.currentField = moneyInput(currentRow, {
-			value: (this.openingBalance ?? 0) + this.transactionsTotal,
+			value: this.balanceAnchor + this.transactionsTotal,
 			currency: this.currency,
 			onChange: (v) => {
 				if (this.syncing) return;
@@ -161,9 +197,14 @@ export class EditAccountModal extends Modal {
 				this.renderBalanceSummary();
 			},
 		});
+		// Back-solving the opening balance from a total the opening balance doesn't feed would write a
+		// number that changes every historical figure and moves nothing you can see, so don't offer it.
+		if (anchoredTo) this.currentField.input.disabled = true;
 		currentRow.createDiv({
 			cls: "fp-form-hint",
-			text: "Type the figure your bank shows — the opening balance above is adjusted to match.",
+			text: anchoredTo
+				? `Counted from the balance you recorded on ${anchoredTo.date} — edit that recorded balance to change it.`
+				: "Type the figure your bank shows — the opening balance above is adjusted to match.",
 		});
 
 		this.summaryEl = form.createDiv({ cls: "fp-form-balance-summary" });
@@ -251,23 +292,36 @@ export class EditAccountModal extends Modal {
 	private renderBalanceSummary(): void {
 		if (!this.summaryEl) return;
 		this.summaryEl.empty();
-		const opening = this.openingBalance ?? 0;
+		const { snapshot, ignored } = this.balanceParts;
+		const anchor = this.balanceAnchor;
 		const total = this.transactionsTotal;
 		const count = this.transactionCount;
 
 		const line = this.summaryEl.createDiv({ cls: "fp-form-balance-line" });
-		line.createSpan({ cls: "fp-money", text: formatMoney(opening, { currency: this.currency }) });
+		line.createSpan({ cls: "fp-money", text: formatMoney(anchor, { currency: this.currency }) });
 		line.createSpan({ cls: "fp-form-balance-op", text: total < 0 ? "−" : "+" });
 		line.createSpan({ cls: "fp-money", text: formatMoney(Math.abs(total), { currency: this.currency }) });
 		line.createSpan({ cls: "fp-form-balance-op", text: "=" });
 		line.createSpan({
 			cls: "fp-money fp-form-balance-result",
-			text: formatMoney(opening + total, { currency: this.currency }),
+			text: formatMoney(anchor + total, { currency: this.currency }),
 		});
+		const anchorLabel = snapshot ? `balance recorded on ${snapshot.date}` : "opening balance";
+		const since = snapshot ? " since" : " imported";
 		this.summaryEl.createDiv({
 			cls: "fp-form-hint",
-			text: `opening balance ${total < 0 ? "less" : "plus"} ${count} imported transaction${count === 1 ? "" : "s"} = current balance`,
+			text: `${anchorLabel} ${total < 0 ? "less" : "plus"} ${count}${since} transaction${count === 1 ? "" : "s"} = current balance`,
 		});
+		// Rows a total can't honestly include are worth saying out loud rather than leaving as a gap
+		// between this figure and the transaction count on the account page.
+		if (ignored > 0) {
+			this.summaryEl.createDiv({
+				cls: "fp-form-hint",
+				text: snapshot
+					? `${ignored} earlier or undated transaction${ignored === 1 ? "" : "s"} already covered by that recorded balance.`
+					: `${ignored} transaction${ignored === 1 ? " has" : "s have"} no readable date and can't be counted.`,
+			});
+		}
 	}
 
 	private async submit(): Promise<void> {
