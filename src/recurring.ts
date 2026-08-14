@@ -171,9 +171,8 @@ const PROCESSOR_PREFIX = /^[a-z0-9][a-z0-9.\- ]{0,14}\*+\s*/;
  * reference numbers dropped, so "ALBERT HEIJN 1234", "Albert Heijn 5567" and "albert heijn" all land
  * in one series.
  *
- * Exported because three consumers need to agree on it exactly: series grouping here, suppression of
- * already-tracked subscriptions in subscriptionDetect.ts, and duplicate-charge pairing in
- * insights.ts. A private copy in any one of them would silently split groups.
+ * Exported because two consumers need to agree on it exactly: series grouping here, and
+ * duplicate-charge pairing in insights.ts. A private copy in either would silently split groups.
  */
 export function normalizeMerchantKey(raw: string | undefined): string {
 	const lowered = (raw ?? "")
