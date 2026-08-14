@@ -5,6 +5,7 @@ const NETWORK_TEXT: Partial<Record<Card["network"], string>> = {
 	visa: "VISA",
 	amex: "AMEX",
 	discover: "DISCOVER",
+	vpay: "V PAY",
 	other: "CARD",
 };
 

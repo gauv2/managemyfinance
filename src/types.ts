@@ -178,7 +178,7 @@ export interface Subscription {
 }
 
 export type CardType = "debit" | "credit" | "prepaid" | "secured" | "charge";
-export type CardNetwork = "visa" | "mastercard" | "amex" | "discover" | "other";
+export type CardNetwork = "visa" | "mastercard" | "amex" | "discover" | "vpay" | "other";
 
 /**
  * A physical/digital payment card — always linked to exactly one Account, but counted and managed

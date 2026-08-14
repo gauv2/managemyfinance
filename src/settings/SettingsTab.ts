@@ -319,7 +319,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 		});
 		const folderSetting = new Setting(where.content)
 			.setName("Data folder")
-			.setDesc("Root folder holding your ledger, accounts, and categories.")
+			.setDesc("Folder holding your ledger, accounts, and categories. Can sit anywhere in the vault — give it a path like \"System/Manage My Finance\" to nest it.")
 			.addText((t) =>
 				t.setValue(this.plugin.settings.dataFolder).onChange(async (v) => {
 					this.plugin.settings.dataFolder = v || DEFAULT_DATA_FOLDER;
@@ -329,7 +329,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 			);
 		this.help(
 			folderSetting,
-			"Accounts, categories, rules, subscriptions and cards are stored here as JSON; the transaction ledger as CSV, one file per source per year. Changing this points the plugin at a different folder — it does not move the files that are already there."
+			"Accounts, categories, rules, subscriptions and cards are stored here as JSON; the transaction ledger as CSV, one file per source per year. Changing this points the plugin at a different folder — it does not move the files that are already there. A nested path (e.g. \"System/Manage My Finance\") works fine; parent folders are created automatically if they don't already exist."
 		);
 
 		const count = (this.plugin.settings.portfolios ?? []).length;

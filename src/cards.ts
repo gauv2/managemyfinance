@@ -1,11 +1,12 @@
 import type { Card, CardNetwork, CardType } from "./types";
 
-export const CARD_NETWORKS: CardNetwork[] = ["visa", "mastercard", "amex", "discover", "other"];
+export const CARD_NETWORKS: CardNetwork[] = ["visa", "mastercard", "amex", "discover", "vpay", "other"];
 export const CARD_NETWORK_LABEL: Record<CardNetwork, string> = {
 	visa: "Visa",
 	mastercard: "Mastercard",
 	amex: "American Express",
 	discover: "Discover",
+	vpay: "V PAY",
 	other: "Other",
 };
 
@@ -72,6 +73,19 @@ const ISSUER_RULES: StyleRule[] = [
 	{ match: /\bally\b/i, gradient: "linear-gradient(135deg, #3a1a6b, #6b3fb0 55%, #260f4a)", text: "#f4f4f5" },
 	{ match: /schwab/i, gradient: "linear-gradient(135deg, #003057, #0064a4 55%, #001f3a)", text: "#f4f4f5" },
 	{ match: /fidelity/i, gradient: "linear-gradient(135deg, #0a3d24, #1c8452 55%, #062a19)", text: "#f4f4f5" },
+	// Dutch retail banks, plus a couple of international payment apps common enough alongside them.
+	{ match: /\bing\b/i, gradient: "linear-gradient(135deg, #ff7a00, #ff6200 55%, #d94c00)", text: "#f4f4f5" },
+	{ match: /abn|amro/i, gradient: "linear-gradient(135deg, #00645f, #00463f 62%, #002d2a)", text: "#f4f4f5" },
+	{ match: /rabobank|\brabo\b/i, gradient: "linear-gradient(135deg, #123b83, #0b2a63 55%, #081c42)", text: "#f4f4f5" },
+	{ match: /\bsns\b/i, gradient: "linear-gradient(135deg, #7b3fa1, #5e2b82 55%, #3d1d59)", text: "#f4f4f5" },
+	{ match: /\bbunq\b/i, gradient: "linear-gradient(135deg, #1a1a1a, #080808)", text: "#f4f4f5" },
+	{ match: /\basn\b/i, gradient: "linear-gradient(135deg, #254f45, #173b34 65%, #102a25)", text: "#f4f4f5" },
+	{ match: /\bknab\b/i, gradient: "linear-gradient(135deg, #0a7a80, #075d65 58%, #043f46)", text: "#f4f4f5" },
+	{ match: /regiobank|regio bank/i, gradient: "linear-gradient(135deg, #d82218, #b40f0b 58%, #7b0806)", text: "#f4f4f5" },
+	{ match: /triodos/i, gradient: "linear-gradient(135deg, #175b4a, #0c4437 60%, #072e26)", text: "#f4f4f5" },
+	{ match: /american express|\bamex\b/i, gradient: "linear-gradient(135deg, #4f7c8f, #315f72 58%, #183d4d)", text: "#f4f4f5" },
+	{ match: /revolut/i, gradient: "linear-gradient(135deg, #23262b, #111316 60%, #050607)", text: "#f4f4f5" },
+	{ match: /skrill/i, gradient: "linear-gradient(135deg, #79226f, #5c1755 58%, #391035)", text: "#f4f4f5" },
 ];
 
 /**
@@ -90,6 +104,8 @@ const NETWORK_FALLBACK_GRADIENT: Record<CardNetwork, string> = {
 	mastercard: "linear-gradient(135deg, #2b2320, #4a3b32)",
 	amex: "linear-gradient(135deg, #006fcf, #00a8e8 60%, #004a8f)",
 	discover: "linear-gradient(135deg, #b3500f, #ff8c1a 60%, #8a3d0b)",
+	// V PAY is Visa's European debit-only brand — related blue, kept visually distinct from Visa itself.
+	vpay: "linear-gradient(135deg, #0f3d91, #1f6fd6 60%, #0a2a63)",
 	other: "linear-gradient(135deg, #3f3f46, #6b7280)",
 };
 
@@ -125,4 +141,28 @@ export function cardStyle(card: Pick<Card, "product" | "name" | "network" | "iss
 
 export function cardsForAccount(cards: Card[], accountId: string): Card[] {
 	return cards.filter((c) => c.accountId === accountId);
+}
+
+/** Midnight on the last day of the printed expiry month — a card is good for the whole month shown. */
+export function cardExpiryDate(card: Pick<Card, "expiryMonth" | "expiryYear">): Date | undefined {
+	if (!card.expiryMonth || !card.expiryYear) return undefined;
+	return new Date(card.expiryYear, card.expiryMonth, 0);
+}
+
+export function cardIsExpired(card: Pick<Card, "expiryMonth" | "expiryYear">): boolean {
+	const d = cardExpiryDate(card);
+	return d !== undefined && d.getTime() < Date.now();
+}
+
+/** Whole calendar months from now to `date`, rounded down — 0 means "this month". */
+export function monthsUntil(date: Date): number {
+	const now = new Date();
+	return (date.getFullYear() - now.getFullYear()) * 12 + (date.getMonth() - now.getMonth());
+}
+
+export function cardExpiresWithinMonths(card: Pick<Card, "expiryMonth" | "expiryYear">, months: number): boolean {
+	const d = cardExpiryDate(card);
+	if (!d) return false;
+	const remaining = monthsUntil(d);
+	return remaining >= 0 && remaining <= months;
 }

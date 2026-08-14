@@ -280,23 +280,26 @@ export function renderBudgetsSection(container: HTMLElement, plugin: FinancePlug
 		const row = parent.createEl("tr", { cls: "fp-budget-row" });
 
 		const catCell = row.createEl("td", { cls: "fp-budget-cat-cell" });
-		const catCol = categoryIconLabel(catCell, category.name, category.color, category.icon);
+		// Rollover is a per-category property but it's only meaningful next to that category's own
+		// number, so it's toggled from right beside the name rather than from a settings page somewhere else.
+		const catCol = categoryIconLabel(catCell, category.name, category.color, category.icon, {
+			nameSuffix: (nameRow) => {
+				const rolloverBtn = nameRow.createEl("button", {
+					cls: "fp-btn fp-btn-ghost fp-btn-icon fp-btn-tiny" + (category.rollover ? " is-active" : ""),
+				});
+				icon(rolloverBtn, "recycle");
+				rolloverBtn.setAttribute(
+					"title",
+					category.rollover
+						? "Rollover on: whatever this category doesn't spend carries into next month"
+						: "Rollover off: this category resets to its limit each month"
+				);
+				rolloverBtn.addEventListener("click", () => void toggleRollover(category));
+			},
+		});
 
 		const catMeta = catCol.createDiv({ cls: "fp-budget-cat-meta" });
 		if (isIncomeCategory(category)) badge(catMeta, "income target", "good");
-		// Rollover is a per-category property but it's only meaningful next to that category's own
-		// number, so it's toggled from the row rather than from a settings page somewhere else.
-		const rolloverBtn = catMeta.createEl("button", {
-			cls: "fp-btn fp-btn-ghost fp-btn-icon" + (category.rollover ? " is-active" : ""),
-		});
-		icon(rolloverBtn, "recycle");
-		rolloverBtn.setAttribute(
-			"title",
-			category.rollover
-				? "Rollover on: whatever this category doesn't spend carries into next month"
-				: "Rollover off: this category resets to its limit each month"
-		);
-		rolloverBtn.addEventListener("click", () => void toggleRollover(category));
 		if (status && status.rollover !== 0) {
 			badge(
 				catMeta,

@@ -199,8 +199,11 @@ function renderChart(container: HTMLElement, comparison: Comparison): void {
 		values: state.mode === "index" ? indexed(row.values) : row.values,
 	}));
 
+	// Card padding is 18px 20px in styles.css — the same inset the chart should sit at on every side.
+	const chartWidth = card.clientWidth > 0 ? card.clientWidth - 40 : 640;
 	lineChart(card, comparison.years, series, {
 		height: 260,
+		width: chartWidth,
 		money: state.mode === "amount",
 		...(state.mode === "index" ? { formatValue: (n: number) => `${Math.round(n)}` } : {}),
 	});

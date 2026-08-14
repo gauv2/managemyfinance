@@ -33,7 +33,15 @@ function formSelectField(parent: HTMLElement, label: string, options: { value: s
  */
 export function openCardWizard(
 	plugin: FinancePlugin,
-	opts?: { existing?: Card; skippable?: boolean; skipLabel?: string; onSaved?: (card: Card) => void; onSkip?: () => void }
+	opts?: {
+		existing?: Card;
+		/** Preselects "Linked account" — e.g. the account a card was added from. Ignored when editing. */
+		defaultAccountId?: string;
+		skippable?: boolean;
+		skipLabel?: string;
+		onSaved?: (card: Card) => void;
+		onSkip?: () => void;
+	}
 ): void {
 	const store = plugin.store;
 	const existing = opts?.existing;
@@ -43,7 +51,7 @@ export function openCardWizard(
 		return;
 	}
 
-	let accountId = existing?.accountId ?? store.accounts[0].id;
+	let accountId = existing?.accountId ?? opts?.defaultAccountId ?? store.accounts[0].id;
 	let name = existing?.name ?? "";
 	let cardholderName = existing?.cardholderName ?? "";
 	let issuer = existing?.issuer ?? "";
@@ -64,7 +72,7 @@ export function openCardWizard(
 			skippable: opts?.skippable,
 			skipLabel: opts?.skipLabel ?? "Skip for now",
 			onSkip: opts?.onSkip,
-			render: (c) => {
+			render: (c, wizard) => {
 				c.createEl("h3", { text: existing ? `Edit "${existing.name}"` : "Add a card" });
 				c.createEl("p", {
 					cls: "fp-step-desc",
@@ -78,19 +86,31 @@ export function openCardWizard(
 					store.accounts.map((a) => ({ value: a.id, label: a.name }))
 				);
 				accountField.select.value = accountId;
-				accountField.select.addEventListener("change", () => (accountId = accountField.select.value));
+				accountField.select.addEventListener("change", () => {
+					accountId = accountField.select.value;
+					wizard.refreshFooter();
+				});
 
 				const nameField = formField(grid, "Card name", "text", "e.g. Amex Platinum");
 				nameField.input.value = name;
-				nameField.input.addEventListener("input", () => (name = nameField.input.value));
+				nameField.input.addEventListener("input", () => {
+					name = nameField.input.value;
+					wizard.refreshFooter();
+				});
 
 				const cardholderField = formField(grid, "Cardholder name", "text", "e.g. Gaurav Mahadew");
 				cardholderField.input.value = cardholderName;
-				cardholderField.input.addEventListener("input", () => (cardholderName = cardholderField.input.value));
+				cardholderField.input.addEventListener("input", () => {
+					cardholderName = cardholderField.input.value;
+					wizard.refreshFooter();
+				});
 
 				const numberField = formField(grid, "Card number", "text", "•••• •••• •••• ••••", { maxlength: "19", inputmode: "numeric" });
 				numberField.input.value = number;
-				numberField.input.addEventListener("input", () => (number = numberField.input.value.replace(/\D/g, "").slice(0, 19)));
+				numberField.input.addEventListener("input", () => {
+					number = numberField.input.value.replace(/\D/g, "").slice(0, 19);
+					wizard.refreshFooter();
+				});
 
 				const issuerField = formField(grid, "Issuer (optional)", "text", "e.g. American Express");
 				issuerField.input.value = issuer;
@@ -136,7 +156,7 @@ export function openCardWizard(
 				notesField.input.value = notes;
 				notesField.input.addEventListener("input", () => (notes = notesField.input.value));
 
-				const primaryRow = c.createDiv({ cls: "fp-type-checkbox-row" });
+				const primaryRow = c.createDiv({ cls: "fp-checkbox-field" });
 				const primaryCheckbox = primaryRow.createEl("input", { type: "checkbox", attr: { id: "fp-card-primary" } });
 				primaryCheckbox.checked = isPrimary;
 				primaryCheckbox.addEventListener("change", () => (isPrimary = primaryCheckbox.checked));

@@ -172,6 +172,11 @@
 	min-width: 0;
 	flex: 1 1 auto;
 }
+.fp-cat-name-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
 .fp-cat-name {
 	font-size: var(--font-ui-medium);
 	font-weight: 600;
@@ -2327,6 +2332,22 @@
 .fp-type-checkbox-icon {
 	color: inherit;
 }
+.fp-checkbox-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 18px;
+}
+.fp-checkbox-field input[type="checkbox"] {
+	width: auto;
+	margin: 0;
+	cursor: pointer;
+}
+.fp-checkbox-field label {
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	cursor: pointer;
+}
 .fp-account-list {
 	display: flex;
 	flex-direction: column;
@@ -2551,9 +2572,20 @@
 	border-bottom: 1px solid var(--background-modifier-border-focus, var(--background-modifier-border));
 }
 .fp-detail-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
 	font-weight: 600;
+}
+.fp-detail-label-icon {
+	flex-shrink: 0;
+	color: var(--text-faint);
+}
+.fp-detail-label-icon svg {
+	width: 14px;
+	height: 14px;
 }
 .fp-detail-value {
 	color: var(--text-normal);
@@ -3353,31 +3385,201 @@
 	padding: 24px 0 8px;
 }
 
-.fp-card-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-	gap: 24px 20px;
-	margin-bottom: 8px;
+/* ---------- Cards section: two-column list + detail layout ---------- */
+
+.fp-cards-layout {
+	display: flex;
+	align-items: stretch;
+	gap: 20px;
 }
-.fp-card-tile {
+.fp-cards-list-col {
+	flex: 1 1 480px;
+	min-width: 0;
 	display: flex;
 	flex-direction: column;
+}
+/* The right column's card details naturally run longer than the left column's two cards — rather
+   than leave dead space below "View all accounts", the last card on the left grows to close it,
+   so both columns' borders end at the same line whatever either side's content adds up to. */
+.fp-cards-list-col > .fp-card:last-child {
+	flex: 1 1 auto;
+	margin-bottom: 0;
+}
+.fp-cards-detail-col {
+	flex: 0 0 380px;
+	min-width: 0;
+	position: sticky;
+	top: 0;
+}
+@media (max-width: 900px) {
+	.fp-cards-layout {
+		flex-direction: column;
+	}
+	.fp-cards-detail-col {
+		flex-basis: auto;
+		width: 100%;
+		position: static;
+	}
+}
+
+.fp-cards-sort {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.fp-cards-row-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-card-row {
+	display: flex;
+	align-items: center;
+	gap: 22px;
+	padding: 20px;
+	border-radius: var(--fp-radius-lg);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	cursor: pointer;
+	transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.fp-card-row:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-card-row.is-selected {
+	border-color: var(--fp-neutral);
+	background: var(--fp-neutral-bg);
+}
+.fp-card-row-visual-wrap {
+	position: relative;
+	flex-shrink: 0;
+}
+.fp-card-row-visual.fp-card-visual-flip {
+	width: 260px;
+	pointer-events: none;
+}
+.fp-card-row-check {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	background: var(--fp-neutral);
+	color: var(--text-on-accent);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: 0 0 0 2px var(--background-primary);
+}
+.fp-card-row-check svg {
+	width: 13px;
+	height: 13px;
+}
+.fp-card-row-info {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.fp-card-row-name {
+	font-weight: 700;
+	font-size: var(--font-ui-medium);
+	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.fp-card-row-badges {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.fp-card-row-meta {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+}
+.fp-card-row-menu {
+	flex-shrink: 0;
+	align-self: flex-start;
+}
+.fp-cards-add-more {
+	width: 100%;
+	margin-top: 10px;
+	padding: 10px;
+	border-radius: var(--fp-radius-md);
+	border: 1px dashed var(--background-modifier-border);
+	background: transparent;
+	color: var(--fp-neutral);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	cursor: pointer;
+}
+.fp-cards-add-more:hover {
+	background: var(--fp-neutral-bg);
+}
+.fp-account-row-clickable {
+	cursor: pointer;
+}
+.fp-account-row-chevron {
+	color: var(--text-faint);
+	flex-shrink: 0;
+}
+.fp-cards-view-all {
+	width: 100%;
+	margin-top: 4px;
+}
+
+.fp-card-detail-head {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin-top: 14px;
+	margin-bottom: 20px;
+}
+.fp-card-detail-info {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.fp-card-detail-name-row {
+	display: flex;
 	align-items: center;
 	gap: 10px;
 }
-.fp-card-tile-head {
+.fp-card-detail-name-row h3 {
+	margin: 0;
+}
+.fp-card-detail-sub {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+.fp-card-detail-info .fp-account-row {
+	margin-top: 4px;
+}
+.fp-card-detail-footer {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	width: 100%;
-	max-width: 320px;
+	gap: 10px;
+	margin-top: 16px;
+	padding-top: 14px;
+	border-top: 1px solid var(--background-modifier-border);
 }
-.fp-card-tile-account {
-	font-size: var(--font-ui-smaller);
-	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-	color: var(--fp-neutral);
+.fp-card-detail-footer-right {
+	display: flex;
+	align-items: center;
+	gap: 8px;
 }
 
 .fp-sensitive {

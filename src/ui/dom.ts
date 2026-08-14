@@ -48,13 +48,24 @@ export function categoryChip(parent: HTMLElement, name: string, color: string, i
  *  "icon badge + colored label" pairing used by the budgets table (as opposed to categoryChip's
  *  pill, which is for compact inline mentions elsewhere). The icon sits in its own flex column
  *  vertically centered against whatever the caller stacks into the returned column (e.g. the name
- *  plus a progress bar beneath it), rather than only against the name's own line. */
-export function categoryIconLabel(parent: HTMLElement, name: string, color: string, iconName?: string): HTMLElement {
+ *  plus a progress bar beneath it), rather than only against the name's own line.
+ *
+ *  `nameSuffix` renders into the same row as the name itself — e.g. a rollover toggle — as opposed
+ *  to whatever the caller stacks below the returned column, which lands on its own line instead. */
+export function categoryIconLabel(
+	parent: HTMLElement,
+	name: string,
+	color: string,
+	iconName?: string,
+	opts?: { nameSuffix?: (row: HTMLElement) => void }
+): HTMLElement {
 	const wrap = parent.createDiv({ cls: "fp-cat-label" });
 	wrap.style.setProperty("--fp-cat-color", color);
 	if (iconName) icon(wrap.createDiv({ cls: "fp-cat-icon-box" }), iconName);
 	const col = wrap.createDiv({ cls: "fp-cat-col" });
-	col.createSpan({ cls: "fp-cat-name", text: name });
+	const nameRow = col.createDiv({ cls: "fp-cat-name-row" });
+	nameRow.createSpan({ cls: "fp-cat-name", text: name });
+	opts?.nameSuffix?.(nameRow);
 	return col;
 }
 

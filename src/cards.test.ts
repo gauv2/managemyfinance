@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cardsForAccount, cardStyle } from "./cards";
+import { cardExpiresWithinMonths, cardExpiryDate, cardIsExpired, cardsForAccount, cardStyle, monthsUntil } from "./cards";
 import type { Card } from "./types";
 
 function card(overrides: Partial<Card> = {}): Card {
@@ -32,6 +32,62 @@ describe("cardStyle", () => {
 	it("is stable — the same card always renders the same way", () => {
 		const c = card({ name: "Sapphire Reserve", network: "visa" });
 		expect(cardStyle(c)).toEqual(cardStyle({ ...c }));
+	});
+
+	it("recognizes Dutch retail banks by issuer name", () => {
+		const ing = cardStyle(card({ name: "Betaalpas", issuer: "ING", network: "mastercard" }));
+		const generic = cardStyle(card({ name: "Betaalpas", issuer: undefined, network: "mastercard" }));
+		expect(ing).not.toEqual(generic);
+	});
+
+	it("doesn't false-match a bank keyword found inside an unrelated word", () => {
+		// "ing" is only meant to catch ING as its own word — a naive substring match would also catch
+		// it inside "Morning" (or "Checking", "Savings", ...), matching an issuer nobody named.
+		const morning = cardStyle(card({ name: "Morning Card", issuer: undefined, network: "visa" }));
+		const generic = cardStyle(card({ name: "Something else", issuer: undefined, network: "visa" }));
+		expect(morning).toEqual(generic);
+	});
+});
+
+describe("card expiry", () => {
+	it("has no expiry date without both a month and a year", () => {
+		expect(cardExpiryDate(card({ expiryMonth: 6, expiryYear: undefined }))).toBeUndefined();
+	});
+
+	it("treats a card as expired once its month has fully passed", () => {
+		const lastMonth = new Date();
+		lastMonth.setMonth(lastMonth.getMonth() - 2);
+		const past = card({ expiryMonth: lastMonth.getMonth() + 1, expiryYear: lastMonth.getFullYear() });
+		expect(cardIsExpired(past)).toBe(true);
+	});
+
+	it("is not expired for the current or a future month", () => {
+		const now = new Date();
+		const current = card({ expiryMonth: now.getMonth() + 1, expiryYear: now.getFullYear() });
+		expect(cardIsExpired(current)).toBe(false);
+	});
+
+	it("flags a card expiring within the given window, but not one further out", () => {
+		const soon = new Date();
+		soon.setMonth(soon.getMonth() + 2);
+		const far = new Date();
+		far.setMonth(far.getMonth() + 8);
+
+		expect(cardExpiresWithinMonths(card({ expiryMonth: soon.getMonth() + 1, expiryYear: soon.getFullYear() }), 3)).toBe(true);
+		expect(cardExpiresWithinMonths(card({ expiryMonth: far.getMonth() + 1, expiryYear: far.getFullYear() }), 3)).toBe(false);
+	});
+
+	it("doesn't call an already-expired card 'expiring soon'", () => {
+		const lastMonth = new Date();
+		lastMonth.setMonth(lastMonth.getMonth() - 2);
+		const past = card({ expiryMonth: lastMonth.getMonth() + 1, expiryYear: lastMonth.getFullYear() });
+		expect(cardExpiresWithinMonths(past, 3)).toBe(false);
+	});
+
+	it("counts whole months from now to a future date", () => {
+		const now = new Date();
+		const inThreeMonths = new Date(now.getFullYear(), now.getMonth() + 3, 1);
+		expect(monthsUntil(inThreeMonths)).toBe(3);
 	});
 });
 
