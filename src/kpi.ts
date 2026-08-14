@@ -360,6 +360,60 @@ export function netWorth(store: KpiStore, accountId?: string): number {
 	return netWorthAsOf(store, "9999-12-31", accountId);
 }
 
+/** The anchor an account's balance counts from, and the movement since. See accountBalanceParts. */
+export interface AccountBalanceParts {
+	/** The recorded balance if one exists, otherwise the opening balance — in the account's currency. */
+	anchor: number;
+	/** Transactions counted from that anchor, converted into `currency`. */
+	movement: number;
+	/** Set when a recorded balance supersedes the opening balance, which then no longer moves the total. */
+	snapshot?: BalanceSnapshot;
+	/** How many transactions `movement` is the sum of. */
+	counted: number;
+	/** Transactions deliberately left out — no usable date, or already covered by the snapshot. */
+	ignored: number;
+}
+
+/**
+ * The two halves of one account's balance equation: the anchor it counts from, and the movement since.
+ *
+ * Exists because the account editor needs exactly the figure the dashboard shows for that account, and
+ * reproducing the rules by hand is precisely how the two drifted apart. A plain `sum(tx.amount)` adds
+ * dollars straight into a euro total, counts rows whose date never parsed, and ignores a recorded
+ * balance that supersedes the opening one — so on a multi-currency account the editor's "current
+ * balance" could sit hundreds off the number every other view showed, while inviting you to type over
+ * it and silently rewrite the opening balance to match the wrong total.
+ *
+ * Amounts are stated in as-entered terms with no liability sign flip: netWorthAsOf negates a
+ * liability's balance when rolling accounts up, which is a question about net worth, not about what
+ * this account holds. `anchor` is returned in the account's own currency (the unit `openingBalance` is
+ * stored in) and left unconverted — only the transactions are converted into `currency`, which is what
+ * lets the editor relabel an account's currency without rewriting the number you typed.
+ */
+export function accountBalanceParts(store: KpiStore, accountId: string, currency: string): AccountBalanceParts {
+	const fx: FxContext | undefined = store.fx ? { baseCurrency: currency, rates: store.fx.rates } : undefined;
+	const account = store.accounts.find((a) => a.id === accountId);
+	const snapshot = snapshotAsOf(store, accountId, "9999-12-31");
+	const anchor = snapshot ? snapshot.balance : account?.openingBalance ?? 0;
+
+	let movement = 0;
+	let counted = 0;
+	let ignored = 0;
+	for (const tx of store.transactions) {
+		if (tx.accountId !== accountId) continue;
+		const date = (tx.date || "").slice(0, 10);
+		// Mirrors netWorthAsOf exactly: an undated row can't be placed on the timeline, and a row the
+		// recorded balance already accounts for would be counted twice.
+		if (!date || (snapshot && date <= snapshot.date)) {
+			ignored++;
+			continue;
+		}
+		movement += fx ? convert(tx.amount, tx.currency, fx) : tx.amount;
+		counted++;
+	}
+	return { anchor, movement, snapshot, counted, ignored };
+}
+
 /** Simulates monthly compounding to estimate years until `netWorthNow` reaches `target`. */
 export function fiProjection(
 	netWorthNow: number,
