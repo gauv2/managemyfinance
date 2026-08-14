@@ -2260,8 +2260,17 @@
 	font-size: var(--font-ui-small);
 	color: var(--text-normal);
 	overflow: hidden;
+	/* min-width:0 so this flex item may actually shrink below its content width — without it the
+	   label pushes the row wider instead of letting the text inside it ellipsize. */
+	min-width: 0;
+}
+/* The ellipsis belongs on the text, not on the flex container above it: text-overflow has no effect
+   on a flex box, so a long label was hard-clipped mid-word rather than trailing off with a "…". */
+.fp-barchart-label-text {
+	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	min-width: 0;
 }
 .fp-barchart-icon {
 	flex-shrink: 0;

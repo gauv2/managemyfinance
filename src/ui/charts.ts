@@ -368,7 +368,11 @@ export function barChart(
 		}
 		const labelEl = row.createDiv({ cls: "fp-barchart-label" });
 		if (r.iconName) icon(labelEl, r.iconName, "fp-barchart-icon");
-		labelEl.createSpan({ text: r.label });
+		// The ellipsis rules have to live on this span, not on its flex parent, where text-overflow has
+		// no effect and a long label is simply chopped mid-word. Titled too, so the full text is still
+		// reachable on hover once it is shortened.
+		const textEl = labelEl.createSpan({ cls: "fp-barchart-label-text", text: r.label });
+		textEl.setAttribute("title", r.label);
 
 		const track = row.createDiv({ cls: "fp-barchart-track" });
 		const fill = track.createDiv({ cls: "fp-barchart-fill" });

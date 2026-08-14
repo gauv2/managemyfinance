@@ -133,7 +133,9 @@ export class CategoryDrilldownModal extends Modal {
 				}));
 				if (direct > 0) {
 					chartRows.push({
-						label: `${category!.name} (not subcategorized)`,
+						// Not "<Name> (not subcategorized)": the header already says which category this
+						// is, so repeating it only made the longest label in the chart longer still.
+						label: "Not subcategorized",
 						value: direct,
 						color: category!.color,
 						iconName: category!.icon,
