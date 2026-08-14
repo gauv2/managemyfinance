@@ -1,5 +1,5 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
-import { canReparent, primaryCategories, reparentTargets, reparented, secondaryCategoriesOf } from "../categories";
+import { canReparent, primaryCategories, reparentTargets, reparented, secondaryCategoriesOf, withArchived } from "../categories";
 import { ACCOUNT_TYPE_META, CURRENCIES, DEFAULT_DATA_FOLDER } from "../constants";
 import {
 	AI_MODELS,
@@ -1519,7 +1519,31 @@ export class FinanceSettingTab extends PluginSettingTab {
 			});
 		}
 
-		// 7 — delete
+		// 7 — archive. `archived` was already honoured everywhere it mattered (the budget pages filter
+		// on it in four places) but nothing could ever set it, so the flag was unreachable from the UI.
+		// It's the softer alternative to deleting a category you've stopped using: the transactions
+		// tagged with it keep their category and every historical figure stays exactly as it was, which
+		// is the one thing deleting can't promise however carefully it reassigns.
+		const archiveBtn = row.createEl("button", {
+			cls: "fp-cat-archive" + (cat.archived ? " is-archived" : ""),
+			attr: { "aria-label": cat.archived ? `Restore ${cat.name}` : `Archive ${cat.name}` },
+		});
+		icon(archiveBtn, cat.archived ? "archive-restore" : "archive");
+		archiveBtn.setAttribute(
+			"title",
+			cat.archived
+				? "Archived — hidden from budgets and pickers, but still on every transaction that has it. Click to restore."
+				: "Archive — hide from budgets and pickers without touching a single transaction."
+		);
+		archiveBtn.addEventListener("click", async () => {
+			// withArchived carries a primary's secondaries with it — see there for why.
+			store.categories = withArchived(store.categories, cat.id, !cat.archived);
+			await store.saveCategories();
+			this.plugin.refreshViews();
+			this.renderBody();
+		});
+
+		// 8 — delete
 		const del = row.createEl("button", { cls: "fp-cat-delete", attr: { "aria-label": `Delete ${cat.name}` } });
 		icon(del, "trash-2");
 		del.setAttribute("title", "Delete");
@@ -1593,11 +1617,11 @@ export class FinanceSettingTab extends PluginSettingTab {
 			const head = table.createDiv({ cls: "fp-cat-row is-head" });
 			// One label per grid track, including the trailing count column — a header row shorter than
 			// the body rows leaves every heading sitting over the wrong thing.
-			["", "Name", "", "Icon", "Move", "", ""].forEach((label) =>
+			["", "Name", "", "Icon", "Move", "", "", ""].forEach((label) =>
 				head.createDiv({ cls: "fp-cat-cell fp-cat-head-cell", text: label })
 			);
 
-			primaries.forEach((cat) => {
+			primaries.filter((cat) => !cat.archived).forEach((cat) => {
 				const secondaries = secondaryCategoriesOf(store.categories, cat.id);
 				const expanded = this.categoryExpanded.get(cat.id) ?? false;
 				this.renderCategoryRow(table, cat, { expanded, childCount: secondaries.length });
@@ -1605,7 +1629,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 				if (!expanded) return;
 				// Subcategories share the same grid, so every column still lines up; the nesting is
 				// shown with a left accent rather than an indent that would shift the columns.
-				secondaries.forEach((sub) => this.renderCategoryRow(table, sub));
+				secondaries.filter((sub) => !sub.archived).forEach((sub) => this.renderCategoryRow(table, sub));
 				this.renderAddCategoryRow(table, {
 					placeholder: `New subcategory under ${cat.name}`,
 					defaultColour: cat.color,
@@ -1624,6 +1648,16 @@ export class FinanceSettingTab extends PluginSettingTab {
 					},
 				});
 			});
+		}
+
+		// Archived categories, kept out of the list above but reachable — an archive you can't see into
+		// is a delete with extra steps.
+		const archived = store.categories.filter((cat) => cat.archived);
+		if (archived.length > 0) {
+			card.createDiv({ cls: "fp-sgroup-label", text: `Archived (${archived.length})` });
+			this.note(card, "Hidden from budgets and category pickers. Every transaction tagged with these keeps its category, and every past figure is unchanged.");
+			const archivedTable = card.createDiv({ cls: "fp-cat-table" });
+			archived.forEach((cat) => this.renderCategoryRow(archivedTable, cat));
 		}
 
 		card.createDiv({ cls: "fp-sgroup-label", text: "Add a category" });

@@ -1,5 +1,5 @@
 import { setIcon } from "obsidian";
-import { primaryCategories, secondaryCategoriesOf } from "../categories";
+import { offerableCategories, primaryCategories, secondaryCategoriesOf } from "../categories";
 import { decimalSeparator, formatMoney, formatMoneyForInput, parseMoney } from "../money";
 import type { Category } from "../types";
 
@@ -122,11 +122,13 @@ export function renderCategoryPicker(
 	const primarySelect = wrap.createEl("select", { cls: "fp-setup-select" });
 	const secondarySelect = wrap.createEl("select", { cls: "fp-setup-select" });
 
-	const primaries = primaryCategories(opts.categories);
+	// Archived categories are kept out of the choices without being hidden from the transaction that
+	// already carries one — see offerableCategories for why that exception matters.
+	const primaries = offerableCategories(primaryCategories(opts.categories), opts.value?.primaryId);
 
 	function populateSecondary(primaryId: string | undefined, selectedSecondaryId: string | undefined): void {
 		secondarySelect.empty();
-		const secondaries = primaryId ? secondaryCategoriesOf(opts.categories, primaryId) : [];
+		const secondaries = offerableCategories(primaryId ? secondaryCategoriesOf(opts.categories, primaryId) : [], selectedSecondaryId);
 		secondarySelect.disabled = secondaries.length === 0;
 		secondarySelect.createEl("option", { text: opts.secondaryPlaceholder ?? "— none —", value: "" });
 		secondaries.forEach((cat) => {
