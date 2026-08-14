@@ -48,7 +48,8 @@ type AccountType = Account["type"];
  * since they're not real budget categories here — anything unmatched is simply "Uncategorized".
  */
 export function defaultCategories(): Category[] {
-	const seed: [string, string, string][] = [
+	/** name, colour, icon, and the `kind` for the one category that isn't an expense. */
+	const seed: [string, string, string, Category["kind"]?][] = [
 		["Auto & Transport", "#3b82f6", "car"],
 		["Health & Fitness", "#ef4444", "heart-pulse"],
 		["Bills & Utilities", "#64748b", "receipt"],
@@ -61,7 +62,9 @@ export function defaultCategories(): Category[] {
 		["Fees & Charges", "#b91c1c", "alert-circle"],
 		["Food", "#f97316", "utensils"],
 		["Gifts", "#ec4899", "gift"],
-		["Income", "#16a34a", "wallet"],
+		// The only non-expense default. Without this its budget reads as a ceiling to stay under, so
+		// hitting an income target lights up red — see budgetTone, which flips on exactly this flag.
+		["Income", "#16a34a", "wallet", "income"],
 		["Insurance", "#0ea5e9", "shield"],
 		["Kids", "#eab308", "baby"],
 		["Legal", "#52525b", "scale"],
@@ -76,12 +79,14 @@ export function defaultCategories(): Category[] {
 		["Transfers", "#2563eb", "repeat"],
 		["Travel & Vacation", "#0d9488", "plane"],
 	];
-	return seed.map(([name, color, icon], i) => ({
+	return seed.map(([name, color, icon, kind], i) => ({
 		id: `cat-${i}-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
 		name,
 		color,
 		icon,
 		aliases: [],
+		// Left absent rather than set to undefined, so a category serialises exactly as it always has.
+		...(kind ? { kind } : {}),
 	}));
 }
 
