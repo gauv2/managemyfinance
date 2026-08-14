@@ -354,6 +354,23 @@ export class FinanceStore {
 		await this.app.vault.adapter.write(this.path("data", "merchants.json"), JSON.stringify(this.merchants, null, "\t"));
 	}
 
+	/**
+	 * Copies merchant memory aside before something destructive overwrites it.
+	 *
+	 * Merchant memory is the only place a categorization decision survives once the rows that taught it
+	 * are gone, and every write here replaces the whole file — there is no per-entry history to fall
+	 * back on. A snapshot costs one small file and turns "I clicked the wrong button" from permanent
+	 * into a rename. Returns the path so the caller can say where it went.
+	 */
+	async backupMerchants(reason: string): Promise<string> {
+		const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+		const folder = this.path("data", "backups");
+		await this.ensureFolder(folder);
+		const file = normalizePath(`${folder}/merchants-${stamp}-${reason}.json`);
+		await this.app.vault.adapter.write(file, JSON.stringify(this.merchants, null, "\t"));
+		return file;
+	}
+
 	async saveSnapshots(): Promise<void> {
 		this.snapshots.sort((a, b) => a.date.localeCompare(b.date));
 		await this.app.vault.adapter.write(this.path("data", "snapshots.json"), JSON.stringify(this.snapshots, null, "\t"));
@@ -540,16 +557,14 @@ export class FinanceStore {
 		if (!tx) return;
 		Object.assign(tx, patch);
 
-		const year = tx.date.slice(0, 4) || "unknown";
-		const folder = this.path("data", "ledger", tx.source);
-		await this.ensureFolder(folder);
-		const file = normalizePath(`${folder}/${year}.csv`);
-
-		const rows: (string | number | undefined)[][] = [TX_COLUMNS];
-		for (const t of this.transactions) {
-			if (t.source === tx.source && (t.date || "").slice(0, 4) === year) rows.push(this.serializeTx(t));
-		}
-		await this.app.vault.adapter.write(file, toCSV(rows));
+		// Was a hand-inlined copy of rewriteLedgerFile that derived the year twice, and differently:
+		// the filename used `tx.date.slice(0,4) || "unknown"` while the row filter compared against
+		// that same string. For a row with no date the two disagreed — the file was named "unknown"
+		// but the predicate asked for rows whose year equalled "unknown", which no row satisfies — so
+		// the file was rewritten empty and every dateless row of that source was dropped from disk.
+		// It also dereferenced tx.date unguarded, throwing outright once the row round-tripped through
+		// readLedger as undefined. One helper, one definition of the key, neither failure possible.
+		await this.rewriteLedgerFile(this.ledgerKey(tx));
 	}
 
 	/**

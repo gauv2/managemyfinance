@@ -5,6 +5,7 @@ import { dismissSuggestion, siblingsOf, unknownMerchants } from "../../import/me
 import type FinancePlugin from "../../main";
 import { formatMoney } from "../../money";
 import { BulkMatchModal } from "../../modals/BulkMatchModal";
+import { buildRecheckTargets } from "../../ai/recheck";
 import { RecheckModal } from "../../modals/RecheckModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import type { ReviewStatus, Transaction } from "../../types";
@@ -114,6 +115,10 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		// leaving the literal string "new" behind in the CSV.
 		for (const id of ids) patches.set(id, { review: status === "new" ? undefined : status });
 		const changed = await store.updateTransactions(patches);
+		// Signing off the last row of a shop is the judgement that the shop is filed right, so record it
+		// as such. Without this, approving the whole queue left every merchant still "unconfirmed" and
+		// the recheck dialog kept offering to re-examine work that had just been done by hand.
+		if (status === "approved") await plugin.confirmFullyApprovedMerchants(ids);
 		if (changed > 0) {
 			const verb = status === "new" ? "Reset" : status === "approved" ? "Approved" : "Flagged";
 			new Notice(`${verb} ${changed} transaction${changed === 1 ? "" : "s"}`);
@@ -165,6 +170,7 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		for (const id of ids) patches.set(id, { categoryId, review: "approved" });
 		const changed = await store.updateTransactions(patches);
 		await plugin.rememberMerchantsFor(ids, categoryId);
+		await plugin.confirmFullyApprovedMerchants(ids);
 		const name = store.categories.find((c) => c.id === categoryId)?.name ?? "category";
 		new Notice(`Categorized and approved ${changed} transaction${changed === 1 ? "" : "s"} as "${name}"`);
 		selected.clear();
@@ -231,17 +237,63 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			}
 		}
 
+		// The queue's own AI action. "Auto-categorize" and "Ask Claude" above both only ever look at rows
+		// with NO category, so once an import has filed everything they disappear — leaving a review
+		// queue full of machine guesses and no way to ask for a second opinion on precisely those. This
+		// asks the recheck question of the rows still waiting on you, and nothing else.
+		const queue = store.transactions.filter((t) => (t.review ?? "new") !== "approved" && t.categoryId);
+		if (queue.length > 0) {
+			const queueBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-primary" });
+			icon(queueBtn, "sparkles");
+			queueBtn.createSpan({ text: "Ask Claude about the queue" });
+			if (ai?.enabled) {
+				queueBtn.setAttribute(
+					"title",
+					`Have Claude re-classify the merchants behind the ${queue.length} transaction${
+						queue.length === 1 ? "" : "s"
+					} still waiting for review, and propose fixes. Nothing changes until you accept them.`
+				);
+				queueBtn.addEventListener("click", () =>
+					new RecheckModal(plugin.app, plugin, {
+						scope: { transactions: queue, label: "the review queue" },
+						onDone: () => render(),
+					}).open()
+				);
+			} else {
+				queueBtn.setAttribute("title", "AI categorization is switched off — click to turn it on.");
+				queueBtn.addClass("is-muted");
+				queueBtn.addEventListener("click", () => plugin.openVaultSettings("ai"));
+			}
+		}
+
 		// Offered whenever there is anything already categorized to have a second look at — which is the
 		// blind spot every other action here leaves: they all only ever touch rows with no category.
+		//
+		// Disabled, not hidden, when there is nothing left to re-examine. The button opening a dialog
+		// whose entire content is "there is nothing to do" is a wasted click every time, and hiding it
+		// outright would make the feature vanish from the one page anyone would look for it on. The
+		// same count the dialog would compute decides it, so the two can never disagree.
 		if (store.transactions.some((t) => t.categoryId)) {
+			const pending = buildRecheckTargets(store.transactions, store.merchants, { includeReviewed: false });
 			const recheckBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary" });
 			icon(recheckBtn, "refresh-cw");
 			recheckBtn.createSpan({ text: "Recheck categories" });
-			recheckBtn.setAttribute(
-				"title",
-				"Have Claude re-classify merchants you've already categorized and propose fixes. Nothing changes until you accept them."
-			);
-			recheckBtn.addEventListener("click", () => new RecheckModal(plugin.app, plugin, { onDone: () => render() }).open());
+			if (pending.targets.length === 0) {
+				recheckBtn.disabled = true;
+				recheckBtn.addClass("is-muted");
+				recheckBtn.setAttribute(
+					"title",
+					"Nothing left to re-examine — every categorized merchant is confirmed or deliberately split across categories. Open it again after your next import."
+				);
+			} else {
+				recheckBtn.setAttribute(
+					"title",
+					`Have Claude re-classify the ${pending.targets.length} merchant${
+						pending.targets.length === 1 ? "" : "s"
+					} not yet confirmed and propose fixes. Nothing changes until you accept them.`
+				);
+				recheckBtn.addEventListener("click", () => new RecheckModal(plugin.app, plugin, { onDone: () => render() }).open());
+			}
 		}
 
 		const manageBtn = headerActions.createEl("button", { cls: "fp-btn fp-btn-secondary" });
@@ -455,7 +507,13 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			return;
 		}
 
-		const ids = Array.from(selected);
+		// Scoped to what the filters are actually showing. The selection set is not cleared by the
+		// account, search, category or date filters, so a tick made before narrowing survived into a
+		// bulk action that then wrote to rows no longer on screen — and the select-all checkbox could
+		// not undo it, because it only ever adds and removes the visible ones. Deriving the ids from
+		// `rows` makes "apply to the selection" mean "apply to the selection you can see", which is the
+		// only reading anyone has when they press the button.
+		const ids = rows.filter((t) => selected.has(t.id)).map((t) => t.id);
 		const actions = bar.createDiv({ cls: "fp-review-bulk-actions" });
 
 		const pickerWrap = actions.createDiv({ cls: "fp-review-bulk-picker" });

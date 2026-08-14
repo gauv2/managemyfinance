@@ -4,7 +4,7 @@ import { aiCategorize, describeAiResult } from "./ai/categorizer";
 import { budgetAlerts, currentMonth } from "./budgets";
 import { autoCategorize, buildDefaultRules, effectiveRules } from "./import/autoCategorize";
 import { merchantKey } from "./import/merchantKey";
-import { applyMemory, applyPendingSuggestions, learnFromHistory, pruneMemory, remember, siblingsOf } from "./import/merchantMemory";
+import { applyMemory, applyPendingSuggestions, learnFromHistory, markReviewed, pruneMemory, remember, siblingsOf } from "./import/merchantMemory";
 import { BalanceSnapshotModal } from "./modals/BalanceSnapshotModal";
 import { RecheckModal } from "./modals/RecheckModal";
 import { DetectedSubscriptionsModal, dueSoon } from "./modals/SubscriptionLinkModal";
@@ -362,10 +362,26 @@ export default class FinancePlugin extends Plugin {
 		const key = merchantKey(tx);
 		if (!key) return 0;
 
+		// What this merchant was filed as a moment ago, captured before `remember` overwrites it.
+		const previousCategoryId = store.merchants[key]?.categoryId;
+
 		store.merchants = remember(store.merchants, key, categoryId, "user");
 		await store.saveMerchants();
 
-		const siblings = siblingsOf(store.transactions, tx).filter((t) => !t.categoryId);
+		// Siblings that are blank, or that still carry the category this merchant is moving away from.
+		//
+		// Filling blanks alone was not enough, and produced the "sometimes it fans out, sometimes I
+		// have to click every row" behaviour. Picking a two-level category is two changes, not one:
+		// the picker fires as soon as the primary is chosen, so "Groceries" propagates to every blank
+		// sibling, and the follow-up "Groceries > Supermarket" then finds nothing blank left to touch.
+		// The clicked row ended up on the subcategory and its dozen siblings stayed on the parent.
+		//
+		// Matching the previous category as well makes that second change land, and makes the fan-out
+		// able to correct a mistake rather than only fill a gap. A sibling deliberately filed somewhere
+		// else matches neither test, so a hand-made exception is still left alone.
+		const siblings = siblingsOf(store.transactions, tx).filter(
+			(t) => !t.categoryId || (previousCategoryId !== undefined && t.categoryId === previousCategoryId)
+		);
 		if (siblings.length === 0) return 0;
 		const patches = new Map(siblings.map((t) => [t.id, { categoryId }] as const));
 		return store.updateTransactions(new Map(patches));
@@ -378,6 +394,72 @@ export default class FinancePlugin extends Plugin {
 	 * good, so the next import of them lands categorized rather than back in the review queue. Called
 	 * by every path that sets a category on more than one row at a time.
 	 */
+	/**
+	 * Credits a merchant as confirmed once every one of its rows has been approved.
+	 *
+	 * Approving a row and confirming a merchant were tracked separately, and only the second one was
+	 * ever set deliberately — so a vault could sit at 3,950 of 3,950 approved while the recheck dialog
+	 * still offered to re-examine hundreds of shops, as though the work had never happened. Signing off
+	 * the last transaction of a shop IS the judgement that shop is filed correctly; recording it here
+	 * means the count of "already confirmed" reflects what was actually reviewed.
+	 *
+	 * Deliberately conservative: a merchant whose rows are split across categories is left alone, since
+	 * there is no single category to confirm, and a merchant with any row still unapproved is not
+	 * credited yet.
+	 */
+	async confirmFullyApprovedMerchants(ids: Iterable<string>): Promise<number> {
+		const store = this.store;
+		const chosen = new Set(ids);
+
+		const keys = new Set<string>();
+		for (const tx of store.transactions) {
+			if (!chosen.has(tx.id)) continue;
+			const key = merchantKey(tx);
+			if (key) keys.add(key);
+		}
+		if (keys.size === 0) return 0;
+
+		// One pass over the ledger for all of them, rather than a scan per merchant.
+		const state = new Map<string, { allApproved: boolean; categories: Set<string> }>();
+		for (const tx of store.transactions) {
+			const key = merchantKey(tx);
+			if (!key || !keys.has(key)) continue;
+			const entry = state.get(key) ?? { allApproved: true, categories: new Set<string>() };
+			if ((tx.review ?? "new") !== "approved") entry.allApproved = false;
+			if (tx.categoryId) entry.categories.add(tx.categoryId);
+			state.set(key, entry);
+		}
+
+		let confirmed = 0;
+		for (const [key, entry] of state) {
+			if (!entry.allApproved || entry.categories.size !== 1) continue;
+			if (store.merchants[key]?.reviewedAt) continue;
+			store.merchants = markReviewed(store.merchants, key, Array.from(entry.categories)[0]);
+			confirmed++;
+		}
+		if (confirmed > 0) await store.saveMerchants();
+		return confirmed;
+	}
+
+	/**
+	 * Teaches merchant memory from a batch where each row has its own category — the shape a rules
+	 * re-file produces, unlike `rememberMerchantsFor` which applies one category to every id.
+	 */
+	async rememberMerchantsForRules(patches: Map<string, string>): Promise<void> {
+		const store = this.store;
+		let touched = false;
+		for (const tx of store.transactions) {
+			const categoryId = patches.get(tx.id);
+			if (!categoryId) continue;
+			const key = merchantKey(tx);
+			if (!key) continue;
+			// "rule" rather than "user": a rule wrote this, and a later hand-made decision should outrank it.
+			store.merchants = remember(store.merchants, key, categoryId, "rule");
+			touched = true;
+		}
+		if (touched) await store.saveMerchants();
+	}
+
 	async rememberMerchantsFor(ids: Iterable<string>, categoryId: string): Promise<void> {
 		const store = this.store;
 		const chosen = new Set(ids);
