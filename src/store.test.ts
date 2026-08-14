@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "obsidian";
 import { parseCSV } from "./csv";
 import { DEFAULT_SETTINGS, FinanceStore, type FinanceSettings } from "./store";
-import type { Transaction } from "./types";
+import type { Category, Transaction } from "./types";
 
 /**
  * The ledger's persistence layer: schema migration, per-source/year filing, dedupe, edits and
@@ -127,6 +127,62 @@ describe("FinanceStore — ledger round-trip", () => {
 		await reloaded.load();
 
 		expect(reloaded.transactions[0].description).toBe(nasty);
+	});
+});
+
+describe("FinanceStore — Income category kind migration", () => {
+	async function seeded(categories: Category[]): Promise<FinanceStore> {
+		const { store, app } = newStore();
+		await store.load();
+		store.categories = categories;
+		await store.saveCategories();
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+		return reloaded;
+	}
+	const cat = (over: Partial<Category> = {}): Category => ({
+		id: "cat-x",
+		name: "Income",
+		color: "#16a34a",
+		icon: "wallet",
+		aliases: [],
+		...over,
+	});
+
+	it("flags a pre-existing Income category that never had a kind", async () => {
+		const s = await seeded([cat({ id: "cat-12-income" }), cat({ id: "cat-food", name: "Food" })]);
+		expect(s.categories.find((c) => c.name === "Income")!.kind).toBe("income");
+	});
+
+	it("leaves the vault alone once any category is already flagged", async () => {
+		// Someone who flags "Salary" instead has expressed an opinion; overriding it would be rude and
+		// would give them two income categories where they wanted one.
+		const s = await seeded([cat({ id: "cat-12-income" }), cat({ id: "cat-salary", name: "Salary", kind: "income" })]);
+		expect(s.categories.find((c) => c.name === "Income")!.kind).toBeUndefined();
+		expect(s.categories.find((c) => c.name === "Salary")!.kind).toBe("income");
+	});
+
+	it("does nothing when there is no Income category at all", async () => {
+		const s = await seeded([cat({ id: "cat-food", name: "Food" })]);
+		expect(s.categories.some((c) => c.kind === "income")).toBe(false);
+	});
+
+	it("ignores a secondary category that happens to be called Income", async () => {
+		const s = await seeded([cat({ id: "cat-biz", name: "Business" }), cat({ id: "cat-biz-sub", parentId: "cat-biz" })]);
+		expect(s.categories.find((c) => c.parentId)!.kind).toBeUndefined();
+	});
+
+	it("is a no-op on the second load rather than fighting a later change", async () => {
+		const { store, app } = newStore();
+		await store.load();
+		store.categories = [cat({ id: "cat-12-income" })];
+		await store.saveCategories();
+		const first = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await first.load();
+		expect(first.categories[0].kind).toBe("income");
+		const second = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await second.load();
+		expect(second.categories[0].kind).toBe("income");
 	});
 });
 
