@@ -156,6 +156,22 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 const NUMERIC_COLUMNS: (keyof Transaction)[] = ["amount", "shares", "price", "fee", "tax"];
 
 /**
+ * The columns `Transaction` declares as always present, which a blank cell must therefore come back
+ * from as `""` and not `undefined`.
+ *
+ * A row with no date is a real thing — the ledger files undated rows under `unknown.csv` on purpose —
+ * but the type says `date: string`, so every reader downstream is entitled to call `.localeCompare`
+ * or `.slice` on it without a guard. Blanking it to `undefined` behind this function's
+ * `as unknown as Transaction` cast turned that entitlement into a TypeError thrown far from the CSV
+ * that caused it: the category drill-down rendered an empty modal on "All time", because that is the
+ * one scope whose period filter doesn't discard undated rows before the sort.
+ *
+ * `""` reads as "not known" everywhere that already mattered — `!tx.date` and `inPeriod` treat it
+ * exactly as they treated `undefined` — so this narrows the blanking without changing any filter.
+ */
+const REQUIRED_TX_STRINGS = new Set<string>(["id", "date", "accountId", "description", "currency", "source"]);
+
+/**
  * Loads/persists all Finance data inside the vault: accounts/categories/rules as JSON,
  * transactions as one CSV per source per year under data/ledger/<source>/<year>.csv.
  * Everything here is plain text so it stays diffable and readable outside the plugin too.
@@ -325,7 +341,7 @@ export class FinanceStore {
 			tx[col as string] = raw === undefined || raw === "" ? undefined : parseFloat(raw);
 		}
 		for (const key of Object.keys(tx)) {
-			if (tx[key] === "") tx[key] = undefined;
+			if (tx[key] === "" && !REQUIRED_TX_STRINGS.has(key)) tx[key] = undefined;
 		}
 		return tx as unknown as Transaction;
 	}
