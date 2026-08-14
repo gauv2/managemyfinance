@@ -10,6 +10,11 @@ import {
 	testProvider,
 } from "../ai/provider";
 import { buildMatchPrompt } from "../ai/matchPrompt";
+import { ManageRulesModal } from "../modals/ManageRulesModal";
+import { checkConsistency, type Issue } from "../consistency";
+import { merchantKey } from "../import/merchantKey";
+import { markReviewed, remember } from "../import/merchantMemory";
+import type { Transaction } from "../types";
 import { buildUserPrompt } from "../ai/prompt";
 import { sendEmail, sendTelegram } from "../delivery/channels";
 import { canExportPdf } from "../reports/pdf";
@@ -38,7 +43,7 @@ import { EditAccountModal } from "../modals/EditAccountModal";
 import { ImportBackupModal } from "../modals/ImportBackupModal";
 import { ManagePortfoliosModal } from "../modals/ManagePortfoliosModal";
 import type { AccountType, Category } from "../types";
-import { icon } from "../ui/dom";
+import { icon, renderCategoryPicker, type CategoryPickerValue } from "../ui/dom";
 import { openImportWizard } from "../wizards/ImportWizard";
 
 const BASE_CURRENCY = "EUR";
@@ -176,12 +181,21 @@ export class FinanceSettingTab extends PluginSettingTab {
 		return [
 			{ id: "general", label: "General", icon: "settings-2", render: (c) => this.renderGeneral(c) },
 			{ id: "accounts", label: "Accounts", icon: "landmark", render: (c) => this.renderAccounts(c) },
-			{ id: "categories", label: "Categories", icon: "tag", render: (c) => this.renderCategories(c) },
+			{
+				id: "categories",
+				label: "Categories",
+				icon: "tag",
+				render: (c) => {
+					this.renderCategories(c);
+					this.renderRulesGroup(c);
+				},
+			},
 			{ id: "projections", label: "Projections", icon: "trending-up", render: (c) => this.renderProjections(c) },
 			{ id: "currency", label: "Currency", icon: "coins", render: (c) => this.renderCurrency(c) },
 			{ id: "import", label: "Import", icon: "download", render: (c) => this.renderImport(c) },
 			{ id: "ai", label: "AI", icon: "sparkles", render: (c) => this.renderAi(c) },
 			{ id: "schedules", label: "Scheduled reports", icon: "send", render: (c) => this.renderSchedules(c) },
+			{ id: "health", label: "Health check", icon: "stethoscope", render: (c) => this.renderHealth(c) },
 			{ id: "data", label: "Data", icon: "database", render: (c) => this.renderData(c) },
 			{ id: "about", label: "About", icon: "info", render: (c) => this.renderAbout(c) },
 		];
@@ -1014,6 +1028,222 @@ export class FinanceSettingTab extends PluginSettingTab {
 		}
 	}
 
+	/**
+	 * Health check: where the ledger, the merchant memory and the category list disagree.
+	 *
+	 * Three records describe the same fact and nothing keeps them in step, so they drift in ordinary
+	 * use — a deleted category leaves rows pointing at nothing, a row re-filed by hand leaves memory
+	 * saying the old thing, an import writes memory for a shop whose rows are later removed. Each is
+	 * silent, and each changes what the next import does.
+	 *
+	 * Every finding is offered with the fix beside it. A report that can only tell you something is
+	 * wrong makes the problem your job twice.
+	 */
+	/**
+	 * Where categorization rules are specified.
+	 *
+	 * They were reachable from exactly one place — a button on an account's ledger — which is a strange
+	 * home for the thing that decides how every future import is filed, and impossible to find from the
+	 * pages where the question arises. The modal is unchanged; this is a second door to it, next to the
+	 * categories the rules point at.
+	 */
+	private renderRulesGroup(content: HTMLElement): void {
+		const store = this.plugin.store;
+		const group = this.group(content, {
+			icon: "list-filter",
+			title: "Categorization rules",
+			subtitle: "Text patterns that file a transaction automatically, checked against its description and counterparty.",
+			chip:
+				store.rules.length > 0
+					? { text: `${store.rules.length} rule${store.rules.length === 1 ? "" : "s"}`, tone: "ok" }
+					: { text: "none yet", tone: "warn" },
+		});
+
+		this.note(
+			group.content,
+			"Three things decide a category, in this order: a rule you wrote, then what the merchant was filed as last time, then the built-in guesses. A rule is the one to reach for when the same text should always land somewhere — it applies to every future import, and can be re-applied to rows you already have."
+		);
+
+		const open = group.content.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(open, "list-filter");
+		open.createSpan({ text: store.rules.length > 0 ? "Manage rules" : "Add your first rule" });
+		open.addEventListener("click", () =>
+			new ManageRulesModal(this.app, this.plugin, () => {
+				this.plugin.refreshViews();
+				this.renderBody();
+			}).open()
+		);
+	}
+
+	private renderHealth(content: HTMLElement): void {
+		const store = this.plugin.store;
+		const report = checkConsistency(
+			store.transactions,
+			store.merchants,
+			store.categories,
+			(tx) => merchantKey(tx),
+			(tx) => merchantDisplayName(tx.description || tx.counterparty || "")
+		);
+
+		const group = this.group(content, {
+			icon: "stethoscope",
+			title: "Health check",
+			subtitle: "Disagreements between your ledger, your merchant memory and your category list.",
+			chip:
+				report.issues.length === 0
+					? { text: "all consistent", tone: "ok" }
+					: { text: `${report.issues.length} to look at`, tone: "warn" },
+		});
+		const card = group.content;
+
+		this.note(
+			card,
+			`Checked ${report.checked.transactions.toLocaleString()} transactions, ${report.checked.merchants} remembered merchants and ${
+				report.checked.categories
+			} categories.`
+		);
+
+		const rulesLink = card.createDiv({ cls: "fp-health-rules-link" });
+		const toRules = rulesLink.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-tiny" });
+		icon(toRules, "list-filter");
+		toRules.createSpan({ text: "Categorization rules" });
+		toRules.setAttribute("title", "Filing a merchant here fixes the rows you have. A rule decides how future ones land.");
+		toRules.addEventListener("click", () =>
+			new ManageRulesModal(this.app, this.plugin, () => {
+				this.plugin.refreshViews();
+				this.renderBody();
+			}).open()
+		);
+
+		if (report.issues.length === 0) {
+			card.createDiv({
+				cls: "fp-step-desc",
+				text: "Nothing disagrees. Every transaction points at a category that exists, every remembered merchant matches how its rows are actually filed, and no merchant is remembered that the ledger has forgotten.",
+			});
+			return;
+		}
+
+		for (const issue of report.issues) {
+			const row = card.createDiv({ cls: "fp-health-row" });
+			const main = row.createDiv({ cls: "fp-health-main" });
+			main.createDiv({ cls: "fp-health-label fp-sensitive", text: issue.label });
+			main.createDiv({ cls: "fp-health-detail", text: issue.detail });
+			if (issue.transactions.length > 0) {
+				main.createDiv({
+					cls: "fp-health-count",
+					text: `${issue.transactions.length} transaction${issue.transactions.length === 1 ? "" : "s"}`,
+				});
+			}
+
+			const actions = row.createDiv({ cls: "fp-health-actions" });
+
+			// A split merchant is a choice, not a repair: which of the categories its rows are scattered
+			// across is the right one is something only the owner of the ledger knows. The button offers
+			// the majority as the obvious answer; the picker beside it exists because the majority is
+			// wrong often enough that a one-button fix would be a trap.
+			//
+			// Choosing STAGES the change; the button commits it. Applying on the picker's change event
+			// moved dozens of transactions the instant a category was selected, and the row then vanished
+			// from the report — so picking the wrong thing, or picking a parent on the way to its
+			// subcategory, was already done by the time you saw it.
+			let staged: string | undefined;
+			const fix = actions.createEl("button", { cls: "fp-btn fp-btn-secondary fp-btn-tiny" });
+
+			const paintButton = (): void => {
+				fix.empty();
+				const target = staged ?? issue.resolveTo;
+				const label =
+					issue.kind === "merchant-split" && target
+						? `${staged ? "Confirm: file all as" : "File all as"} ${
+								store.categories.find((c) => c.id === target)?.name ?? "category"
+							}`
+						: (issue.fixLabel ?? "Fix");
+				icon(fix, issue.housekeeping ? "trash-2" : staged ? "check" : "wrench");
+				fix.createSpan({ text: label });
+				// The label can be clipped when a category name is long, so it is also the tooltip.
+				fix.setAttribute("title", label);
+				fix.toggleClass("fp-btn-primary", !!staged);
+				fix.toggleClass("fp-btn-secondary", !staged);
+			};
+
+			if (issue.kind === "merchant-split") {
+				const pickWrap = actions.createDiv({ cls: "fp-health-picker" });
+				renderCategoryPicker(pickWrap, {
+					categories: store.categories,
+					primaryPlaceholder: "File all as…",
+					onChange: (value: CategoryPickerValue) => {
+						const chosen = value.secondaryId ?? value.primaryId;
+						// A primary that has subcategories is a half-made choice: wait for the second half
+						// rather than staging the parent and having the label change under the cursor.
+						if (!chosen || (!value.secondaryId && secondaryCategoriesOf(store.categories, value.primaryId ?? "").length > 0)) {
+							staged = undefined;
+							paintButton();
+							return;
+						}
+						staged = chosen;
+						paintButton();
+					},
+				});
+			}
+
+			paintButton();
+			fix.addEventListener("click", () => void this.applyHealthFix(staged ? { ...issue, resolveTo: staged } : issue));
+		}
+	}
+
+	/** Applies one finding. Each kind has exactly one sensible repair; nothing here guesses. */
+	private async applyHealthFix(issue: Issue): Promise<void> {
+		const store = this.plugin.store;
+
+		if (issue.kind === "merchant-split" && issue.key && issue.resolveTo) {
+			// Every row of the merchant moves, including ones already in the target, so the result is a
+			// merchant with exactly one category rather than a smaller split.
+			const patches = new Map<string, Partial<Transaction>>();
+			for (const tx of issue.transactions) patches.set(tx.id, { categoryId: issue.resolveTo });
+			const changed = await store.updateTransactions(patches);
+			store.merchants = markReviewed(remember(store.merchants, issue.key, issue.resolveTo, "user"), issue.key, issue.resolveTo);
+			await store.saveMerchants();
+			const name = store.categories.find((c) => c.id === issue.resolveTo)?.name ?? "category";
+			new Notice(`${issue.label}: ${changed} transaction${changed === 1 ? "" : "s"} filed as ${name}`);
+		} else if (issue.kind === "dangling-category") {
+			// Cleared rather than reassigned: the original category is gone, and inventing a replacement
+			// would file them somewhere nobody chose. Cleared, they surface in Review as uncategorized.
+			const patches = new Map<string, Partial<Transaction>>();
+			for (const tx of issue.transactions) patches.set(tx.id, { categoryId: undefined });
+			const changed = await store.updateTransactions(patches);
+			new Notice(`Cleared the category on ${changed} transaction${changed === 1 ? "" : "s"} — they are back in Review`);
+		} else if (issue.kind === "memory-disagrees" && issue.key && issue.resolveTo) {
+			store.merchants = markReviewed(remember(store.merchants, issue.key, issue.resolveTo, "user"), issue.key, issue.resolveTo);
+			await store.saveMerchants();
+			new Notice(`${issue.label} is now remembered as the ledger has it`);
+		} else if (issue.kind === "memory-missing-category" && issue.key) {
+			// Re-pointed where possible rather than deleted: the entry names a category that is gone, but
+			// the decision that it belongs *somewhere* was still made by a person. Only an entry nobody
+			// touched is removed outright.
+			const entry = store.merchants[issue.key];
+			const humanDecision = entry && (entry.source === "user" || entry.reviewedAt || entry.dismissedAt);
+			if (humanDecision) {
+				new Notice(
+					`${issue.label} was categorized by you under a category that no longer exists. Re-file it from Review, or recreate the category — it will not be deleted automatically.`,
+					10000
+				);
+				return;
+			}
+			await store.backupMerchants("forget-missing-category");
+			const next = { ...store.merchants };
+			delete next[issue.key];
+			store.merchants = next;
+			await store.saveMerchants();
+			new Notice(`Forgot ${issue.label}`);
+		} else if (issue.kind === "same-name-split") {
+			new Notice("Open Review and filter by this merchant to settle the variants together.");
+			return;
+		}
+
+		this.plugin.refreshViews();
+		this.renderBody();
+	}
+
 	private renderData(content: HTMLElement): void {
 		const store = this.plugin.store;
 		const exports = this.group(content, {
@@ -1206,6 +1436,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 		// 1 — expand. Always present so the following columns start at the same x on every row.
 		const expand = row.createDiv({ cls: "fp-cat-cell fp-cat-expand" + (childCount === 0 ? " is-empty" : "") });
 		if (childCount > 0) {
+			expand.setAttribute("title", `${childCount} subcategor${childCount === 1 ? "y" : "ies"}`);
 			icon(expand, opts.expanded ? "chevron-down" : "chevron-right");
 			expand.setAttribute("aria-label", opts.expanded ? "Collapse" : "Expand");
 			expand.addEventListener("click", () => {
@@ -1299,9 +1530,9 @@ export class FinanceSettingTab extends PluginSettingTab {
 			}).open()
 		);
 
-		// 8 — subcategory count
-		const count = row.createDiv({ cls: "fp-cat-cell fp-cat-count" });
-		if (childCount > 0) count.createSpan({ cls: "fp-chip", text: String(childCount) });
+		// The subcategory count belongs beside the expander that reveals them, not in a column of its
+		// own: as a column it needed a track on every row, and the great majority of rows have no
+		// children, so it bought a permanent empty gutter to display nothing.
 	}
 
 	/** The "add" row, sharing the same grid so its fields sit under the columns they add to. */
@@ -1360,6 +1591,8 @@ export class FinanceSettingTab extends PluginSettingTab {
 		} else {
 			const table = card.createDiv({ cls: "fp-cat-table" });
 			const head = table.createDiv({ cls: "fp-cat-row is-head" });
+			// One label per grid track, including the trailing count column — a header row shorter than
+			// the body rows leaves every heading sitting over the wrong thing.
 			["", "Name", "", "Icon", "Move", "", ""].forEach((label) =>
 				head.createDiv({ cls: "fp-cat-cell fp-cat-head-cell", text: label })
 			);
