@@ -223,6 +223,7 @@ export class FinanceStore {
 
 		this.categories = await this.readJson<Category[]>(this.path("data", "categories.json"), defaultCategories());
 		await this.migrateLegacyCategoryBudgets();
+		await this.migrateIncomeCategoryKind();
 		await this.seedDefaultSecondaryCategories();
 		this.accounts = await this.readJson<Account[]>(this.path("data", "accounts.json"), []);
 		this.rules = await this.readJson<CategoryRule[]>(this.path("data", "rules.json"), []);
@@ -253,6 +254,27 @@ export class FinanceStore {
 			changed = true;
 		}
 		if (changed) await this.saveCategories();
+	}
+
+	/**
+	 * One-time migration: `kind` arrived after the default categories were already seeded, so every
+	 * vault created before it has an Income category that reads as an expense — its budget scored as a
+	 * ceiling to stay under rather than a target to reach, and money arriving into it indistinguishable
+	 * from a refund (see isRefund in kpi.ts, which is gated on this flag existing somewhere).
+	 *
+	 * Guarded on *nothing* in the vault being flagged as income, rather than on a stored "already ran"
+	 * marker. That makes it self-limiting: it bootstraps the flag once, and from then on the guard is
+	 * false forever — including for someone who flags a differently-named category ("Salary") instead,
+	 * whose choice it must not override. A vault that has already expressed an opinion is never touched.
+	 *
+	 * Matches the default category by name, since that is the one this plugin created.
+	 */
+	private async migrateIncomeCategoryKind(): Promise<void> {
+		if (this.categories.some((c) => c.kind === "income")) return;
+		const income = this.categories.find((c) => !c.parentId && c.name.trim().toLowerCase() === "income");
+		if (!income) return;
+		income.kind = "income";
+		await this.saveCategories();
 	}
 
 	/** One-time (but safe to re-run) seed: adds the default secondary categories for any primary
