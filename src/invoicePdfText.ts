@@ -122,8 +122,14 @@ export function textFromContentStream(content: string): string {
 			continue;
 		}
 		// A new line of text, or the end of a text object: both mean "what follows is elsewhere on the page".
+		//
+		// `Tm` belongs in this list as much as Td/TD/T*: it sets the text matrix outright, and a great many
+		// generators position every single line that way rather than stepping relatively. Leaving it out ran
+		// each line into the next — "…VAT 21% EUR 1911.51Total EUR 11013.95…" — which still reads fine to a
+		// human and defeats the field parser entirely, since that works a line at a time. Every field except
+		// the reference came back empty from a PDF whose text had been extracted perfectly.
 		if (
-			(ch === "T" && (content[i + 1] === "d" || content[i + 1] === "D" || content[i + 1] === "*")) ||
+			(ch === "T" && (content[i + 1] === "d" || content[i + 1] === "D" || content[i + 1] === "*" || content[i + 1] === "m")) ||
 			(ch === "E" && content[i + 1] === "T")
 		) {
 			if (!out.endsWith("\n")) out += "\n";

@@ -102,3 +102,24 @@ describe("extractPdfText", () => {
 		expect(localExtractionSufficient(built)).toBe(true);
 	});
 });
+
+describe("the seam between reading a PDF and parsing its fields", () => {
+	/** A page that positions every line with Tm, which is what most generators emit. */
+	const TM_POSITIONED = [
+		"BT /F1 12 Tf",
+		"1 0 0 1 60 760 Tm (VCK Cruises Destin B.V.) Tj",
+		"1 0 0 1 60 690 Tm (Invoice date: 26-05-2026) Tj",
+		"1 0 0 1 60 610 Tm (VAT 21% EUR 1911.51) Tj",
+		"1 0 0 1 60 585 Tm (Total EUR 11013.95) Tj",
+		"ET",
+	].join("\n");
+
+	it("keeps Tm-positioned lines apart instead of running them together", () => {
+		const text = textFromContentStream(TM_POSITIONED);
+		// The failure this pins produced "…EUR 1911.51Total EUR 11013.95", which no line-oriented parser
+		// can read — and every field except the reference came back empty as a result.
+		expect(text).toContain("Total EUR 11013.95");
+		expect(text).not.toContain("1911.51Total");
+		expect(text.split("\n").filter((l) => l.trim()).length).toBe(4);
+	});
+});
