@@ -166,7 +166,7 @@ export function openAttachmentWizard(plugin: FinancePlugin, tx: Transaction, onA
 			onNext: async () => {
 				if (!pickedFile) return;
 				try {
-					const path = await writeAttachment(plugin.app, plugin.settings.dataFolder, pickedFile);
+					const path = await writeAttachment(plugin.app, plugin.settings, pickedFile);
 					await plugin.store.updateTransaction(tx.id, { attachmentPath: path });
 					plugin.refreshViews();
 					new Notice(`Attached "${pickedFile.name}"`);

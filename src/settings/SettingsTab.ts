@@ -346,6 +346,25 @@ export class FinanceSettingTab extends PluginSettingTab {
 			"Accounts, categories, rules, subscriptions and cards are stored here as JSON; the transaction ledger as CSV, one file per source per year. Changing this points the plugin at a different folder — it does not move the files that are already there. A nested path (e.g. \"System/Manage My Finance\") works fine; parent folders are created automatically if they don't already exist."
 		);
 
+		const attachmentSetting = new Setting(where.content)
+			.setName("Attachment folder")
+			.setDesc("Where dropped receipts and invoices are copied to. Leave blank to keep them beside your ledger.")
+			.addText((t) =>
+				t
+					.setPlaceholder(`${this.plugin.settings.dataFolder}/attachments`)
+					.setValue(this.plugin.settings.attachmentFolder ?? "")
+					.onChange(async (v) => {
+						// Blank means "the default", so it keeps tracking the data folder if that moves later
+						// rather than freezing today's value into the settings file.
+						this.plugin.settings.attachmentFolder = v.trim() || undefined;
+						await this.plugin.saveSettings();
+					})
+			);
+		this.help(
+			attachmentSetting,
+			"Receipts are the one thing here you are also likely to open outside this plugin, so they do not have to live in the plugin's own folder — point this at wherever your vault already keeps documents. Changing it only affects files attached from now on: a transaction stores the full path it was given, so everything already attached stays exactly where it is and stays linked. Parent folders are created automatically."
+		);
+
 		const count = (this.plugin.settings.portfolios ?? []).length;
 		const portfolios = this.group(content, {
 			icon: "layers",

@@ -2,7 +2,7 @@ import { App, FuzzySuggestModal, Notice, Platform } from "obsidian";
 import { aiRankPlan, aiReadDocument, describeAiOutcome, emptyAiOutcome, type InvoiceAiOutcome } from "../ai/invoiceMatcher";
 import { describeAiDisclosure } from "../ai/invoicePrompt";
 import type { ModelAttachment } from "../ai/provider";
-import { writeAttachment } from "../data/attachments";
+import { attachmentFolderOf, writeAttachment } from "../data/attachments";
 import { merchantDisplayName } from "../import/merchantKey";
 import { buildInvoiceDocument, localExtractionSufficient } from "../invoiceExtract";
 import {
@@ -699,7 +699,7 @@ export function openInvoiceMatchWizard(plugin: FinancePlugin): void {
 			}
 
 			try {
-				const path = await writeAttachment(app, plugin.settings.dataFolder, file);
+				const path = await writeAttachment(app, plugin.settings, file);
 				await store.updateTransaction(live.id, { attachmentPath: path });
 				usedTx.add(live.id);
 				attached.add(proposal.doc.id);
@@ -741,7 +741,7 @@ export function openInvoiceMatchWizard(plugin: FinancePlugin): void {
 			if (outcome.attached > 0) {
 				c.createDiv({
 					cls: "fp-step-desc",
-					text: `Copied into ${plugin.settings.dataFolder}/attachments and linked. They show in the ledger's File(s) column, and the "Has file" filter now finds them.`,
+					text: `Copied into ${attachmentFolderOf(plugin.settings)} and linked. They show in the ledger's File(s) column, and the "Has file" filter now finds them.`,
 				});
 			}
 			if (attachErrors.length > 0) {
