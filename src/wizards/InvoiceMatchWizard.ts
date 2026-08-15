@@ -421,6 +421,13 @@ export function openInvoiceMatchWizard(plugin: FinancePlugin): void {
 		const attachment: ModelAttachment | undefined =
 			!text?.trim() && canUpload && bytes ? { mediaType, data: base64Of(bytes), filename: file.name } : undefined;
 
+		// Nothing local to send and no way to show the file: asking anyway spends a request to have the
+		// model guess at a receipt it was never given, and reports the guess as a reading. Say so instead.
+		if (!text?.trim() && !attachment) {
+			aiOutcome.unreadable++;
+			return doc;
+		}
+
 		try {
 			const { fields, model } = await aiReadDocument(doc, text, attachment, plugin.settings.ai ?? {});
 			aiOutcome.read++;
@@ -452,9 +459,13 @@ export function openInvoiceMatchWizard(plugin: FinancePlugin): void {
 
 			if (useAi && plugin.settings.ai?.enabled) {
 				const { rankings, outcome: ranked } = await aiRankPlan(built, plugin.settings.ai);
+				// Ranking returns its own fresh outcome, so anything counted while reading the documents has
+				// to be carried across by hand. Spreading `ranked` last would silently zero all of it —
+				// which is exactly how the "could not be read" count went missing the first time.
 				aiOutcome = {
 					...ranked,
 					read: aiOutcome.read,
+					unreadable: aiOutcome.unreadable,
 					failures: aiOutcome.failures + ranked.failures,
 					lastError: ranked.lastError ?? aiOutcome.lastError,
 				};

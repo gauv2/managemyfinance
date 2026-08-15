@@ -154,13 +154,29 @@ describe("aiRankPlan", () => {
 
 describe("describeAiOutcome", () => {
 	it("says nothing when the pass did nothing, so the results screen stays quiet", () => {
-		expect(describeAiOutcome({ read: 0, ranked: 0, failures: 0, model: "", rejected: [] })).toBeUndefined();
+		expect(describeAiOutcome({ read: 0, ranked: 0, failures: 0, model: "", rejected: [], unreadable: 0 })).toBeUndefined();
 	});
 
 	it("names the failure and points at what the results actually are", () => {
-		const notice = describeAiOutcome({ read: 1, ranked: 0, failures: 2, lastError: "Rate limited", model: "m", rejected: [] });
+		const notice = describeAiOutcome({ read: 1, ranked: 0, failures: 2, lastError: "Rate limited", model: "m", rejected: [], unreadable: 0 });
 		expect(notice).toContain("Claude read 1 document");
 		expect(notice).toContain("2 requests failed (Rate limited)");
 		expect(notice).toContain("the matches below are the deterministic ones");
+	});
+});
+
+describe("a document nothing could read", () => {
+	it("names the provider instead of letting it read as 'nothing matched'", () => {
+		const notice = describeAiOutcome({ read: 0, ranked: 0, failures: 0, model: "", rejected: [], unreadable: 1 });
+		// "No confident match" is what the row says, and on its own it implies the document was looked at
+		// and lost. The notice has to say it was never looked at, and what would fix that.
+		expect(notice).toContain("could not be read");
+		expect(notice).toContain("API key provider");
+	});
+
+	it("counts several and still reads as one sentence", () => {
+		const notice = describeAiOutcome({ read: 1, ranked: 2, failures: 0, model: "m", rejected: [], unreadable: 2 });
+		expect(notice).toContain("Claude read 1 document");
+		expect(notice).toContain("2 documents could not be read");
 	});
 });

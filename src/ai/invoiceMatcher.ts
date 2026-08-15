@@ -37,10 +37,12 @@ export interface InvoiceAiOutcome {
 	model: string;
 	/** Answers thrown out by validation, surfaced rather than silently dropped. */
 	rejected: { ref: string; reason: string }[];
+	/** Documents nothing could read and nothing could send — see describeAiOutcome. */
+	unreadable: number;
 }
 
 export function emptyAiOutcome(): InvoiceAiOutcome {
-	return { read: 0, ranked: 0, failures: 0, model: "", rejected: [] };
+	return { read: 0, ranked: 0, failures: 0, model: "", rejected: [], unreadable: 0 };
 }
 
 /**
@@ -161,6 +163,14 @@ export function describeAiOutcome(outcome: InvoiceAiOutcome): string | undefined
 	if (outcome.failures > 0) {
 		parts.push(
 			`${outcome.failures} request${outcome.failures === 1 ? "" : "s"} failed${outcome.lastError ? ` (${outcome.lastError})` : ""} — the matches below are the deterministic ones`
+		);
+	}
+	if (outcome.unreadable > 0) {
+		// Naming the provider matters: "no confident match" reads as "nothing matched", when the truth is
+		// that the document was never looked at. The CLI transport pipes one string down stdin and cannot
+		// carry a photo, so a scanned receipt is unreadable there no matter how good the model is.
+		parts.push(
+			`${outcome.unreadable} document${outcome.unreadable === 1 ? "" : "s"} could not be read — the Claude CLI provider cannot accept images or scanned PDFs, so switch to the API key provider to have those read`
 		);
 	}
 	if (outcome.rejected.length > 0) {
