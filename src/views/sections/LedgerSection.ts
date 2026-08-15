@@ -22,6 +22,8 @@ interface LedgerFilterState {
 	categorySecondaryId: string;
 	/** Review state to show: "" for all, otherwise a ReviewStatus. Mirrors the Review page's filter. */
 	reviewStatus: "" | ReviewStatus;
+	/** "" for all, "yes" for only transactions with a file attached, "no" for only those without. */
+	hasAttachment: "" | "yes" | "no";
 }
 
 export interface LedgerOptions {
@@ -51,6 +53,7 @@ const filterState: LedgerFilterState = {
 	categoryPrimaryId: "",
 	categorySecondaryId: "",
 	reviewStatus: "",
+	hasAttachment: "",
 };
 
 const sortState: LedgerSortState = {
@@ -174,6 +177,16 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		] as ["" | ReviewStatus, string][]
 	).forEach(([value, label]) => reviewSelect.createEl("option", { text: label, value }));
 	reviewSelect.value = filterState.reviewStatus;
+
+	const attachmentSelect = filterRow.createEl("select", { cls: "fp-filter-select" });
+	(
+		[
+			["", "Any attachment"],
+			["yes", "Has file"],
+			["no", "No file"],
+		] as ["" | "yes" | "no", string][]
+	).forEach(([value, label]) => attachmentSelect.createEl("option", { text: label, value }));
+	attachmentSelect.value = filterState.hasAttachment;
 
 	const clearBtn = filterRow.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Clear filters" });
 
@@ -389,6 +402,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		filterState.categoryPrimaryId = primarySelect.value;
 		filterState.categorySecondaryId = secondarySelect.value;
 		filterState.reviewStatus = reviewSelect.value as "" | ReviewStatus;
+		filterState.hasAttachment = attachmentSelect.value as "" | "yes" | "no";
 
 		const needle = filterState.search.toLowerCase();
 		const accountFilter = filterState.accountId;
@@ -408,6 +422,10 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 				return !secondaryFilter || t.categoryId === secondaryFilter;
 			})
 			.filter((t) => !filterState.reviewStatus || (t.review ?? "new") === filterState.reviewStatus)
+			.filter((t) => {
+				if (!filterState.hasAttachment) return true;
+				return filterState.hasAttachment === "yes" ? !!t.attachmentPath : !t.attachmentPath;
+			})
 			.filter((t) => !from || t.date >= from)
 			.filter((t) => !to || t.date <= to)
 			.sort(compareTransactions);
@@ -509,12 +527,14 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 	});
 	secondarySelect.addEventListener("change", redrawFromFirstPage);
 	reviewSelect.addEventListener("change", redrawFromFirstPage);
+	attachmentSelect.addEventListener("change", redrawFromFirstPage);
 	clearBtn.addEventListener("click", () => {
 		filterState.search = "";
 		filterState.accountId = "";
 		filterState.categoryPrimaryId = "";
 		filterState.categorySecondaryId = "";
 		filterState.reviewStatus = "";
+		filterState.hasAttachment = "";
 		pageState.page = 1;
 		// The period is the page's, not this row's, so clearing hands back to the page — which redraws
 		// this whole section from the state just cleared.
