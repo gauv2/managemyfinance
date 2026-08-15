@@ -417,7 +417,9 @@ export function openInvoiceMatchWizard(plugin: FinancePlugin): void {
 		// Only what local reading failed to produce goes over the wire, and the file itself only when
 		// there was no text to send in its place.
 		const mediaType = MEDIA_TYPES[extensionOf(file.name)];
-		const canUpload = !!bytes && !!mediaType && bytes.byteLength <= MAX_UPLOAD_BYTES && (plugin.settings.ai?.provider ?? "api") !== "cli";
+		// Both transports can carry a document now — the API inline, the CLI via a temp file it opens
+		// itself — so the only bars left are a type nothing can read and a file too big to send.
+		const canUpload = !!bytes && !!mediaType && bytes.byteLength <= MAX_UPLOAD_BYTES;
 		const attachment: ModelAttachment | undefined =
 			!text?.trim() && canUpload && bytes ? { mediaType, data: base64Of(bytes), filename: file.name } : undefined;
 

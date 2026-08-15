@@ -166,11 +166,12 @@ export function describeAiOutcome(outcome: InvoiceAiOutcome): string | undefined
 		);
 	}
 	if (outcome.unreadable > 0) {
-		// Naming the provider matters: "no confident match" reads as "nothing matched", when the truth is
-		// that the document was never looked at. The CLI transport pipes one string down stdin and cannot
-		// carry a photo, so a scanned receipt is unreadable there no matter how good the model is.
+		// Naming the reason matters: "no confident match" reads as "nothing matched", when the truth is
+		// that the document was never looked at. What is left after both transports learned to carry a
+		// file is a type nothing can open, a file too large to send, or mobile, where neither a
+		// subprocess nor the filesystem is available.
 		parts.push(
-			`${outcome.unreadable} document${outcome.unreadable === 1 ? "" : "s"} could not be read — the Claude CLI provider cannot accept images or scanned PDFs, so switch to the API key provider to have those read`
+			`${outcome.unreadable} document${outcome.unreadable === 1 ? "" : "s"} could not be read — too large, or a file type nothing here can open`
 		);
 	}
 	if (outcome.rejected.length > 0) {

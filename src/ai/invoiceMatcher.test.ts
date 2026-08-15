@@ -171,7 +171,7 @@ describe("a document nothing could read", () => {
 		// "No confident match" is what the row says, and on its own it implies the document was looked at
 		// and lost. The notice has to say it was never looked at, and what would fix that.
 		expect(notice).toContain("could not be read");
-		expect(notice).toContain("API key provider");
+		expect(notice).toContain("too large, or a file type nothing here can open");
 	});
 
 	it("counts several and still reads as one sentence", () => {
