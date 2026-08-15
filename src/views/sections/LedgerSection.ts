@@ -6,6 +6,7 @@ import { formatMoney } from "../../money";
 import type { PeriodSelection } from "../../period";
 import type FinancePlugin from "../../main";
 import type { ReviewStatus, Transaction } from "../../types";
+import { renderAttachmentControl } from "../../ui/attachment";
 import { categoryChainChip, emptyState, icon, renderCategoryPicker, type CategoryPickerValue } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
 
@@ -280,6 +281,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		});
 	});
 	updateSortIndicators();
+	thead.createEl("th", { cls: "fp-ledger-th-files", text: "File(s)" });
 
 	const tbody = table.createEl("tbody");
 	const pager = container.createDiv({ cls: "fp-ledger-pager" });
@@ -373,6 +375,11 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		categoryChainChip(catCell, chain.primary, chain.secondary);
 		const amtCell = tr.createEl("td", { cls: "fp-cell-amount fp-money " + (t.amount < 0 ? "is-negative" : "is-positive") });
 		amtCell.setText(formatMoney(t.amount, { currency: t.currency || "EUR" }));
+
+		// Compact, self-contained: opening or attaching a receipt here never needs the full detail
+		// modal, and its buttons stop their own clicks so they don't also open the row underneath them.
+		const filesCell = tr.createEl("td", { cls: "fp-ledger-td-files" });
+		renderAttachmentControl(filesCell, plugin.app, plugin, t, { compact: true });
 	}
 
 	function draw(): void {
@@ -418,7 +425,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		if (filtered.length === 0) {
 			pager.empty();
 			const tr = tbody.createEl("tr");
-			tr.createEl("td", { attr: { colspan: String(columns.length + 1) }, text: "No matching transactions." });
+			tr.createEl("td", { attr: { colspan: String(columns.length + 2) }, text: "No matching transactions." });
 			return;
 		}
 

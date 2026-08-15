@@ -1,9 +1,10 @@
-import { App, FuzzySuggestModal, Modal, Notice, TFile } from "obsidian";
+import { App, Modal, Notice } from "obsidian";
 import { categoryChain } from "../categories";
 import { formatMoney } from "../money";
 import type FinancePlugin from "../main";
 import { transferSiblings } from "../transfers";
 import type { ReviewStatus, Transaction } from "../types";
+import { renderAttachmentControl } from "../ui/attachment";
 import { badge, categoryChainChip, icon, renderCategoryPicker } from "../ui/dom";
 import { LinkSubscriptionModal } from "./SubscriptionLinkModal";
 import { TransactionEditModal } from "./TransactionEditModal";
@@ -18,26 +19,6 @@ function row(container: HTMLElement, label: string, value: string | HTMLElement,
 	const valueEl = r.createDiv({ cls: "fp-detail-value" + (opts?.sensitive ? " fp-sensitive" : "") });
 	if (typeof value === "string") valueEl.setText(value);
 	else valueEl.appendChild(value);
-}
-
-/** Fuzzy-picks any existing file already in the vault, the standard Obsidian idiom for linking to a file. */
-class VaultFileSuggestModal extends FuzzySuggestModal<TFile> {
-	constructor(app: App, private onChoose: (file: TFile) => void) {
-		super(app);
-		this.setPlaceholder("Link an existing vault file as the attachment…");
-	}
-
-	getItems(): TFile[] {
-		return this.app.vault.getFiles();
-	}
-
-	getItemText(file: TFile): string {
-		return file.path;
-	}
-
-	onChooseItem(file: TFile): void {
-		this.onChoose(file);
-	}
 }
 
 /**
@@ -113,7 +94,7 @@ export class TransactionDetailModal extends Modal {
 		const attachRow = body.createDiv({ cls: "fp-detail-row" });
 		attachRow.createDiv({ cls: "fp-detail-label", text: "Attachment" });
 		const attachValue = attachRow.createDiv({ cls: "fp-detail-value" });
-		this.renderAttachment(attachValue);
+		renderAttachmentControl(attachValue, this.app, this.plugin, this.tx);
 
 		const subRow = body.createDiv({ cls: "fp-detail-row" });
 		subRow.createDiv({ cls: "fp-detail-label", text: "Subscription" });
@@ -246,48 +227,6 @@ export class TransactionDetailModal extends Modal {
 		icon(flagBtn, "flag");
 		flagBtn.setAttribute("title", status === "flagged" ? "Remove flag" : "Flag for a decision later");
 		flagBtn.addEventListener("click", () => void set(status === "flagged" ? "new" : "flagged"));
-	}
-
-	/** Renders the current attachment state into `container`, re-rendering itself in place after any change. */
-	private renderAttachment(container: HTMLElement): void {
-		container.empty();
-		const store = this.plugin.store;
-		const path = this.tx.attachmentPath;
-
-		if (path) {
-			const file = this.app.vault.getAbstractFileByPath(path);
-			container.createSpan({ text: file ? path : `${path} (missing)`, cls: file ? undefined : "fp-sensitive" });
-
-			const openBtn = container.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
-			icon(openBtn, "external-link");
-			openBtn.disabled = !file;
-			openBtn.addEventListener("click", async () => {
-				await this.app.workspace.openLinkText(path, "", true);
-			});
-
-			const clearBtn = container.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
-			icon(clearBtn, "x");
-			clearBtn.addEventListener("click", async () => {
-				await store.updateTransaction(this.tx.id, { attachmentPath: undefined });
-				this.tx.attachmentPath = undefined;
-				this.plugin.refreshViews();
-				new Notice("Attachment removed");
-				this.renderAttachment(container);
-			});
-		} else {
-			const attachBtn = container.createEl("button", { cls: "fp-btn fp-btn-secondary" });
-			icon(attachBtn, "paperclip");
-			attachBtn.createSpan({ text: "Attach file" });
-			attachBtn.addEventListener("click", () => {
-				new VaultFileSuggestModal(this.app, async (file) => {
-					await store.updateTransaction(this.tx.id, { attachmentPath: file.path });
-					this.tx.attachmentPath = file.path;
-					this.plugin.refreshViews();
-					new Notice("Attachment linked");
-					this.renderAttachment(container);
-				}).open();
-			});
-		}
 	}
 
 	onClose(): void {

@@ -80,6 +80,9 @@ export class WizardModal extends Modal {
 
 	private renderStepsIndicator(): void {
 		this.stepsEl.empty();
+		// A stepper implies steps to step through — one step has nothing to indicate.
+		this.stepsEl.toggleClass("is-hidden", this.steps.length <= 1);
+		if (this.steps.length <= 1) return;
 		this.steps.forEach((step, i) => {
 			const cls = ["fp-wizard-step"];
 			if (i === this.stepIndex) cls.push("is-active");

@@ -287,7 +287,7 @@ export function transactionsToCsv(plugin: FinancePlugin): string {
 }
 
 /** "2026-08-12-143005" — sortable, filename-safe, and unique enough to never clobber an earlier export. */
-function timestampSlug(now = new Date()): string {
+export function timestampSlug(now = new Date()): string {
 	const pad = (n: number): string => String(n).padStart(2, "0");
 	return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(
 		now.getSeconds()
