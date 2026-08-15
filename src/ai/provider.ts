@@ -57,6 +57,23 @@ export interface ModelRequest {
 	user: string;
 	/** JSON Schema for the API's structured-output mode. The CLI has none; extractJson covers it. */
 	schema: Record<string, unknown>;
+	/**
+	 * Files to show the model alongside the question — a receipt whose text nothing local could read.
+	 *
+	 * API transport only, and structurally so: the CLI path pipes a single string down stdin and has
+	 * nowhere to put a PDF. Rather than quietly dropping the document and asking the model to identify a
+	 * receipt it was never shown, the CLI transport refuses and says which provider can do it.
+	 */
+	attachments?: ModelAttachment[];
+}
+
+export interface ModelAttachment {
+	/** MIME type — "application/pdf", "image/png", "image/jpeg". */
+	mediaType: string;
+	/** Base64, without the `data:` prefix. */
+	data: string;
+	/** Only for error messages, never sent. */
+	filename?: string;
 }
 
 /** Sends one request down whichever transport is configured and returns the raw reply text. */
@@ -126,7 +143,7 @@ async function callAnthropicApi(request: ModelRequest, model: string, settings: 
 				effort: "low",
 				format: { type: "json_schema", schema: request.schema },
 			},
-			messages: [{ role: "user", content: request.user }],
+			messages: [{ role: "user", content: userContent(request) }],
 		}),
 	});
 
@@ -151,6 +168,28 @@ async function callAnthropicApi(request: ModelRequest, model: string, settings: 
 		.join("");
 	if (!text) throw new Error("Claude returned an empty response.");
 	return text;
+}
+
+/**
+ * The user turn, as a plain string when there is nothing but words and as content blocks when there
+ * is a file to show.
+ *
+ * Kept conditional rather than always sending blocks so the two existing passes' payloads are
+ * byte-for-byte what they were before receipts existed — a categorization request is not the place to
+ * discover a transport change.
+ *
+ * The document comes before the question: a model reading a receipt does better when it has seen the
+ * receipt before it is told what to look for, and this is the order Anthropic's own guidance gives.
+ */
+function userContent(request: ModelRequest): unknown {
+	if (!request.attachments?.length) return request.user;
+	return [
+		...request.attachments.map((attachment) => ({
+			type: attachment.mediaType === "application/pdf" ? "document" : "image",
+			source: { type: "base64", media_type: attachment.mediaType, data: attachment.data },
+		})),
+		{ type: "text", text: request.user },
+	];
 }
 
 function describeApiError(status: number, text: string): string {
@@ -185,6 +224,9 @@ function describeApiError(status: number, text: string): string {
 async function callClaudeCli(request: ModelRequest, settings: AiSettings): Promise<string> {
 	if (!cliAvailable()) {
 		throw new Error("The Claude CLI needs the desktop app — switch to the API key provider on mobile.");
+	}
+	if (request.attachments?.length) {
+		throw new Error("Reading a receipt means sending the file itself, which the CLI provider can't do — switch to the API key provider in Settings → AI.");
 	}
 
 	// Required lazily and behind a guard: `child_process` doesn't exist in the mobile runtime, and a
