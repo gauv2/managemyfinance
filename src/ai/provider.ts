@@ -57,6 +57,24 @@ export interface ModelRequest {
 	user: string;
 	/** JSON Schema for the API's structured-output mode. The CLI has none; extractJson covers it. */
 	schema: Record<string, unknown>;
+	/**
+	 * Files to show the model alongside the question — a receipt whose text nothing local could read.
+	 *
+	 * The two transports carry these very differently. The API takes them inline as base64 content
+	 * blocks. The CLI has no such field — it is one string down stdin — but the tool on the other end
+	 * can open a file for itself, so the file is written to a temporary path and named in the prompt,
+	 * then deleted. Neither path asks the model to identify a receipt it was never shown.
+	 */
+	attachments?: ModelAttachment[];
+}
+
+export interface ModelAttachment {
+	/** MIME type — "application/pdf", "image/png", "image/jpeg". */
+	mediaType: string;
+	/** Base64, without the `data:` prefix. */
+	data: string;
+	/** Only for error messages, never sent. */
+	filename?: string;
 }
 
 /** Sends one request down whichever transport is configured and returns the raw reply text. */
@@ -126,7 +144,7 @@ async function callAnthropicApi(request: ModelRequest, model: string, settings: 
 				effort: "low",
 				format: { type: "json_schema", schema: request.schema },
 			},
-			messages: [{ role: "user", content: request.user }],
+			messages: [{ role: "user", content: userContent(request) }],
 		}),
 	});
 
@@ -151,6 +169,28 @@ async function callAnthropicApi(request: ModelRequest, model: string, settings: 
 		.join("");
 	if (!text) throw new Error("Claude returned an empty response.");
 	return text;
+}
+
+/**
+ * The user turn, as a plain string when there is nothing but words and as content blocks when there
+ * is a file to show.
+ *
+ * Kept conditional rather than always sending blocks so the two existing passes' payloads are
+ * byte-for-byte what they were before receipts existed — a categorization request is not the place to
+ * discover a transport change.
+ *
+ * The document comes before the question: a model reading a receipt does better when it has seen the
+ * receipt before it is told what to look for, and this is the order Anthropic's own guidance gives.
+ */
+function userContent(request: ModelRequest): unknown {
+	if (!request.attachments?.length) return request.user;
+	return [
+		...request.attachments.map((attachment) => ({
+			type: attachment.mediaType === "application/pdf" ? "document" : "image",
+			source: { type: "base64", media_type: attachment.mediaType, data: attachment.data },
+		})),
+		{ type: "text", text: request.user },
+	];
 }
 
 function describeApiError(status: number, text: string): string {
@@ -186,18 +226,76 @@ async function callClaudeCli(request: ModelRequest, settings: AiSettings): Promi
 	if (!cliAvailable()) {
 		throw new Error("The Claude CLI needs the desktop app — switch to the API key provider on mobile.");
 	}
+	const binary = (settings.cliPath ?? "").trim() || "claude";
 
-	// Required lazily and behind a guard: `child_process` doesn't exist in the mobile runtime, and a
-	// top-level import would break loading the plugin there even for users who never enable this.
+	// The CLI cannot be handed bytes, but it can open a path. Writing the document to the OS temp
+	// directory and naming it in the prompt is the only way to show it a receipt at all — and it stays
+	// outside the vault throughout, so a document the user has not confirmed never lands in their notes.
+	const staged = await stageAttachments(request.attachments);
+	const prompt = staged.paths.length
+		? `${request.system}\n\nRead ${staged.paths.length === 1 ? "this file" : "these files"} before answering: ${staged.paths.join(", ")}\n\n${request.user}`
+		: `${request.system}\n\n${request.user}`;
+
+	try {
+		return await runCli(binary, prompt);
+	} finally {
+		// Deleted whatever happened. A receipt left in /tmp is a copy the user never asked for.
+		await staged.cleanup();
+	}
+}
+
+/** A document the CLI can open, written outside the vault and removed as soon as the call returns. */
+async function stageAttachments(attachments: ModelAttachment[] | undefined): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
+	if (!attachments?.length) return { paths: [], cleanup: async () => undefined };
+
+	let fs: typeof import("fs/promises");
+	let os: typeof import("os");
+	let path: typeof import("path");
+	try {
+		const req = (window as unknown as { require: (m: string) => unknown }).require;
+		fs = req("fs/promises") as typeof import("fs/promises");
+		os = req("os") as typeof import("os");
+		path = req("path") as typeof import("path");
+	} catch {
+		throw new Error("Couldn't reach Node's filesystem — the Claude CLI provider can't read documents here.");
+	}
+
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mmf-receipt-"));
+	const paths: string[] = [];
+	for (const [i, attachment] of attachments.entries()) {
+		// The original filename is not reused: it can carry anything the OS allowed, and the model is
+		// being asked to read the contents, not to be told what the file was called.
+		const file = path.join(dir, `document-${i + 1}${EXTENSIONS[attachment.mediaType] ?? ""}`);
+		await fs.writeFile(file, Buffer.from(attachment.data, "base64"));
+		paths.push(file);
+	}
+	return {
+		paths,
+		cleanup: async () => {
+			try {
+				await fs.rm(dir, { recursive: true, force: true });
+			} catch {
+				// A temp file we could not remove is not worth failing the user's match over.
+			}
+		},
+	};
+}
+
+const EXTENSIONS: Record<string, string> = {
+	"application/pdf": ".pdf",
+	"image/png": ".png",
+	"image/jpeg": ".jpg",
+	"image/webp": ".webp",
+	"image/heic": ".heic",
+};
+
+function runCli(binary: string, prompt: string): Promise<string> {
 	let spawn: typeof import("child_process").spawn;
 	try {
 		spawn = (window as unknown as { require: (m: string) => typeof import("child_process") }).require("child_process").spawn;
 	} catch {
 		throw new Error("Couldn't reach Node's child_process — the Claude CLI provider isn't available here.");
 	}
-
-	const binary = (settings.cliPath ?? "").trim() || "claude";
-	const prompt = `${request.system}\n\n${request.user}`;
 
 	return new Promise<string>((resolve, reject) => {
 		const child = spawn(binary, ["-p", "--output-format", "text"], {

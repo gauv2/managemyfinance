@@ -9,6 +9,7 @@ import type { ReviewStatus, Transaction } from "../../types";
 import { renderAttachmentControl } from "../../ui/attachment";
 import { categoryChainChip, emptyState, icon, renderCategoryPicker, type CategoryPickerValue } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
+import { openInvoiceMatchWizard } from "../../wizards/InvoiceMatchWizard";
 
 type LedgerSortColumn = "date" | "description" | "account" | "category" | "amount";
 type LedgerSortDirection = "asc" | "desc";
@@ -187,6 +188,15 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		] as ["" | "yes" | "no", string][]
 	).forEach(([value, label]) => attachmentSelect.createEl("option", { text: label, value }));
 	attachmentSelect.value = filterState.hasAttachment;
+
+	// Sits with the attachment filter rather than in the page header, because it belongs to the same
+	// thought: "Has file"/"No file" is how you find the rows still missing a receipt, and this is what
+	// you press once you have found them.
+	const matchInvoicesBtn = filterRow.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+	icon(matchInvoicesBtn, "receipt");
+	matchInvoicesBtn.createSpan({ text: "Match invoices & receipts" });
+	matchInvoicesBtn.setAttribute("title", "Drop up to 10 invoices or receipts and match them against a month, quarter or year");
+	matchInvoicesBtn.addEventListener("click", () => openInvoiceMatchWizard(plugin));
 
 	const clearBtn = filterRow.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Clear filters" });
 

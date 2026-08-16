@@ -26,6 +26,9 @@ export type FinanceViewId = "budgets" | "categories" | "subscriptions" | "cards"
 export interface FinanceSettings {
 	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */
 	dataFolder: string;
+	/** Where dropped receipts and invoices are copied to, vault-relative. Blank means the default,
+	 *  `<dataFolder>/attachments` — see attachmentFolderOf, which is the only place that decides. */
+	attachmentFolder?: string;
 	fiMultiplier: number;
 	expectedReturn: number;
 	/** Scopes the whole workspace to one account's transactions; undefined means "All Accounts". */
