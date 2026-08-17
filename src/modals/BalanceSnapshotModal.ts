@@ -23,9 +23,14 @@ export class BalanceSnapshotModal extends Modal {
 	private accountId: string;
 	private note = "";
 
-	constructor(app: App, private plugin: FinancePlugin, private opts: { accountId?: string; onSaved?: () => void } = {}) {
+	constructor(
+		app: App,
+		private plugin: FinancePlugin,
+		private opts: { accountId?: string; prefillBalance?: number; prefillNote?: string; onSaved?: () => void } = {}
+	) {
 		super(app);
 		this.accountId = opts.accountId ?? plugin.store.accounts[0]?.id ?? "";
+		if (opts.prefillNote) this.note = opts.prefillNote;
 	}
 
 	onOpen(): void {
@@ -82,6 +87,9 @@ export class BalanceSnapshotModal extends Modal {
 		const balanceControl = balanceRow.createDiv({ cls: "fp-field-control" });
 		const balanceField = moneyInput(balanceControl, {
 			currency: account?.currency,
+			// Only for the account this was launched pre-filled for — switching the dropdown to a
+			// different account shouldn't carry a computed figure over to somewhere it doesn't apply.
+			value: this.accountId === this.opts.accountId ? this.opts.prefillBalance : undefined,
 			// A debt is entered the way anyone says it out loud — "€240,000 left" — and negated
 			// internally. See signedOpeningBalance in kpi.ts.
 			allowNegative: !liability,
@@ -96,6 +104,7 @@ export class BalanceSnapshotModal extends Modal {
 		const noteRow = form.createDiv({ cls: "fp-form-row" });
 		noteRow.createEl("label", { text: "Note" });
 		const noteInput = noteRow.createEl("input", { type: "text", attr: { placeholder: "Optional — e.g. \"annual valuation\"" } });
+		noteInput.value = this.note;
 		noteInput.addEventListener("input", () => (this.note = noteInput.value));
 
 		if (account) {

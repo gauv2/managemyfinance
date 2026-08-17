@@ -86,6 +86,10 @@ function renderHistoryTable(panel: HTMLElement, plugin: FinancePlugin, years: Ye
 	metricRow(tbody, "Net worth (EOY)", years.map((y) => y.netWorthEOY), formatEUR, { emphasize: true, heat: "normal" });
 	deltaRow(tbody, years.map((y) => y.netWorthEOY));
 
+	// Months that year's liquid (debit/savings/cash) balance would have covered at that year's own
+	// spend, if income stopped entirely — a personal runway, not the multi-year FI horizon below it.
+	metricRow(tbody, "Runway", years.map((y) => y.runwayMonths), (n) => `${n.toFixed(1)} mo`, { heat: "normal" });
+
 	metricRow(
 		tbody,
 		`FI number (${fiMultiplier}× expenses)`,

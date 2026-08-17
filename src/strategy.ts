@@ -2,7 +2,7 @@ import { resolvePrimaryId } from "./categories";
 import { convert } from "./currency";
 import { averageMonthlyExpenses, netWorth, type KpiStore } from "./kpi";
 import { monthsInRange } from "./period";
-import { isLiabilityType, type Account, type AccountType, type DebtPayoffStrategy, type FinancialGoal, type ReservePlan, type ReviewCadence, type Strategy } from "./types";
+import { isLiabilityType, isLiquidType, type Account, type DebtPayoffStrategy, type FinancialGoal, type ReservePlan, type ReviewCadence, type Strategy } from "./types";
 
 /** A fresh, unfinished strategy — the wizard fills this in; `completedAt` stays unset until Finish. */
 export function defaultStrategy(): Strategy {
@@ -21,13 +21,8 @@ function isoToday(): string {
 	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Readily-accessible money — debit, savings and cash accounts only. Deliberately excludes investing/
- *  crypto: an investment account isn't an emergency fund, since it may have to be sold at a loss right
- *  when it's needed most. */
-const LIQUID_ACCOUNT_TYPES: readonly AccountType[] = ["debit", "saving", "cash"];
-
 function liquidBalance(store: KpiStore): number {
-	return store.accounts.filter((a) => LIQUID_ACCOUNT_TYPES.includes(a.type)).reduce((sum, a) => sum + netWorth(store, a.id), 0);
+	return store.accounts.filter((a) => isLiquidType(a.type)).reduce((sum, a) => sum + netWorth(store, a.id), 0);
 }
 
 /** Whether a category (or the primary it's nested under) has been flagged as a non-negotiable living cost. */

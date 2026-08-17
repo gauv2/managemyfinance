@@ -1,7 +1,7 @@
 import { descendantIds, resolvePrimaryId } from "./categories";
 import { convert, type FxContext } from "./currency";
 import { inRange, transactionYears, type DateRange } from "./period";
-import { isLiabilityType, type Account, type BalanceSnapshot, type Category, type Transaction } from "./types";
+import { isLiabilityType, isLiquidType, type Account, type BalanceSnapshot, type Category, type Transaction } from "./types";
 
 /**
  * The slice of FinanceStore these calculations actually read. Kept structural (not `FinanceStore`
@@ -41,6 +41,10 @@ export interface YearSummary {
 	savingsRate: number;
 	netWorthEOY: number;
 	passiveIncome: number;
+	/** Months this year's liquid (debit/savings/cash) balance at year-end would have covered, at that
+	 *  year's own monthly spend, if income stopped entirely — a personal financial runway. 0 when the
+	 *  year had no recorded expenses to divide by. */
+	runwayMonths: number;
 	/** True when a period filter clipped this year, so the figures cover only part of it. Views that
 	 *  print a year per column say so rather than letting a half-year read as a whole one. */
 	partial?: boolean;
@@ -68,10 +72,21 @@ const TRANSFER_CATEGORY_NAMES = new Set(["transfers", "savings", "savings & tran
  *  fields against this vocabulary catches the transfer regardless of which importer or category it got. */
 const TRANSFER_ACCOUNT_MARKERS = new Set(["deposit", "withdraw", "withdrawal"]);
 /**
+ * Buying a share isn't an expense — it's cash exchanged for an asset of equal value, so net worth is
+ * unchanged at the moment of the trade. Selling one back isn't income for the same reason: it's the
+ * same asset exchanged back for cash. (What *would* be a real gain or loss — the difference between
+ * what a position cost and what it sold for — isn't computed here; that needs cost-basis/lot tracking
+ * this app doesn't do yet. Treating both legs as transfers is the honest state short of that: it stops
+ * overstating both expenses and income by the full trade amount, rather than getting the direction of
+ * the error right for buys and wrong for sells.) Only ever meaningful for investing accounts.
+ */
+const TRADE_ACTION_MARKERS = new Set(["buy", "sell"]);
+/**
  * A transaction is a transfer if its two legs have been linked to each other (`transferGroupId` — the
  * only signal that's actually *knowable* rather than inferred, see src/transfers.ts), if it's
- * explicitly categorized as one, or if it's cash moving into/out of a savings or investing account
- * per its own `action`/`type` (see TRANSFER_ACCOUNT_MARKERS).
+ * explicitly categorized as one, if it's cash moving into/out of a savings or investing account per its
+ * own `action`/`type` (see TRANSFER_ACCOUNT_MARKERS), or if it's a trade inside an investing account
+ * (see TRADE_ACTION_MARKERS) — a swap between cash and securities, not spending or earning.
  *
  * The linked case is checked first and on purpose: matching the two halves of a movement is the thing
  * that lets a transfer between two everyday (debit/credit/cash) accounts be recognized at all. The
@@ -92,6 +107,7 @@ export function isTransfer(store: KpiStore, tx: Transaction): boolean {
 		const action = (tx.action ?? "").trim().toLowerCase();
 		const type = (tx.type ?? "").trim().toLowerCase();
 		if (TRANSFER_ACCOUNT_MARKERS.has(action) || TRANSFER_ACCOUNT_MARKERS.has(type)) return true;
+		if (account.type === "investing" && TRADE_ACTION_MARKERS.has(action)) return true;
 	}
 	return false;
 }
@@ -143,6 +159,20 @@ function isPassiveIncome(tx: Transaction): boolean {
 function savingsRateOf(income: number, expenses: number): number {
 	if (income <= 0) return 0;
 	return Math.max(-1, Math.min(1, (income - expenses) / income));
+}
+
+/** Liquid (debit/savings/cash) accounts only, as of a date — the pool a runway figure draws from.
+ *  Forward-referenced from summarizeByYear; defined near netWorthAsOf below since it wraps it. */
+function liquidNetWorthAsOf(store: KpiStore, asOf: string, accountId?: string): number {
+	return store.accounts
+		.filter((a) => isLiquidType(a.type) && (!accountId || a.id === accountId))
+		.reduce((sum, a) => sum + netWorthAsOf(store, asOf, a.id), 0);
+}
+
+/** Months of runway a liquid balance buys at a given monthly spend — 0 when there's no spend to divide
+ *  by, since "runway" against zero burn is undefined, not infinite. */
+function runwayOf(liquid: number, monthlyExpenses: number): number {
+	return monthlyExpenses > 0 ? liquid / monthlyExpenses : 0;
 }
 
 /**
@@ -215,6 +245,7 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 				savingsRate: savingsRateOf(income, expenses),
 				netWorthEOY: netWorthAsOf(store, closingDate(year), accountId),
 				passiveIncome,
+				runwayMonths: runwayOf(liquidNetWorthAsOf(store, closingDate(year), accountId), expenses / 12),
 				partial: isPartial(year),
 			};
 		});
@@ -248,6 +279,7 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 			savingsRate: savingsRateOf(income, expenses),
 			netWorthEOY: cumulative,
 			passiveIncome,
+			runwayMonths: runwayOf(liquidNetWorthAsOf(store, closingDate(year), accountId), expenses / 12),
 			partial: isPartial(year),
 		};
 	});
@@ -270,6 +302,8 @@ export function summarizeTotal(years: YearSummary[]): YearSummary | undefined {
 		savingsRate: savingsRateOf(income, expenses),
 		netWorthEOY: last.netWorthEOY,
 		passiveIncome: years.reduce((sum, y) => sum + y.passiveIncome, 0),
+		// A point-in-time figure like netWorthEOY, not a flow — the period's ending runway, not a sum.
+		runwayMonths: last.runwayMonths,
 		partial: years.some((y) => y.partial),
 	};
 }

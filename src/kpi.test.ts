@@ -97,6 +97,44 @@ describe("transfer detection", () => {
 		expect(year.income).toBe(0);
 	});
 
+	it("treats a 'buy' in an investing account as a transfer, not an expense — cash exchanged for a share of equal value, not spent", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: 2000, action: "deposit" }),
+				tx({ date: "2024-01-02", accountId: investing.id, amount: -500, action: "buy", ticker: "VWCE" }),
+			],
+		});
+		const [year] = summarizeByYear(s);
+		expect(year.expenses).toBe(0);
+	});
+
+	it("treats a 'sell' in an investing account as a transfer, not income — the asset converting back to cash, not a realized gain", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -500, action: "buy", ticker: "VWCE" }),
+				tx({ date: "2024-06-01", accountId: investing.id, amount: 600, action: "sell", ticker: "VWCE" }),
+			],
+		});
+		const [year] = summarizeByYear(s);
+		expect(year.income).toBe(0);
+	});
+
+	it("still counts a 'buy' as an expense outside an investing account (the type gate matters)", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-01-01", accountId: checking.id, amount: -500, action: "buy" })],
+		});
+		const [year] = summarizeByYear(s);
+		expect(year.expenses).toBe(500);
+	});
+
+	it("leaves dividends counted as real income — a trade converts cash and securities, a dividend is money actually earned", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-01-01", accountId: investing.id, amount: 25, action: "dividend" })],
+		});
+		const [year] = summarizeByYear(s);
+		expect(year.income).toBe(25);
+	});
+
 	it("does NOT treat an uncategorized checking-account transaction as a transfer", () => {
 		// There's no account-to-account link on Transaction, so a genuine uncategorized transfer between
 		// two everyday accounts is indistinguishable from real income/expense — documented limitation.
@@ -197,6 +235,53 @@ describe("summarizeByYear", () => {
 		});
 		const [year] = summarizeByYear(s, checking.id);
 		expect(year.income).toBe(1000);
+	});
+});
+
+describe("runwayMonths", () => {
+	it("divides liquid balance at year-end by that year's own monthly spend", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: 1000, categoryId: catIncome.id }),
+				tx({ date: "2024-06-01", accountId: checking.id, amount: -600, categoryId: catFood.id }),
+			],
+		});
+		const [year] = summarizeByYear(s);
+		// liquid balance = 1000 - 600 = 400; monthly expenses = 600/12 = 50; runway = 400/50 = 8 months
+		expect(year.runwayMonths).toBe(8);
+	});
+
+	it("excludes investing balances from the liquid figure it draws from", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: 100, categoryId: catIncome.id }),
+				tx({ date: "2024-01-02", accountId: checking.id, amount: -50, categoryId: catFood.id }),
+				// A much larger balance lands in investing, which must not inflate the runway figure.
+				tx({ date: "2024-01-03", accountId: investing.id, amount: 10000, categoryId: catIncome.id }),
+			],
+		});
+		const [year] = summarizeByYear(s);
+		expect(year.runwayMonths).toBeCloseTo(50 / (50 / 12), 6);
+	});
+
+	it("is 0, not Infinity, for a year with no recorded expenses", () => {
+		const s = store({ transactions: [tx({ date: "2024-01-01", accountId: checking.id, amount: 1000, categoryId: catIncome.id })] });
+		const [year] = summarizeByYear(s);
+		expect(year.runwayMonths).toBe(0);
+	});
+
+	it("summarizeTotal takes the last year's own runway rather than summing across years", () => {
+		const years = summarizeByYear(
+			store({
+				transactions: [
+					tx({ date: "2024-01-01", accountId: checking.id, amount: 1000, categoryId: catIncome.id }),
+					tx({ date: "2024-01-02", accountId: checking.id, amount: -100, categoryId: catFood.id }),
+					tx({ date: "2025-01-02", accountId: checking.id, amount: -200, categoryId: catFood.id }),
+				],
+			})
+		);
+		const total = summarizeTotal(years)!;
+		expect(total.runwayMonths).toBe(years.at(-1)!.runwayMonths);
 	});
 });
 

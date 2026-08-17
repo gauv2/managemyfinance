@@ -32,6 +32,15 @@ export function isLiabilityType(type: AccountType): boolean {
 	return LIABILITY_TYPES.includes(type);
 }
 
+/** Account types spendable within days, with no risk of loss between "decide to use it" and "have it"
+ *  — the pool a runway or emergency-reserve figure should draw from. Excludes investing/crypto: those
+ *  may need to be sold at a loss exactly when the money is needed most. */
+export const LIQUID_TYPES: readonly AccountType[] = ["debit", "saving", "cash"];
+
+export function isLiquidType(type: AccountType): boolean {
+	return LIQUID_TYPES.includes(type);
+}
+
 export interface Account {
 	id: string;
 	name: string;

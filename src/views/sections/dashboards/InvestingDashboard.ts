@@ -1,7 +1,11 @@
-import { investingActivityByYear, investingHoldings } from "../../../kpi";
+import { Notice } from "obsidian";
+import { convert } from "../../../currency";
+import { investingActivityByYear, investingHoldings, type Holding } from "../../../kpi";
 import type FinancePlugin from "../../../main";
+import { fetchPrice } from "../../../marketData";
+import { BalanceSnapshotModal } from "../../../modals/BalanceSnapshotModal";
 import type { Account } from "../../../types";
-import { emptyState, statTile } from "../../../ui/dom";
+import { emptyState, icon, statTile } from "../../../ui/dom";
 import { formatEUR, metricRow, yearHeaderRow } from "../../../ui/metricsTable";
 
 /**
@@ -27,7 +31,8 @@ export function renderInvestingDashboard(container: HTMLElement, plugin: Finance
 	statTile(tiles, { label: "Fees paid", value: formatEUR(totalFees), iconName: "receipt", tone: "neutral" });
 
 	const holdingsCard = container.createDiv({ cls: "fp-card" });
-	holdingsCard.createEl("h3", { text: "Holdings" });
+	const holdingsHead = holdingsCard.createDiv({ cls: "fp-card-head-row" });
+	holdingsHead.createEl("h3", { text: "Holdings" });
 	if (holdings.length === 0) {
 		emptyState(holdingsCard, {
 			iconName: "candlestick-chart",
@@ -35,6 +40,15 @@ export function renderInvestingDashboard(container: HTMLElement, plugin: Finance
 			description: "Buys and sells from this account will build a holdings breakdown here.",
 		});
 	} else {
+		const refreshBtn = holdingsHead.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(refreshBtn, "refresh-cw");
+		refreshBtn.createSpan({ text: "Refresh price" });
+		refreshBtn.setAttribute(
+			"title",
+			"Fetch today's price per holding (Yahoo Finance for ISINs, CoinGecko for crypto) and record it as an updated balance"
+		);
+		refreshBtn.addEventListener("click", () => void refreshHoldingsPrice(plugin, account, holdings, refreshBtn));
+
 		const table = holdingsCard.createEl("table", { cls: "fp-table" });
 		const thead = table.createEl("thead").createEl("tr");
 		["Ticker", "Asset class", "Shares", "Avg. cost", "Cost basis"].forEach((h, i) =>
@@ -62,4 +76,46 @@ export function renderInvestingDashboard(container: HTMLElement, plugin: Finance
 		metricRow(tbody, "Dividends", activity.map((y) => y.dividends), formatEUR, { heat: "normal" });
 		metricRow(tbody, "Fees", activity.map((y) => y.fees), formatEUR, { heat: "invert" });
 	}
+}
+
+/**
+ * Fetches today's price for every current holding, sums shares × price into the account's currency,
+ * and opens BalanceSnapshotModal pre-filled with that total — priced holdings only, deliberately not
+ * including whatever cash is sitting uninvested in the account, since nothing in the ledger can derive
+ * that figure independently once a snapshot exists (a snapshot supersedes the raw transaction-sum that
+ * would otherwise stand in for "cash remaining"). Checking one cash figure in the broker's own app is a
+ * small manual step left in place; pricing every position by hand is the tedious part this automates.
+ */
+async function refreshHoldingsPrice(plugin: FinancePlugin, account: Account, holdings: Holding[], btn: HTMLButtonElement): Promise<void> {
+	btn.disabled = true;
+	new Notice("Fetching current prices…");
+
+	let total = 0;
+	const failed: string[] = [];
+	for (const h of holdings) {
+		const quote = await fetchPrice(h.ticker, account.currency);
+		if (!quote) {
+			failed.push(h.ticker);
+			continue;
+		}
+		const priceInAccountCurrency = quote.currency === account.currency ? quote.price : convert(quote.price, quote.currency, plugin.store.fx);
+		total += h.shares * priceInAccountCurrency;
+	}
+	btn.disabled = false;
+
+	if (failed.length === holdings.length) {
+		new Notice(`Couldn't find a price for any holding (${failed.join(", ")}) — enter the balance manually instead.`);
+		new BalanceSnapshotModal(plugin.app, plugin, { accountId: account.id, onSaved: () => plugin.refreshViews() }).open();
+		return;
+	}
+	if (failed.length > 0) {
+		new Notice(`Priced ${holdings.length - failed.length} of ${holdings.length} holdings — couldn't find a price for ${failed.join(", ")}. Add those to the total manually before saving.`);
+	}
+
+	new BalanceSnapshotModal(plugin.app, plugin, {
+		accountId: account.id,
+		prefillBalance: total,
+		prefillNote: `Priced holdings as of ${new Date().toISOString().slice(0, 10)} — plus any uninvested cash, added by hand`,
+		onSaved: () => plugin.refreshViews(),
+	}).open();
 }
