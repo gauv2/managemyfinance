@@ -40,14 +40,14 @@ function renderAccountsOverview(container: HTMLElement, plugin: FinancePlugin, r
 	const table = card.createEl("table", { cls: "fp-table" });
 	const thead = table.createEl("thead").createEl("tr");
 	thead.createEl("th", { text: "Account" });
-	[range ? "Net worth (period end)" : "Net worth", range ? `Net · ${periodLabel}` : "This year net", "Transactions"].forEach((h) =>
+	[range ? "Net worth (period end)" : "Net worth", `Net · ${periodLabel}`, "Transactions"].forEach((h) =>
 		thead.createEl("th", { text: h, cls: "fp-table-num" })
 	);
 	const tbody = table.createEl("tbody");
 
 	store.accounts.forEach((acc) => {
 		const accYears = summarizeByYear(store, acc.id, range);
-		const accCurrent = range ? summarizeTotal(accYears) : yearSummaryFor(accYears);
+		const accCurrent = summarizeTotal(accYears);
 		const accWorth = worthOf(acc.id);
 		const accCount = store.transactions.filter((t) => t.accountId === acc.id && inRange(t.date, range)).length;
 
@@ -185,7 +185,10 @@ export function renderAllAccountsDashboard(
 	const years = summarizeByYear(store, undefined, range);
 	/** The unfiltered run of years, for the two figures that can only be read against whole ones. */
 	const allYears = range ? summarizeByYear(store) : years;
-	const current = range ? summarizeTotal(years) : yearSummaryFor(years);
+	// Every year the range touches, rolled into one total — for "All time" (range undefined, so `years`
+	// is every year on record) that's a genuine all-time figure, not just whatever the current calendar
+	// year happens to hold. A range that resolves to a single year reduces to that year's own totals.
+	const current = summarizeTotal(years);
 	const worth = range?.to ? netWorthAsOf(store, range.to) : netWorth(store);
 
 	// A period that lands on exactly one whole calendar year still has a "versus the year before" that
@@ -204,12 +207,17 @@ export function renderAllAccountsDashboard(
 	const monthlyNet = fiYear ? fiYear.net / 12 : 0;
 	const yearsToFi = fiNumber > 0 ? fiProjection(worth, monthlyNet, plugin.settings.expectedReturn, fiNumber) : undefined;
 
+	// Net worth is a point-in-time figure regardless of the period filter, so "vs a year ago" still
+	// means something even in All time. Income/expenses no longer do: `current` is now this period's own
+	// total (all of history, for All time), and diffing an all-time sum against one calendar year's
+	// worth would produce a delta with no sensible meaning — so those two only compare when a specific
+	// period (a whole year, in practice) was actually chosen.
 	const netWorthDelta = current && previous ? yoy(current.netWorthEOY, previous.netWorthEOY) : undefined;
-	const incomeDelta = current && previous ? yoy(current.income, previous.income) : undefined;
-	const expensesDelta = current && previous ? yoy(current.expenses, previous.expenses) : undefined;
+	const incomeDelta = range && current && previous ? yoy(current.income, previous.income) : undefined;
+	const expensesDelta = range && current && previous ? yoy(current.expenses, previous.expenses) : undefined;
 
-	const inPeriod = range ? ` · ${periodLabel}` : " this year";
-	const savingsRateLabel = range ? `Savings rate in ${periodLabel}` : "Savings rate this year";
+	const inPeriod = ` · ${periodLabel}`;
+	const savingsRateLabel = `Savings rate · ${periodLabel}`;
 
 	const kpis = container.createDiv({ cls: "fp-kpi-grid" });
 	renderKpiCard(kpis, {

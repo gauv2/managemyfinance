@@ -4,26 +4,11 @@ import type FinancePlugin from "../main";
 import type { Card, CardNetwork, CardType } from "../types";
 import { renderCardVisual } from "../ui/cardVisual";
 import { WizardModal, WizardStep } from "./WizardModal";
+import { formField, formSelectFieldVL as formSelectField } from "./formHelpers";
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0"));
 const now = new Date();
 const YEARS = Array.from({ length: 16 }, (_, i) => now.getFullYear() + i);
-
-function formField(parent: HTMLElement, label: string, type: string, placeholder?: string, extraAttr?: Record<string, string>) {
-	const row = parent.createDiv({ cls: "fp-form-row" });
-	row.createEl("label", { text: label });
-	const attr = { ...(placeholder ? { placeholder } : {}), ...(extraAttr ?? {}) };
-	const input = row.createEl("input", { type, attr: Object.keys(attr).length ? attr : undefined });
-	return { row, input };
-}
-
-function formSelectField(parent: HTMLElement, label: string, options: { value: string; label: string }[]) {
-	const row = parent.createDiv({ cls: "fp-form-row" });
-	row.createEl("label", { text: label });
-	const select = row.createEl("select");
-	options.forEach((opt) => select.createEl("option", { text: opt.label, value: opt.value }));
-	return { row, select };
-}
 
 /**
  * Add or edit one card, always linked to an existing account. `skippable` powers the two onboarding

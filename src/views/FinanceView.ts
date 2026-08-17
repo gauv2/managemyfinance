@@ -18,6 +18,7 @@ import { renderCompareSection } from "./sections/CompareSection";
 import { renderReportsSection } from "./sections/ReportsSection";
 import { renderReviewSection } from "./sections/ReviewSection";
 import { renderSettingsSection } from "./sections/SettingsSection";
+import { renderStrategySection } from "./sections/StrategySection";
 import { renderSubscriptionsSection } from "./sections/SubscriptionsSection";
 
 /** Checking-like accounts first, then savings, investments, cash, and finally the balance-only
@@ -35,7 +36,7 @@ interface NavTabDef {
 	badgeCount?: number;
 }
 
-const DEFAULT_NAV_ORDER = ["all-accounts", "budgets", "categories", "subscriptions", "cards", "review", "reports", "compare"];
+const DEFAULT_NAV_ORDER = ["all-accounts", "strategy", "budgets", "categories", "subscriptions", "cards", "review", "reports", "compare"];
 
 function possessive(name: string): string {
 	const trimmed = name.trim();
@@ -336,6 +337,13 @@ export class FinanceView extends ItemView {
 				isActive: !activeAccountId && !activeView,
 				onClick: () => void this.selectAccount(undefined),
 			},
+			strategy: {
+				id: "strategy",
+				label: "Strategy",
+				icon: "compass",
+				isActive: activeView === "strategy",
+				onClick: () => void this.selectView("strategy"),
+			},
 			budgets: {
 				id: "budgets",
 				label: "Budgets",
@@ -543,6 +551,9 @@ export class FinanceView extends ItemView {
 	private renderBody(): void {
 		this.bodyEl.empty();
 		switch (this.plugin.settings.activeView) {
+			case "strategy":
+				renderStrategySection(this.bodyEl, this.plugin);
+				break;
 			case "budgets":
 				renderBudgetsSection(this.bodyEl, this.plugin);
 				break;

@@ -43,7 +43,7 @@ export class WizardModal extends Modal {
 
 	constructor(
 		app: App,
-		opts: { title: string; subtitle: string; icon: string; steps: WizardStep[]; buildStamp?: string }
+		opts: { title: string; subtitle: string; icon: string; steps: WizardStep[]; buildStamp?: string; initialStepId?: string }
 	) {
 		super(app);
 		this.steps = opts.steps;
@@ -51,6 +51,13 @@ export class WizardModal extends Modal {
 		this.wizSubtitle = opts.subtitle;
 		this.wizIcon = opts.icon;
 		this.buildStamp = opts.buildStamp;
+		// Lets a caller reopen a long wizard at a specific step (e.g. "Review now" jumping straight to
+		// the review-cadence step) instead of always marching back through everything already set.
+		// Falls back to the first step rather than throwing if the id doesn't match anything.
+		if (opts.initialStepId) {
+			const idx = this.steps.findIndex((s) => s.id === opts.initialStepId);
+			if (idx >= 0) this.stepIndex = idx;
+		}
 	}
 
 	onOpen(): void {

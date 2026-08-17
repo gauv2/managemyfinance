@@ -11,67 +11,13 @@ import {
 	subCurrency,
 } from "../subscriptions";
 import type { Subscription, SubscriptionBillingCycle, SubscriptionPaidVia } from "../types";
-import { moneyInput, type MoneyInputHandle } from "../ui/dom";
 import { WizardModal, WizardStep } from "./WizardModal";
+import { formField, formMoneyField, formSelectField, formSelectFieldVL } from "./formHelpers";
 
 const BILLING_CYCLES: SubscriptionBillingCycle[] = ["monthly", "yearly", "quarterly", "weekly"];
 
 function billingCycleFromLabel(label: string): SubscriptionBillingCycle {
 	return BILLING_CYCLES.find((c) => BILLING_CYCLE_LABEL[c] === label) ?? "monthly";
-}
-
-function formField(
-	parent: HTMLElement,
-	label: string,
-	type: string,
-	placeholder?: string,
-	extraAttr?: Record<string, string>
-): { row: HTMLElement; input: HTMLInputElement } {
-	const row = parent.createDiv({ cls: "fp-form-row" });
-	row.createEl("label", { text: label });
-	const attr = { ...(placeholder ? { placeholder } : {}), ...(extraAttr ?? {}) };
-	const input = row.createEl("input", { type, attr: Object.keys(attr).length ? attr : undefined });
-	return { row, input };
-}
-
-function formSelectField(parent: HTMLElement, label: string, options: string[]): { row: HTMLElement; select: HTMLSelectElement } {
-	const row = parent.createDiv({ cls: "fp-form-row" });
-	row.createEl("label", { text: label });
-	const select = row.createEl("select");
-	options.forEach((opt) => select.createEl("option", { text: opt, value: opt }));
-	return { row, select };
-}
-
-function formMoneyField(
-	parent: HTMLElement,
-	label: string,
-	currencies: string[],
-	opts: { value?: number; currency?: string; onChange: (value: number | undefined) => void }
-): { row: HTMLElement; select: HTMLSelectElement; money: MoneyInputHandle } {
-	const row = parent.createDiv({ cls: "fp-form-row" });
-	row.createEl("label", { text: label });
-	const wrap = row.createDiv({ cls: "fp-form-money-wrap" });
-	const select = wrap.createEl("select");
-	currencies.forEach((c) => select.createEl("option", { text: c, value: c }));
-	const money = moneyInput(wrap, {
-		value: opts.value,
-		currency: opts.currency,
-		allowNegative: false,
-		onChange: opts.onChange,
-	});
-	return { row, select, money };
-}
-
-function formSelectFieldVL(
-	parent: HTMLElement,
-	label: string,
-	options: { value: string; label: string }[]
-): { row: HTMLElement; select: HTMLSelectElement } {
-	const row = parent.createDiv({ cls: "fp-form-row" });
-	row.createEl("label", { text: label });
-	const select = row.createEl("select");
-	options.forEach((opt) => select.createEl("option", { text: opt.label, value: opt.value }));
-	return { row, select };
 }
 
 /** Add or edit one subscription over two quick steps: what it is, then when it renews — same fields as before, just off the page. */
@@ -99,13 +45,13 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 			id: "details",
 			title: "Details",
 			icon: "repeat",
-			render: (c) => {
+			render: (c, wizard) => {
 				c.createEl("h3", { text: existing ? `Edit "${existing.name}"` : "What are you subscribing to?" });
 				const grid = c.createDiv({ cls: "fp-sub-form-grid" });
 
 				const nameField = formField(grid, "Name (company)", "text", "e.g. Suno");
 				nameField.input.value = name;
-				nameField.input.addEventListener("input", () => (name = nameField.input.value));
+				nameField.input.addEventListener("input", () => { name = nameField.input.value; wizard.refreshFooter(); });
 
 				const planField = formField(grid, "Plan / tier (optional)", "text", "e.g. Premier plan");
 				planField.input.value = plan;
@@ -122,7 +68,7 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 				const costField = formMoneyField(grid, "Cost", CURRENCIES, {
 					value: cost,
 					currency,
-					onChange: (v) => (cost = v),
+					onChange: (v) => { cost = v; wizard.refreshFooter(); },
 				});
 				costField.select.value = currency;
 				costField.select.addEventListener("change", () => {
@@ -171,13 +117,13 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 			id: "schedule",
 			title: "Schedule",
 			icon: "calendar",
-			render: (c) => {
+			render: (c, wizard) => {
 				c.createEl("h3", { text: "When does it renew?" });
 				const grid = c.createDiv({ cls: "fp-sub-form-grid" });
 
 				const nextDueField = formField(grid, "Next due date", "date");
 				nextDueField.input.value = nextDueDate;
-				nextDueField.input.addEventListener("input", () => (nextDueDate = nextDueField.input.value));
+				nextDueField.input.addEventListener("input", () => { nextDueDate = nextDueField.input.value; wizard.refreshFooter(); });
 
 				const endDateField = formField(grid, "End date (optional)", "date");
 				endDateField.input.value = endDate;

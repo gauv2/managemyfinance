@@ -116,6 +116,10 @@ export interface Category {
 	/** A whole-year envelope, keyed by "YYYY" — for the costs that don't divide sensibly into months
 	 *  (annual insurance, road tax, a yearly software renewal). Tracked independently of budgetHistory. */
 	annualBudgets?: Record<string, number>;
+	/** Marks this as a non-negotiable living expense (rent, groceries, utilities) rather than
+	 *  discretionary spending. Used only to suggest an income-loss reserve target in the Strategy
+	 *  feature — unset means "not flagged either way", not "not essential". */
+	essential?: boolean;
 }
 
 /**
@@ -278,4 +282,82 @@ export interface Transaction {
 	/** The subscription this payment is an instance of, once linked. Drives "what have I actually paid
 	 *  for Netflix" and price-increase detection. */
 	subscriptionId?: string;
+}
+
+export type GoalKind = "reserve-buffer" | "reserve-income-loss" | "debt-payoff" | "custom";
+
+/**
+ * One entry in the goal register: something being saved toward, distinct from OneOffBudget (which
+ * caps spending in a window rather than accumulating savings toward a target).
+ */
+export interface FinancialGoal {
+	id: string;
+	name: string;
+	targetAmount: number;
+	/** "YYYY-MM-DD" — optional, not every goal has a deadline. */
+	deadline?: string;
+	/** Lower number = higher priority. Drives the register's default sort. */
+	priority: number;
+	/**
+	 * How the current amount is known. "manual" is typed and updated by hand — the fallback for a goal
+	 * with no single account behind it. "account" mirrors one Account's live balance. "computed" is for
+	 * the auto-populated starter goals (reserve, debt-to-zero), whose current amount is an aggregate
+	 * this app already knows how to calculate — storing it again as a manual number would only drift
+	 * from the accounts it's supposed to reflect.
+	 */
+	trackingMode: "manual" | "account" | "computed";
+	/** trackingMode "manual" only. */
+	manualCurrentAmount?: number;
+	/** trackingMode "account" only. */
+	linkedAccountId?: string;
+	kind: GoalKind;
+	notes?: string;
+	archived?: boolean;
+	createdAt: string;
+}
+
+export interface ReservePlan {
+	/** Buffer for one unexpected expense — a free-entry target, not derived from a formula. */
+	bufferTarget: number;
+	/** Income-loss reserve, expressed in months of essential spending. */
+	incomeLossMonths: number;
+}
+
+export type DebtPayoffStrategy = "avalanche" | "snowball";
+
+export interface DebtPayoffPlan {
+	strategy: DebtPayoffStrategy;
+	/** Debt-carrying accounts included in the plan — the order/progress itself is always recomputed
+	 *  live from current balances/APR; this only records which accounts count and which method. */
+	includedAccountIds: string[];
+}
+
+export interface SavingsPolicy {
+	targetSavingsRatePct: number;
+	horizonNotes?: string;
+	riskNotes?: string;
+}
+
+export type ReviewCadence = "monthly" | "quarterly" | "annual";
+
+export interface StrategyReview {
+	cadence: ReviewCadence;
+	lastReviewedAt?: string;
+	nextReviewDate?: string;
+}
+
+/**
+ * One living financial plan — the output of the wizard's six-step cycle (situation, goals,
+ * alternatives, evaluation, action, review), checked against real data on the Strategy page.
+ * A singleton per portfolio, not a collection — see FinanceStore.strategy.
+ */
+export interface Strategy {
+	/** Unset until the wizard has been finished once. */
+	completedAt?: string;
+	reserve: ReservePlan;
+	debtPlan: DebtPayoffPlan;
+	goals: FinancialGoal[];
+	savingsPolicy: SavingsPolicy;
+	rules: string[];
+	review: StrategyReview;
 }

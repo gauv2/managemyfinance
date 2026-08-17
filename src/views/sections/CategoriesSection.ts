@@ -4,6 +4,7 @@ import { CategoryDrilldownModal } from "../../modals/CategoryDrilldownModal";
 import { formatMoney } from "../../money";
 import { emptyPeriodSelection, resolvePeriodRange, type PeriodSelection } from "../../period";
 import { barChart } from "../../ui/charts";
+import { icon } from "../../ui/dom";
 import { renderPeriodFilter } from "../../ui/periodFilter";
 
 /**
@@ -28,14 +29,17 @@ export function renderCategoriesSection(container: HTMLElement, plugin: FinanceP
 	function render(): void {
 		container.empty();
 
-		const header = container.createDiv({ cls: "fp-section-head" });
-		header.createEl("h2", { text: "Categories" });
-		header.createDiv({
+		const header = container.createDiv({ cls: "fp-section-header" });
+		const headText = header.createDiv({ cls: "fp-section-header-text" });
+		const titleRow = headText.createDiv({ cls: "fp-section-title-row" });
+		icon(titleRow.createDiv({ cls: "fp-section-icon-badge" }), "shapes");
+		titleRow.createEl("h2", { text: "Categories" });
+		headText.createDiv({
 			cls: "fp-section-subtitle",
 			text: "Every primary category, largest first. Open one to see its subcategories and the transactions behind them.",
 		});
 
-		const filterBar = container.createDiv({ cls: "fp-filter-bar" });
+		const filterBar = container.createDiv({ cls: "fp-page-filter" });
 		renderPeriodFilter(filterBar, {
 			dates: store.transactions.map((t) => t.date),
 			selection: period,

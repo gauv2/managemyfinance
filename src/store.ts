@@ -7,6 +7,7 @@ import type { NumberFormatPreference } from "./money";
 import type { AiSettings } from "./ai/provider";
 import type { EmailSettings, TelegramSettings, TestDeliverySettings } from "./delivery/channels";
 import type { ReportSchedule } from "./reports/schedule";
+import { defaultStrategy } from "./strategy";
 import type {
 	Account,
 	BalanceSnapshot,
@@ -16,12 +17,22 @@ import type {
 	ImportBatch,
 	OneOffBudget,
 	Portfolio,
+	Strategy,
 	Subscription,
 	Transaction,
 } from "./types";
 
 /** The workspace pages that aren't scoped to a single account. */
-export type FinanceViewId = "budgets" | "categories" | "subscriptions" | "cards" | "review" | "reports" | "compare" | "settings";
+export type FinanceViewId =
+	| "budgets"
+	| "categories"
+	| "subscriptions"
+	| "cards"
+	| "review"
+	| "reports"
+	| "compare"
+	| "strategy"
+	| "settings";
 
 export interface FinanceSettings {
 	/** The active portfolio's data folder — kept in sync with portfolios.find(p => p.id === activePortfolioId).folder. */
@@ -194,6 +205,8 @@ export class FinanceStore {
 	batches: ImportBatch[] = [];
 	/** Named one-off budgets (a holiday, a kitchen) — see OneOffBudget. */
 	oneOffBudgets: OneOffBudget[] = [];
+	/** The written financial plan — a singleton, not a collection. See Strategy. */
+	strategy: Strategy = defaultStrategy();
 
 	constructor(private app: App, public settings: FinanceSettings) {}
 
@@ -236,6 +249,7 @@ export class FinanceStore {
 		this.snapshots = await this.readJson<BalanceSnapshot[]>(this.path("data", "snapshots.json"), []);
 		this.batches = await this.readJson<ImportBatch[]>(this.path("data", "import-batches.json"), []);
 		this.oneOffBudgets = await this.readJson<OneOffBudget[]>(this.path("data", "oneoff-budgets.json"), []);
+		this.strategy = await this.readJson<Strategy>(this.path("data", "strategy.json"), defaultStrategy());
 		await this.migrateLegacyCardExpiry();
 
 		this.transactions = await this.readLedger();
@@ -423,6 +437,10 @@ export class FinanceStore {
 
 	async saveOneOffBudgets(): Promise<void> {
 		await this.app.vault.adapter.write(this.path("data", "oneoff-budgets.json"), JSON.stringify(this.oneOffBudgets, null, "\t"));
+	}
+
+	async saveStrategy(): Promise<void> {
+		await this.app.vault.adapter.write(this.path("data", "strategy.json"), JSON.stringify(this.strategy, null, "\t"));
 	}
 
 	existingIds(): Set<string> {
@@ -690,6 +708,7 @@ export class FinanceStore {
 		await this.saveSnapshots();
 		await this.saveBatches();
 		await this.saveOneOffBudgets();
+		await this.saveStrategy();
 		await this.rewriteAllLedgers();
 	}
 
@@ -709,6 +728,7 @@ export class FinanceStore {
 		this.snapshots = [];
 		this.batches = [];
 		this.oneOffBudgets = [];
+		this.strategy = defaultStrategy();
 		this.categories = defaultCategories();
 		await this.saveAll();
 		await this.seedDefaultSecondaryCategories();

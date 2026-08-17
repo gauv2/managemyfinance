@@ -2866,6 +2866,121 @@
 	color: var(--text-faint);
 }
 
+.fp-sub-breakdown-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 16px;
+	margin-bottom: 20px;
+}
+.fp-sub-share-card {
+	margin-bottom: 0;
+}
+
+.fp-sub-group-label {
+	display: flex;
+	align-items: baseline;
+	gap: 4px;
+	margin: 22px 0 10px;
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	color: var(--text-faint);
+}
+.fp-sub-group-label:first-child {
+	margin-top: 0;
+}
+
+.fp-sub-card-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+	gap: 12px;
+	margin-bottom: 6px;
+}
+.fp-sub-card {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-lg);
+	background: var(--background-primary);
+	transition: border-color 0.12s ease;
+}
+.fp-sub-card:hover {
+	border-color: var(--background-modifier-border-hover, var(--interactive-accent));
+}
+.fp-sub-card.is-inactive {
+	opacity: 0.55;
+}
+.fp-sub-card-top {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+}
+.fp-sub-card-avatar {
+	flex-shrink: 0;
+}
+.fp-sub-card-info {
+	flex: 1;
+	min-width: 0;
+}
+.fp-sub-card-name {
+	font-weight: 700;
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-sub-card-plan {
+	margin-top: 1px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-sub-card-amount {
+	flex-shrink: 0;
+	text-align: right;
+	font-weight: 700;
+	color: var(--text-normal);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.fp-sub-card-amount-sub {
+	font-size: var(--font-ui-smaller);
+	font-weight: 500;
+	color: var(--text-faint);
+}
+.fp-sub-card-meta {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-sub-card-due {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-sub-card-notes {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-style: italic;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-sub-card-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 2px;
+	margin-top: -4px;
+	padding-top: 6px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
 .fp-sub-form-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -3976,6 +4091,12 @@
 	flex-wrap: wrap;
 }
 .fp-mobile .fp-sub-top-grid {
+	grid-template-columns: 1fr;
+}
+.fp-mobile .fp-sub-breakdown-grid {
+	grid-template-columns: 1fr;
+}
+.fp-mobile .fp-sub-card-grid {
 	grid-template-columns: 1fr;
 }
 .fp-mobile .fp-sub-overview-grid {
@@ -6519,4 +6640,58 @@
 .fp-invoice-summary-label {
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
+}
+
+/* ---------- Strategy ---------- */
+
+.fp-strategy-review-banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+	padding: 14px 16px;
+	margin-bottom: 20px;
+	border-radius: var(--fp-radius-lg);
+	background: color-mix(in srgb, var(--fp-warn) 8%, var(--background-primary-alt, var(--background-secondary)));
+	border: 1px solid color-mix(in srgb, var(--fp-warn) 22%, var(--background-modifier-border));
+	font-weight: 600;
+}
+.fp-strategy-review-banner.is-due {
+	background: color-mix(in srgb, var(--fp-bad) 10%, var(--background-primary-alt, var(--background-secondary)));
+	border-color: color-mix(in srgb, var(--fp-bad) 28%, var(--background-modifier-border));
+}
+
+.fp-strategy-debt-list {
+	margin: 4px 0 0;
+	padding-left: 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-strategy-debt-list li {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	padding-left: 4px;
+}
+.fp-strategy-debt-name {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.fp-strategy-debt-amount {
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.fp-strategy-rules-list {
+	margin: 4px 0 0;
+	padding-left: 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	color: var(--text-normal);
+}
+.fp-strategy-rules-list li {
+	padding-left: 4px;
 }

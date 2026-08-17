@@ -50,11 +50,19 @@ export function openImportWizard(plugin: FinancePlugin): void {
 
 	let selectedFile: string | null = null;
 	let tables: DetectedTable[] = [];
+	// Whichever account's page this was opened from — the same "for the account you're looking at"
+	// default hand-entering a transaction already uses. A file whose format can't say for itself
+	// (or doesn't match the account you had open) still shows its own dropdown to override, but
+	// starting from a type-based guess instead of where you actually were is how an AMEX statement
+	// silently landed on a savings account: nothing about "first savings account" said AMEX, but
+	// nothing about the page you'd just clicked Import from was consulted either.
+	const activeAccountId = store.accounts.find((a) => a.id === plugin.settings.activeAccountId)?.id;
 	// Kept separate on purpose: ING and Trade Republic rows never share a fallback account, so a
 	// sheet of one format can never silently borrow whatever account the other format landed on.
-	let ingAccountId = store.accounts.find((a) => a.type !== "investing" && a.type !== "crypto")?.id ?? store.accounts[0]?.id ?? "";
-	let tradeRepublicAccountId = store.accounts.find((a) => a.type === "investing")?.id ?? store.accounts[0]?.id ?? "";
-	let genericAccountId = store.accounts.find((a) => a.type === "saving")?.id ?? store.accounts[0]?.id ?? "";
+	let ingAccountId = activeAccountId ?? store.accounts.find((a) => a.type !== "investing" && a.type !== "crypto")?.id ?? store.accounts[0]?.id ?? "";
+	let tradeRepublicAccountId =
+		activeAccountId ?? store.accounts.find((a) => a.type === "investing")?.id ?? store.accounts[0]?.id ?? "";
+	let genericAccountId = activeAccountId ?? store.accounts.find((a) => a.type === "saving")?.id ?? store.accounts[0]?.id ?? "";
 	let mapping = emptyColumnMapping();
 	let ibans: string[] = [];
 	let ibanAccountMap = new Map<string, string>();
