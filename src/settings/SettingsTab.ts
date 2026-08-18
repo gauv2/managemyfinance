@@ -1813,8 +1813,8 @@ export class FinanceSettingTab extends PluginSettingTab {
 		);
 
 		const returns = new Setting(fi.content)
-			.setName("Expected annual return")
-			.setDesc("A fraction, not a percentage — 0.07 means 7%.")
+			.setName("Expected real annual return")
+			.setDesc("A fraction, not a percentage — 0.07 means 7%. Real means after inflation, not the raw market return.")
 			.addText((t) =>
 				t.setValue(String(this.plugin.settings.expectedReturn)).onChange(async (v) => {
 					const n = parseMoney(v);
@@ -1827,7 +1827,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 			);
 		this.help(
 			returns,
-			"Used only to project years-to-FI, by compounding your current net worth and monthly contributions forward. It is an assumption you supply, not a forecast this plugin makes."
+			"Used only to project years-to-FI, by compounding your current net worth and monthly contributions forward. It is an assumption you supply, not a forecast this plugin makes. Enter it as a real return (net of inflation) — the FI target itself (expenses × multiplier) is stated in today's money, so mixing a nominal return into that projection would silently overstate how fast you get there."
 		);
 	}
 

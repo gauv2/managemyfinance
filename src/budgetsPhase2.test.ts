@@ -76,11 +76,16 @@ describe("income categories", () => {
 		expect(budgetTone(0.5, true)).toBe("bad");
 	});
 
-	it("marks an income category's status as such", () => {
+	it("marks an income category's status as such, sourced from money actually earned into it (FIN-006)", () => {
+		// A positive amount — money actually coming in — not the negative-amount fixture this test used
+		// to have: that predates the FIN-006 fix and relied on the old expense-only "spent" path reading
+		// a -1200 transaction as 1200 of income "earned" purely because of its category's kind, which is
+		// exactly the financially-wrong reading FIN-006 replaced. See kpi.ts's primaryCategoryIncomeTotals.
 		const cat: Category = { ...salary, budgetHistory: { "2024-01": 1000 } };
-		const s = store([tx("2024-01-10", -1200, cat.id)], [cat]);
+		const s = store([tx("2024-01-10", 1200, cat.id)], [cat]);
 		const status = budgetStatuses(s, [cat], "2024-01")[0];
 		expect(status.isIncome).toBe(true);
+		expect(status.spent).toBe(1200);
 		expect(status.tone).toBe("good");
 	});
 });

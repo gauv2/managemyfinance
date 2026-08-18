@@ -163,7 +163,7 @@ export function openStrategyWizard(plugin: FinancePlugin, opts: { onSaved?: () =
 				statTile(grid, { label: "Net worth", value: formatMoney(netWorth(store)), iconName: "wallet" });
 				statTile(grid, { label: "Income this year", value: formatMoney(thisYear?.income ?? 0), iconName: "arrow-up-right" });
 				statTile(grid, { label: "Expenses this year", value: formatMoney(thisYear?.expenses ?? 0), iconName: "arrow-down-right" });
-				statTile(grid, { label: "Savings rate this year", value: formatPct(thisYear?.savingsRate ?? 0), iconName: "percent", money: false });
+				statTile(grid, { label: "Savings rate this year", value: formatPct(thisYear?.savingsRate), iconName: "percent", money: false });
 				statTile(grid, { label: "Total debt", value: formatMoney(totalDebt), iconName: "credit-card", tone: totalDebt > 0 ? "warn" : "good" });
 				statTile(grid, { label: "Recurring subscriptions", value: String(activeSubs), iconName: "repeat", money: false });
 			},

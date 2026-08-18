@@ -6,7 +6,7 @@ import { describeRange, type DateRange } from "../../../period";
 import type { Account } from "../../../types";
 import { badge, statTile } from "../../../ui/dom";
 import { renderMeter } from "../../../ui/kpiCard";
-import { deltaRow, formatEUR, formatPct, metricRow, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
+import { deltaRow, formatEUR, metricRow, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
 import { renderSpendingByCategoryCard } from "./SpendingByCategoryCard";
 
 /**
@@ -165,9 +165,15 @@ export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlu
 		const tbody = table.createEl("tbody");
 		metricRow(tbody, "Charged", years.map((y) => y.expenses), formatEUR, { heat: "invert" });
 		deltaRow(tbody, years.map((y) => y.expenses), { invert: true });
-		metricRow(tbody, "Paid off", years.map((y) => y.income), formatEUR, { heat: "normal" });
-		metricRow(tbody, "Net", years.map((y) => y.net), formatEUR, { emphasize: true, heat: "normal" });
-		metricRow(tbody, "Savings rate", years.map((y) => y.savingsRate), (n) => formatPct(n), { heat: "normal" });
+		// Paid off comes from debt-principal payments specifically (FIN-012) — not `income`, which the
+		// shared classifier correctly reads as ~0 for a credit account: a card payment is a balance-sheet
+		// movement, not money the account earned. `income` here previously stood in for this figure only
+		// because nothing else tracked it; reading it that way also meant a "savings rate" row below
+		// looked like a real percentage when a credit account has no income to save a fraction of. That
+		// row is gone — see debtPrincipal instead of trying to force this account into an income/expense
+		// framing it doesn't have.
+		metricRow(tbody, "Paid off", years.map((y) => y.debtPrincipal), formatEUR, { heat: "normal" });
+		metricRow(tbody, "Net", years.map((y) => y.debtPrincipal - y.expenses), formatEUR, { emphasize: true, heat: "normal" });
 		partialYearsNote(historyCard, years, periodLabel);
 	}
 

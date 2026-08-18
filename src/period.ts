@@ -235,6 +235,44 @@ export function monthsInRange(range: DateRange): number {
 	return Math.max(1, months);
 }
 
+/** The last calendar month that has fully elapsed as of `today` — "this month" is always still in
+ *  progress, so a monthly average that wants a clean, closed set of months excludes it (FIN-010). Local
+ *  time, matching every other "current month" reading in this app (see budgets.ts's currentMonth). */
+export function lastCompleteMonthKey(today: Date = new Date()): string {
+	const year = today.getFullYear();
+	const month = today.getMonth(); // 0-based "this month"; that same number is last month's 1-based value
+	return month === 0 ? `${year - 1}-12` : `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/** `month` shifted by `delta` calendar months — negative goes backward — preserving "YYYY-MM" format.
+ *  UTC-based so a shift across a DST boundary can't land on the wrong month. */
+export function shiftMonthKey(month: string, delta: number): string {
+	const [y, m] = month.split("-").map(Number);
+	const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+	return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Every "YYYY-MM" from `startMonth` through `endMonth`, inclusive — empty if `startMonth` is after
+ *  `endMonth`. The building block behind any "average per month, including the months with nothing in
+ *  them" figure (FIN-010): a plain average over however many months happen to have data silently drops
+ *  the ones that don't, understating the window and overstating the average. */
+export function monthKeysBetween(startMonth: string, endMonth: string): string[] {
+	if (startMonth > endMonth) return [];
+	const out: string[] = [];
+	let [y, m] = startMonth.split("-").map(Number);
+	let cursor = startMonth;
+	while (cursor <= endMonth) {
+		out.push(cursor);
+		m++;
+		if (m > 12) {
+			m = 1;
+			y++;
+		}
+		cursor = `${y}-${String(m).padStart(2, "0")}`;
+	}
+	return out;
+}
+
 /**
  * Whether an ISO date falls inside `range`. An end left empty is open, so a half-typed custom range
  * still filters on the end that is set; an undated transaction is only ever in "no range at all".

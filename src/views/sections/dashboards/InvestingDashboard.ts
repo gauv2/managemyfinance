@@ -1,6 +1,6 @@
 import { Notice } from "obsidian";
 import { convert } from "../../../currency";
-import { investingActivityByYear, investingHoldings, type Holding } from "../../../kpi";
+import { investingActivityByYear, investingHoldings, investingRealizedPnLAsOf, type Holding } from "../../../kpi";
 import type FinancePlugin from "../../../main";
 import { fetchPrice } from "../../../marketData";
 import { BalanceSnapshotModal } from "../../../modals/BalanceSnapshotModal";
@@ -23,12 +23,20 @@ export function renderInvestingDashboard(container: HTMLElement, plugin: Finance
 	const netContributions = activity.reduce((sum, y) => sum + y.deposits - y.withdrawals, 0);
 	const totalDividends = activity.reduce((sum, y) => sum + y.dividends, 0);
 	const totalFees = activity.reduce((sum, y) => sum + y.fees, 0);
+	const realizedPnL = investingRealizedPnLAsOf(store, account.id);
 
 	const tiles = container.createDiv({ cls: "fp-stat-grid" });
 	statTile(tiles, { label: "Holdings (at cost)", value: formatEUR(totalCostBasis), sub: "not live market value", iconName: "candlestick-chart" });
 	statTile(tiles, { label: "Net contributions", value: formatEUR(netContributions), sub: "deposits − withdrawals", iconName: "download" });
 	statTile(tiles, { label: "Dividends received", value: formatEUR(totalDividends), iconName: "coins", tone: totalDividends > 0 ? "good" : "neutral" });
 	statTile(tiles, { label: "Fees paid", value: formatEUR(totalFees), iconName: "receipt", tone: "neutral" });
+	statTile(tiles, {
+		label: realizedPnL >= 0 ? "Realized gain (all-time)" : "Realized loss (all-time)",
+		value: formatEUR(Math.abs(realizedPnL)),
+		sub: "booked by sells to date, at moving-average cost",
+		iconName: realizedPnL >= 0 ? "trending-up" : "trending-down",
+		tone: realizedPnL >= 0 ? "good" : "bad",
+	});
 
 	const holdingsCard = container.createDiv({ cls: "fp-card" });
 	const holdingsHead = holdingsCard.createDiv({ cls: "fp-card-head-row" });
@@ -51,7 +59,7 @@ export function renderInvestingDashboard(container: HTMLElement, plugin: Finance
 
 		const table = holdingsCard.createEl("table", { cls: "fp-table" });
 		const thead = table.createEl("thead").createEl("tr");
-		["Ticker", "Asset class", "Shares", "Avg. cost", "Cost basis"].forEach((h, i) =>
+		["Ticker", "Asset class", "Shares", "Avg. cost", "Cost basis", "Realized P/L"].forEach((h, i) =>
 			thead.createEl("th", { text: h, cls: i >= 2 ? "fp-table-num" : undefined })
 		);
 		const tbody = table.createEl("tbody");
@@ -62,6 +70,10 @@ export function renderInvestingDashboard(container: HTMLElement, plugin: Finance
 			tr.createEl("td", { text: h.shares.toFixed(4), cls: "fp-table-num" });
 			tr.createEl("td", { text: formatEUR(h.avgCost), cls: "fp-table-num fp-money" });
 			tr.createEl("td", { text: formatEUR(h.netInvested), cls: "fp-table-num fp-money" });
+			tr.createEl("td", {
+				text: h.realizedPnL === 0 ? "—" : formatEUR(h.realizedPnL),
+				cls: `fp-table-num fp-money${h.realizedPnL > 0 ? " fp-delta-good" : h.realizedPnL < 0 ? " fp-delta-bad" : ""}`,
+			});
 		});
 	}
 

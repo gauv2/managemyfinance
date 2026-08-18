@@ -1,7 +1,8 @@
 import { resolvePrimaryId } from "./categories";
 import { convert } from "./currency";
+import { classifyTransaction, isEconomicallyNeutral } from "./finance/semantics";
 import { averageMonthlyExpenses, netWorth, type KpiStore } from "./kpi";
-import { monthsInRange } from "./period";
+import { lastCompleteMonthKey, monthKeysBetween, monthsInRange } from "./period";
 import { isLiabilityType, isLiquidType, type Account, type DebtPayoffStrategy, type FinancialGoal, type ReservePlan, type ReviewCadence, type Strategy } from "./types";
 
 /** A fresh, unfinished strategy — the wizard fills this in; `completedAt` stays unset until Finish. */
@@ -35,20 +36,34 @@ function isEssentialCategory(store: KpiStore, categoryId: string | undefined): b
 }
 
 /** Average monthly spend across categories flagged `essential`, converted to base currency the same
- *  way every other KPI figure is. Mirrors kpi.ts's averageMonthlyExpenses, narrowed to essential spend. */
+ *  way every other KPI figure is. Mirrors kpi.ts's averageMonthlyExpenses — including the same
+ *  complete-month observation window (FIN-010): averaged over every calendar month between the
+ *  earliest and latest (complete) essential-spend activity, not just the months that happen to contain
+ *  an essential transaction, so a genuinely zero-spend month doesn't silently shrink the divisor and
+ *  inflate the average — and the same transfer/trade/debt-principal exclusion via the shared classifier,
+ *  so a transfer into an essential-flagged category can't inflate the reserve target. */
 function essentialMonthlyAverage(store: KpiStore): number {
+	let earliestMonth: string | undefined;
+	let latestMonth: string | undefined;
 	const byMonth = new Map<string, number>();
 	for (const tx of store.transactions) {
-		if (tx.amount >= 0) continue;
 		if (!isEssentialCategory(store, tx.categoryId)) continue;
 		const month = tx.date?.slice(0, 7);
 		if (!month) continue;
+		if (!earliestMonth || month < earliestMonth) earliestMonth = month;
+		if (!latestMonth || month > latestMonth) latestMonth = month;
+		if (isEconomicallyNeutral(classifyTransaction(store, tx))) continue;
+		if (tx.amount >= 0) continue;
 		const amount = store.fx ? convert(tx.amount, tx.currency, store.fx) : tx.amount;
 		byMonth.set(month, (byMonth.get(month) ?? 0) - amount);
 	}
-	const months = Array.from(byMonth.values());
+	if (!earliestMonth || !latestMonth) return 0;
+
+	const endMonth = latestMonth < lastCompleteMonthKey() ? latestMonth : lastCompleteMonthKey();
+	const months = monthKeysBetween(earliestMonth, endMonth);
 	if (months.length === 0) return 0;
-	return months.reduce((a, b) => a + b, 0) / months.length;
+	const total = months.reduce((sum, m) => sum + (byMonth.get(m) ?? 0), 0);
+	return total / months.length;
 }
 
 /** The monthly figure an income-loss reserve is measured in months of. Essential-only spend once any

@@ -1,15 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { budgetForMonth, suggestedBudget, budgetStatuses, currentMonth } from "./budgets";
+import { annualBudgetStatuses, budgetForMonth, suggestedBudget, budgetStatuses, currentMonth, oneOffBudgetStatus } from "./budgets";
 import type { KpiStore } from "./kpi";
-import type { Category, Transaction } from "./types";
+import type { Category, OneOffBudget, Transaction } from "./types";
 
 const ACCOUNT_ID = "acc-checking";
+const CREDIT_ID = "acc-credit";
 const CAT_FOOD = "cat-food";
 
 let nextId = 0;
-function tx(date: string, amount: number, categoryId = CAT_FOOD): Transaction {
+function tx(date: string, amount: number, categoryId = CAT_FOOD, extra: Partial<Transaction> = {}): Transaction {
 	nextId++;
-	return { id: `tx-${nextId}`, date, accountId: ACCOUNT_ID, amount, currency: "EUR", categoryId, description: "test", source: "manual" };
+	return { id: `tx-${nextId}`, date, accountId: ACCOUNT_ID, amount, currency: "EUR", categoryId, description: "test", source: "manual", ...extra };
 }
 
 function cat(overrides: Partial<Category> & { id: string }): Category {
@@ -18,7 +19,10 @@ function cat(overrides: Partial<Category> & { id: string }): Category {
 
 function store(transactions: Transaction[], categories: Category[] = [cat({ id: CAT_FOOD, name: "Food" })]): KpiStore {
 	return {
-		accounts: [{ id: ACCOUNT_ID, name: "Checking", type: "debit", currency: "EUR" }],
+		accounts: [
+			{ id: ACCOUNT_ID, name: "Checking", type: "debit", currency: "EUR" },
+			{ id: CREDIT_ID, name: "Credit card", type: "credit", currency: "EUR" },
+		],
 		categories,
 		transactions,
 	};
@@ -138,5 +142,69 @@ describe("budgetForMonth", () => {
 	it("falls back to its own budgetHistory in breakdown mode when it has no secondaries yet", () => {
 		const primary = cat({ id: CAT_FOOD, budgetMode: "breakdown", budgetHistory: { "2024-06": 75 } });
 		expect(budgetForMonth([primary], primary, "2024-06")).toBe(75);
+	});
+});
+
+// ---------- income-actual budgeting (FIN-006) ----------
+
+describe("budgetStatuses — income-kind categories", () => {
+	it("sources spent from money actually earned into the category, not the expense-only path", () => {
+		const CAT_FREELANCE = "cat-freelance";
+		const categories = [cat({ id: CAT_FREELANCE, name: "Freelance income", kind: "income", budgetHistory: { "2024-06": 3000 } })];
+		const s = store([tx("2024-06-05", 1800, CAT_FREELANCE), tx("2024-06-20", 700, CAT_FREELANCE)], categories);
+		const [status] = budgetStatuses(s, categories, "2024-06");
+		// Under the old expense-only path this would read spent: 0, pct: 0, tone: "bad" forever, since
+		// nothing ever counts as "spent" against an income category on that path.
+		expect(status.spent).toBe(2500);
+		expect(status.pct).toBeCloseTo(2500 / 3000, 6);
+		expect(status.tone).toBe("warn"); // 83% of an income target
+	});
+
+	it("doesn't let a trade or transfer mis-categorized under an income category count as earned", () => {
+		const CAT_FREELANCE = "cat-freelance";
+		const categories = [cat({ id: CAT_FREELANCE, name: "Freelance income", kind: "income", budgetHistory: { "2024-06": 1000 } })];
+		// A transfer between the user's own accounts, tagged (mistakenly) under the income category.
+		const s = store([tx("2024-06-05", 500, CAT_FREELANCE, { transferGroupId: "g1" })], categories);
+		const [status] = budgetStatuses(s, categories, "2024-06");
+		expect(status.spent).toBe(0);
+	});
+});
+
+describe("annualBudgetStatuses — income-kind categories", () => {
+	it("sources spent from earned income for the whole year, same as the monthly path", () => {
+		const CAT_FREELANCE = "cat-freelance";
+		const categories = [cat({ id: CAT_FREELANCE, name: "Freelance income", kind: "income", annualBudgets: { "2024": 10000 } })];
+		const s = store([tx("2024-03-05", 4000, CAT_FREELANCE), tx("2024-09-10", 3000, CAT_FREELANCE)], categories);
+		const [status] = annualBudgetStatuses(s, categories, "2024");
+		expect(status.spent).toBe(7000);
+	});
+});
+
+// ---------- oneOffBudgetStatus (FIN-007) ----------
+
+describe("oneOffBudgetStatus", () => {
+	function budget(overrides: Partial<OneOffBudget> = {}): OneOffBudget {
+		return { id: "budget-1", name: "Wedding", amount: 3000, startDate: "2024-06-01", endDate: "2024-06-30", ...overrides };
+	}
+
+	it("nets a refund against the spend it returned, instead of ignoring positive-amount rows entirely", () => {
+		// Refunds are only distinguishable from income once the vault has at least one income-kind
+		// category (see refundsDistinguishable in semantics.ts) — a realistic vault has one.
+		const categories = [cat({ id: CAT_FOOD, name: "Food" }), cat({ id: "cat-income", name: "Income", kind: "income" })];
+		const s = store([tx("2024-06-05", -500), tx("2024-06-10", 120)], categories); // returned part of a purchase
+		const status = oneOffBudgetStatus(s, budget());
+		expect(status.spent).toBe(380); // 500 - 120, not 500
+	});
+
+	it("excludes a transfer between the user's own accounts from an unrestricted pot", () => {
+		const s = store([tx("2024-06-05", -500), tx("2024-06-10", -1000, undefined, { transferGroupId: "g1" })]);
+		const status = oneOffBudgetStatus(s, budget());
+		expect(status.spent).toBe(500);
+	});
+
+	it("excludes a debt-principal payment (a credit-card payoff) from an unrestricted pot", () => {
+		const s = store([tx("2024-06-05", -500), tx("2024-06-10", 800, undefined, { accountId: CREDIT_ID })]);
+		const status = oneOffBudgetStatus(s, budget());
+		expect(status.spent).toBe(500);
 	});
 });

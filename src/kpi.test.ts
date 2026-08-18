@@ -12,10 +12,16 @@ import {
 	averageMonthlyExpenses,
 	investingHoldings,
 	investingActivityByYear,
+	investingRealizedPnLAsOf,
+	investingOpenCostBasisAsOf,
+	investmentStateAsOf,
+	netWorthAsOf,
 	fiProjection,
+	fiExpenseBase,
 	accountBalanceParts,
 	type KpiStore,
 } from "./kpi";
+import { lastCompleteMonthKey, shiftMonthKey } from "./period";
 import type { Account, Category, Transaction } from "./types";
 
 // ---------- fixtures ----------
@@ -23,6 +29,8 @@ import type { Account, Category, Transaction } from "./types";
 const checking: Account = { id: "acc-checking", name: "Checking", type: "debit", currency: "EUR", openingBalance: 0 };
 const savings: Account = { id: "acc-savings", name: "Savings", type: "saving", currency: "EUR", openingBalance: 0 };
 const investing: Account = { id: "acc-investing", name: "Investing", type: "investing", currency: "EUR", openingBalance: 0 };
+const crypto: Account = { id: "acc-crypto", name: "Crypto", type: "crypto", currency: "EUR", openingBalance: 0 };
+const credit: Account = { id: "acc-credit", name: "Credit card", type: "credit", currency: "EUR", openingBalance: 0 };
 
 const catFood: Category = { id: "cat-food", name: "Food", color: "#000", icon: "utensils", aliases: [] };
 const catIncome: Category = { id: "cat-income", name: "Income", color: "#000", icon: "coins", aliases: [] };
@@ -43,7 +51,7 @@ function tx(partial: Partial<Transaction> & Pick<Transaction, "date" | "accountI
 
 function store(overrides: Partial<KpiStore> = {}): KpiStore {
 	return {
-		accounts: [checking, savings, investing],
+		accounts: [checking, savings, investing, crypto],
 		categories: [catFood, catIncome, catTransfers, catCashAtm],
 		transactions: [],
 		...overrides,
@@ -207,7 +215,14 @@ describe("summarizeByYear", () => {
 		expect(y2020.netWorthEOY).toBeCloseTo(netWorth(s), 6);
 	});
 
-	it("savingsRate is clamped to [-100%, 100%] instead of blowing up when income is near zero (regression)", () => {
+	// FIN-009 contract change: savingsRate is no longer clamped to [-100%, 100%], and no longer
+	// substitutes 0 for a non-meaningful denominator — both silently stated a real, calculable-looking
+	// percentage in place of "not applicable". Income barely above zero produces a raw (huge, negative)
+	// ratio; income at or below zero produces undefined, which UI layers render as "N/A" (see
+	// formatPct). These two tests previously encoded the old, financially-wrong clamp/zero behavior;
+	// per the audit's coding-agent contract, they're updated to the correct contract rather than kept
+	// green by preserving the bug.
+	it("savingsRate is the raw, unclamped ratio when income is near zero, not clamped to -100%", () => {
 		const s = store({
 			transactions: [
 				tx({ date: "2018-01-01", accountId: checking.id, amount: 0.02, categoryId: catIncome.id }),
@@ -215,15 +230,17 @@ describe("summarizeByYear", () => {
 			],
 		});
 		const [year] = summarizeByYear(s);
-		expect(year.savingsRate).toBe(-1);
+		// (0.02 - 1000) / 0.02 = -49999 exactly — a real number a caller may choose to clamp for display,
+		// but not one this function should misrepresent as -100%.
+		expect(year.savingsRate).toBeCloseTo(-49999, 6);
 	});
 
-	it("savingsRate is 0 when there's no income at all (not NaN/Infinity)", () => {
+	it("savingsRate is undefined when there's no income at all, not a fabricated 0", () => {
 		const s = store({
 			transactions: [tx({ date: "2024-01-01", accountId: checking.id, amount: -100, categoryId: catFood.id })],
 		});
 		const [year] = summarizeByYear(s);
-		expect(year.savingsRate).toBe(0);
+		expect(year.savingsRate).toBeUndefined();
 	});
 
 	it("scopes to a single account when accountId is given", () => {
@@ -282,6 +299,20 @@ describe("runwayMonths", () => {
 		);
 		const total = summarizeTotal(years)!;
 		expect(total.runwayMonths).toBe(years.at(-1)!.runwayMonths);
+	});
+
+	it("does not divide by 12 for a year a range filter clips to fewer months (FIN-010)", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: 1000, categoryId: catIncome.id }),
+				tx({ date: "2024-02-01", accountId: checking.id, amount: -300, categoryId: catFood.id }),
+			],
+		});
+		const [year] = summarizeByYear(s, undefined, { from: "2024-01-01", to: "2024-03-31" });
+		// liquid balance = 1000 - 300 = 700. The range only covers 3 months, so monthly expenses =
+		// 300 / 3 = 100, not 300 / 12 = 25 — the old bug would read runway as 700/25 = 28 months instead
+		// of the correct 700/100 = 7.
+		expect(year.runwayMonths).toBeCloseTo(700 / 100, 6);
 	});
 });
 
@@ -599,6 +630,18 @@ describe("averageMonthlyExpenses", () => {
 		});
 		expect(averageMonthlyExpenses(s, [checking.id])).toBe(100);
 	});
+
+	it("counts a genuinely zero-spend month inside the tracked window in the divisor (FIN-010)", () => {
+		// Spend in January and March, nothing at all in February — the old behavior only divided by the
+		// 2 months that had a matching row, overstating the average as (100+300)/2 = 200.
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-05", accountId: checking.id, amount: -100, categoryId: catFood.id }),
+				tx({ date: "2024-03-05", accountId: checking.id, amount: -300, categoryId: catFood.id }),
+			],
+		});
+		expect(averageMonthlyExpenses(s)).toBeCloseTo((100 + 300) / 3, 6);
+	});
 });
 
 // ---------- investingHoldings ----------
@@ -639,6 +682,216 @@ describe("investingHoldings", () => {
 	});
 });
 
+// ---------- debtPrincipal (FIN-012) ----------
+
+describe("summarizeByYear — debtPrincipal", () => {
+	it("tracks a credit-card payment as debt-principal, separate from (and not folded into) income", () => {
+		const s = store({
+			accounts: [credit],
+			transactions: [
+				tx({ date: "2024-01-05", accountId: credit.id, amount: -80, categoryId: catFood.id }), // a purchase
+				tx({ date: "2024-01-20", accountId: credit.id, amount: 500 }), // a payment, uncategorized
+			],
+		});
+		const [year] = summarizeByYear(s, credit.id);
+		expect(year.income).toBe(0); // a card payment is not income to the card account
+		expect(year.debtPrincipal).toBe(500);
+		expect(year.expenses).toBe(80);
+		expect(year.savingsRate).toBeUndefined(); // no income to divide by — see savingsRateOf
+	});
+
+	it("sums debtPrincipal across years in summarizeTotal", () => {
+		const s = store({
+			accounts: [credit],
+			transactions: [
+				tx({ date: "2024-01-20", accountId: credit.id, amount: 300 }),
+				tx({ date: "2025-01-20", accountId: credit.id, amount: 200 }),
+			],
+		});
+		const years = summarizeByYear(s, credit.id);
+		const total = summarizeTotal(years)!;
+		expect(total.debtPrincipal).toBe(500);
+	});
+});
+
+// ---------- moving-average cost basis + realized P/L (FIN-001) ----------
+
+describe("moving-average cost basis on sell", () => {
+	it("removes basis at the pre-sale average unit cost, not at the sale proceeds, on a profitable sell", () => {
+		// Buy 10 @ 100 = 1000 cost basis, avg cost 100/share. Sell 4 @ 150 = 600 proceeds.
+		// Old (wrong) formula: netInvested -= proceeds (600) -> 400 basis left for 6 shares (avg 66.67 — nonsense).
+		// Correct: costRemoved = avgCost(100) * 4 = 400 -> 600 basis left for 6 shares (avg 100, unchanged).
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				tx({ date: "2024-02-01", accountId: investing.id, amount: 600, action: "sell", ticker: "VWCE", shares: 4 }),
+			],
+		});
+		const holdings = investingHoldings(s, investing.id);
+		expect(holdings).toHaveLength(1);
+		expect(holdings[0].shares).toBeCloseTo(6, 6);
+		expect(holdings[0].netInvested).toBeCloseTo(600, 6);
+		expect(holdings[0].avgCost).toBeCloseTo(100, 6);
+		// Realized gain = proceeds(600) - costRemoved(400) = 200.
+		expect(holdings[0].realizedPnL).toBeCloseTo(200, 6);
+	});
+
+	it("removes basis at the pre-sale average unit cost on a loss-making sell, and still tracks a negative realizedPnL", () => {
+		// Buy 10 @ 100 = 1000. Sell 4 @ 50 = 200 proceeds (a loss).
+		// Correct: costRemoved = 100 * 4 = 400 -> 600 basis left for 6 shares (avg still 100).
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				tx({ date: "2024-02-01", accountId: investing.id, amount: 200, action: "sell", ticker: "VWCE", shares: 4 }),
+			],
+		});
+		const holdings = investingHoldings(s, investing.id);
+		expect(holdings[0].netInvested).toBeCloseTo(600, 6);
+		expect(holdings[0].avgCost).toBeCloseTo(100, 6);
+		expect(holdings[0].realizedPnL).toBeCloseTo(-200, 6); // 200 proceeds - 400 costRemoved
+	});
+
+	it("keeps realized P/L for a fully closed position even though it's dropped from open holdings", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -100, action: "buy", ticker: "AAPL", shares: 1 }),
+				tx({ date: "2024-02-01", accountId: investing.id, amount: 120, action: "sell", ticker: "AAPL", shares: 1 }),
+			],
+		});
+		expect(investingHoldings(s, investing.id)).toHaveLength(0);
+		expect(investingRealizedPnLAsOf(s, investing.id)).toBeCloseTo(20, 6);
+	});
+
+	it("processes buys/sells in date order regardless of their order in the transactions array", () => {
+		// Sell listed BEFORE its corresponding buy in the array — store.transactions carries no ordering
+		// guarantee (import order, manual entry order), so this must sort by date internally rather than
+		// trusting array order, or the sell would see 0 pre-sale shares and compute nonsense.
+		const s = store({
+			transactions: [
+				tx({ date: "2024-02-01", accountId: investing.id, amount: 600, action: "sell", ticker: "VWCE", shares: 4 }),
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+			],
+		});
+		const holdings = investingHoldings(s, investing.id);
+		expect(holdings[0].shares).toBeCloseTo(6, 6);
+		expect(holdings[0].netInvested).toBeCloseTo(600, 6);
+		expect(holdings[0].realizedPnL).toBeCloseTo(200, 6);
+	});
+
+	it("sums realized P/L across a mix of open and closed tickers", () => {
+		const s = store({
+			transactions: [
+				// AAPL: fully closed at a 20 gain.
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -100, action: "buy", ticker: "AAPL", shares: 1 }),
+				tx({ date: "2024-02-01", accountId: investing.id, amount: 120, action: "sell", ticker: "AAPL", shares: 1 }),
+				// VWCE: still open, no realized P/L yet.
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+			],
+		});
+		expect(investingRealizedPnLAsOf(s, investing.id)).toBeCloseTo(20, 6);
+		expect(investingOpenCostBasisAsOf(s, investing.id)).toBeCloseTo(1000, 6);
+	});
+});
+
+// ---------- snapshot-anchored investment valuation (FIN-003) ----------
+
+describe("netWorthAsOf — investing/crypto accounts without a snapshot", () => {
+	it("adds open cost basis back on top of raw cash, instead of leaving a Buy looking like money that vanished", () => {
+		// Buy 1000 worth of VWCE: raw cash-only balance would read -1000 (money left the account), but
+		// the account still holds 1000 of cost-basis value in the position.
+		const s = store({
+			transactions: [tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 })],
+		});
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(0, 6); // -1000 cash + 1000 open cost basis
+	});
+
+	it("reflects a realized gain in the raw cash balance once a position is sold, without double-counting via open cost basis", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				tx({ date: "2024-06-01", accountId: investing.id, amount: 1200, action: "sell", ticker: "VWCE", shares: 10 }),
+			],
+		});
+		// Fully sold out: open cost basis is 0, so total value is just the raw cash balance, which
+		// already includes the realized 200 gain (-1000 + 1200 = 200).
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(200, 6);
+	});
+
+	it("applies the same open-cost-basis fallback to a crypto account, not just investing", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-01-01", accountId: crypto.id, amount: -500, action: "buy", ticker: "BTC", shares: 0.01 })],
+		});
+		expect(netWorthAsOf(s, "2024-12-31", crypto.id)).toBeCloseTo(0, 6);
+	});
+
+	it("defers entirely to a recorded snapshot once one exists, ignoring the cost-basis fallback", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 })],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 5000 }],
+		});
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(5000, 6);
+	});
+
+	it("treats a Buy after the snapshot date as neutral, not as money that drains the account (regression: a prior fix only applied the cost-basis fallback when NO snapshot existed at all, so once any snapshot was recorded, post-snapshot trades went right back to draining net worth by their full cash amount)", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-07-01", accountId: investing.id, amount: -2000, action: "buy", ticker: "VWCE", shares: 20 })],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 20000 }],
+		});
+		// The buy converts cash into a security assumed worth what was paid — total value stays 20000,
+		// not 18000 (the bug: snapshot minus the buy's full raw cash amount).
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(20000, 6);
+	});
+
+	it("realizes only the gain/loss (not the full proceeds) from a Sell after the snapshot date", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-07-01", accountId: investing.id, amount: -2000, action: "buy", ticker: "VWCE", shares: 20 }),
+				tx({ date: "2024-08-01", accountId: investing.id, amount: 1200, action: "sell", ticker: "VWCE", shares: 10 }),
+			],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 20000 }],
+		});
+		// Buy is neutral (value stays 20000 through the purchase). Sell 10 @ avg cost 100 = 1000 basis
+		// removed, proceeds 1200 -> realized gain 200. Total value = 20000 + 200 = 20200, not
+		// 20000 - 2000 + 1200 = 19200 (the raw-cash-only bug) and not 20000 + 1200 (double-counting proceeds).
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(20200, 6);
+	});
+
+	it("still counts a deposit or dividend after the snapshot date as real cash movement, not as a neutral trade", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-07-01", accountId: investing.id, amount: 500, action: "dividend", ticker: "VWCE" })],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 20000 }],
+		});
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(20500, 6);
+	});
+});
+
+describe("investmentStateAsOf", () => {
+	it("reports cash, holdings, open cost basis, and realized P/L as separate, non-overlapping figures", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				tx({ date: "2024-02-01", accountId: investing.id, amount: 600, action: "sell", ticker: "VWCE", shares: 4 }),
+			],
+		});
+		const state = investmentStateAsOf(s, investing.id, "2024-12-31");
+		expect(state.cash).toBeCloseTo(-400, 6); // -1000 + 600 raw cash
+		expect(state.openCostBasis).toBeCloseTo(600, 6);
+		expect(state.realizedPnL).toBeCloseTo(200, 6);
+		expect(state.marketValue).toBeUndefined();
+		expect(state.totalValue).toBeCloseTo(200, 6); // cash(-400) + openCostBasis(600)
+	});
+
+	it("uses the snapshot as marketValue and totalValue when one exists, without adding open cost basis on top", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 })],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 1800 }],
+		});
+		const state = investmentStateAsOf(s, investing.id, "2024-12-31");
+		expect(state.marketValue).toBeCloseTo(1800, 6);
+		expect(state.totalValue).toBeCloseTo(1800, 6);
+	});
+});
+
 // ---------- investingActivityByYear ----------
 
 describe("investingActivityByYear", () => {
@@ -673,6 +926,79 @@ describe("fiProjection", () => {
 	it("returns a positive number of years when contributions alone can reach the target", () => {
 		const years = fiProjection(0, 1000, 0, 12_000);
 		expect(years).toBeCloseTo(1, 1);
+	});
+
+	it("uses the monthly rate that actually compounds to the stated annual rate, not annualReturn/12 (FIN-011)", () => {
+		// No contributions — pure compounding, so the year count is exactly log(target/start) / log(1+monthlyReturn) / 12.
+		// The true monthly rate for a 7% annual return is (1.07)^(1/12) - 1 ≈ 0.5654%, not 7%/12 ≈ 0.5833%.
+		const correctMonthlyReturn = Math.pow(1.07, 1 / 12) - 1;
+		const naiveMonthlyReturn = 0.07 / 12;
+		expect(correctMonthlyReturn).toBeLessThan(naiveMonthlyReturn); // sanity check on the two formulas
+
+		const years = fiProjection(100_000, 0, 0.07, 200_000);
+		// Reaching double the starting balance takes ln(2)/ln(1+r) months at the correct monthly rate.
+		const expectedMonths = Math.ceil(Math.log(2) / Math.log(1 + correctMonthlyReturn));
+		expect(years).toBeCloseTo(expectedMonths / 12, 6);
+		// The naive (annualReturn/12) formula would reach the target measurably sooner, since it compounds faster.
+		const naiveMonths = Math.ceil(Math.log(2) / Math.log(1 + naiveMonthlyReturn));
+		expect(naiveMonths).toBeLessThan(expectedMonths);
+	});
+});
+
+// ---------- fiExpenseBase ----------
+
+describe("fiExpenseBase", () => {
+	it("annualizes the trailing 12 complete months, including a genuinely zero-spend month in the average", () => {
+		// The window is always anchored to the real "today" (there's no injectable clock), so the
+		// fixture dates are built relative to lastCompleteMonthKey() rather than hardcoded — otherwise
+		// this test would silently start failing once "now" moves far enough past a fixed year.
+		const end = lastCompleteMonthKey();
+		const threeMonthsAgo = shiftMonthKey(end, -2);
+		const s = store({
+			transactions: [
+				tx({ date: `${threeMonthsAgo}-05`, accountId: checking.id, amount: -1200, categoryId: catFood.id }),
+				// The month in between has nothing at all — a real zero-spend month, must still count.
+				tx({ date: `${end}-05`, accountId: checking.id, amount: -1200, categoryId: catFood.id }),
+			],
+		});
+		const base = fiExpenseBase(s);
+		// Exactly 3 months of history (threeMonthsAgo, the empty month between, and end):
+		// (1200 + 0 + 1200) / 3 * 12 = 9600.
+		expect(base.annual).toBeCloseTo(9600, 6);
+		expect(base.monthsCovered).toBe(3);
+		expect(base.complete).toBe(false);
+	});
+
+	it("is 0/incomplete with no transaction history at all", () => {
+		const base = fiExpenseBase(store());
+		expect(base.annual).toBe(0);
+		expect(base.complete).toBe(false);
+	});
+
+	it("annualizes net (income - expenses) over the same window as the expense figure", () => {
+		const end = lastCompleteMonthKey();
+		const oneMonthAgo = shiftMonthKey(end, -1);
+		const s = store({
+			transactions: [
+				tx({ date: `${oneMonthAgo}-05`, accountId: checking.id, amount: 3000, categoryId: catIncome.id }),
+				tx({ date: `${oneMonthAgo}-06`, accountId: checking.id, amount: -1000, categoryId: catFood.id }),
+				tx({ date: `${end}-05`, accountId: checking.id, amount: -500, categoryId: catFood.id }),
+			],
+		});
+		const base = fiExpenseBase(s);
+		// 2 months of history: income (3000 + 0)/2*12 = 18000, expenses (1000+500)/2*12 = 9000.
+		expect(base.annual).toBeCloseTo(9000, 6);
+		expect(base.netAnnual).toBeCloseTo(18000 - 9000, 6);
+	});
+
+	it("excludes a transfer/trade/debt-principal row from both the expense and income sides", () => {
+		const end = lastCompleteMonthKey();
+		const s = store({
+			transactions: [tx({ date: `${end}-05`, accountId: checking.id, amount: 500, transferGroupId: "g1" })],
+		});
+		const base = fiExpenseBase(s);
+		expect(base.annual).toBe(0);
+		expect(base.netAnnual).toBe(0);
 	});
 });
 

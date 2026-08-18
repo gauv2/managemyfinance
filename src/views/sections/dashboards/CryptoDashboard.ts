@@ -1,4 +1,4 @@
-import { investingActivityByYear, investingHoldings, netWorth, snapshotAsOf } from "../../../kpi";
+import { investingActivityByYear, investingHoldings, investingRealizedPnLAsOf, netWorth, snapshotAsOf } from "../../../kpi";
 import type FinancePlugin from "../../../main";
 import type { Account } from "../../../types";
 import { emptyState, icon, statTile } from "../../../ui/dom";
@@ -23,6 +23,7 @@ export function renderCryptoDashboard(container: HTMLElement, plugin: FinancePlu
 	const costBasis = holdings.reduce((sum, h) => sum + h.netInvested, 0);
 	const netContributions = activity.reduce((sum, y) => sum + y.deposits - y.withdrawals, 0);
 	const value = netWorth(store, account.id);
+	const realizedPnL = investingRealizedPnLAsOf(store, account.id);
 
 	const tiles = container.createDiv({ cls: "fp-stat-grid" });
 	statTile(tiles, {
@@ -34,6 +35,15 @@ export function renderCryptoDashboard(container: HTMLElement, plugin: FinancePlu
 	});
 	statTile(tiles, { label: "Invested (at cost)", value: formatEUR(costBasis), sub: "what you paid", iconName: "download" });
 	statTile(tiles, { label: "Net contributions", value: formatEUR(netContributions), sub: "deposits − withdrawals", iconName: "arrow-left-right" });
+	if (realizedPnL !== 0) {
+		statTile(tiles, {
+			label: realizedPnL >= 0 ? "Realized gain (all-time)" : "Realized loss (all-time)",
+			value: formatEUR(Math.abs(realizedPnL)),
+			sub: "booked by sells to date, at moving-average cost",
+			iconName: realizedPnL >= 0 ? "trending-up" : "trending-down",
+			tone: realizedPnL >= 0 ? "good" : "bad",
+		});
+	}
 
 	if (snapshot && costBasis > 0) {
 		const gain = value - costBasis;
@@ -70,7 +80,9 @@ export function renderCryptoDashboard(container: HTMLElement, plugin: FinancePlu
 	} else {
 		const table = holdingsCard.createEl("table", { cls: "fp-table" });
 		const thead = table.createEl("thead").createEl("tr");
-		["Coin", "Units", "Avg. cost", "Invested"].forEach((h, i) => thead.createEl("th", { text: h, cls: i >= 1 ? "fp-table-num" : undefined }));
+		["Coin", "Units", "Avg. cost", "Invested", "Realized P/L"].forEach((h, i) =>
+			thead.createEl("th", { text: h, cls: i >= 1 ? "fp-table-num" : undefined })
+		);
 		const tbody = table.createEl("tbody");
 		holdings.forEach((h) => {
 			const tr = tbody.createEl("tr");
@@ -79,6 +91,10 @@ export function renderCryptoDashboard(container: HTMLElement, plugin: FinancePlu
 			tr.createEl("td", { text: h.shares.toFixed(8).replace(/0+$/, "").replace(/\.$/, ""), cls: "fp-table-num" });
 			tr.createEl("td", { text: formatEUR(h.avgCost), cls: "fp-table-num fp-money" });
 			tr.createEl("td", { text: formatEUR(h.netInvested), cls: "fp-table-num fp-money" });
+			tr.createEl("td", {
+				text: h.realizedPnL === 0 ? "—" : formatEUR(h.realizedPnL),
+				cls: `fp-table-num fp-money${h.realizedPnL > 0 ? " fp-delta-good" : h.realizedPnL < 0 ? " fp-delta-bad" : ""}`,
+			});
 		});
 	}
 

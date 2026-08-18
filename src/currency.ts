@@ -51,6 +51,20 @@ function rateToEur(currency: string, rates: ExchangeRates | undefined): number |
  * is the least-wrong option of the three: a missing rate means the total is off by the exchange
  * rate, whereas dropping the row means the total is off by the whole transaction — and a user who
  * has never opened the currency settings has one currency anyway, where 1:1 is exactly right.
+ *
+ * That fallback is silent at the arithmetic level by design — this function has no way to hand back
+ * "I couldn't convert this" without breaking every one of its call sites (FIN-008 in the audit spec
+ * flags exactly this as a risk). The mitigation lives one level up: any UI presenting a total built
+ * from this function should check `unconvertibleCurrencies()`/`canConvert()` against the same rows and
+ * say so when it's non-empty, the way the main dashboard and the ad-hoc report builder both do —
+ * rather than trust a summed number that may be quietly off by an exchange rate. A caller that skips
+ * that check is the actual place FIN-008 can still bite.
+ *
+ * A further-out limitation this function doesn't attempt to fix: every conversion uses the *current*
+ * rate table, including for a transaction dated years ago — a 2019 dollar balance is shown at today's
+ * rate, not 2019's. Genuinely historical, as-of-date rates would need dated rate fetching and a rate
+ * history cache, which is a real feature addition (network calls, new persisted state), not a
+ * calculation fix, and is intentionally out of scope here.
  */
 export function convert(amount: number, currency: string | undefined, fx: FxContext | undefined): number {
 	if (!isFinite(amount)) return 0;

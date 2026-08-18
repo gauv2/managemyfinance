@@ -1,5 +1,6 @@
 import { ACCOUNT_TYPE_META } from "../../constants";
-import { fiProjection, netWorth, netWorthAsOf, summarizeByYear, summarizeTotal, yearSummaryFor, YearSummary } from "../../kpi";
+import { unconvertibleCurrencies } from "../../currency";
+import { fiExpenseBase, fiProjection, netWorth, netWorthAsOf, summarizeByYear, summarizeTotal, yearSummaryFor, YearSummary } from "../../kpi";
 import type FinancePlugin from "../../main";
 import { MonthDrilldownModal } from "../../modals/MonthDrilldownModal";
 import { inRange, type DateRange } from "../../period";
@@ -78,7 +79,10 @@ function renderHistoryTable(panel: HTMLElement, plugin: FinancePlugin, years: Ye
 	metricRow(tbody, "Total expenses", years.map((y) => y.expenses), formatEUR, { heat: "invert" });
 	deltaRow(tbody, years.map((y) => y.expenses), { invert: true });
 
-	deltaRow(tbody, years.map((y) => y.expenses), { invert: true, label: "Personal inflation rate" });
+	// Named for what it actually is — the plain year-over-year change in your own recorded spending, not
+	// a real inflation measure (no basket of goods, no price-level tracking, nothing "personal" about a
+	// CPI-style index). "Personal inflation rate" claimed a rigor this number never had (FIN-013).
+	deltaRow(tbody, years.map((y) => y.expenses), { invert: true, label: "Spending change" });
 
 	metricRow(tbody, "Net savings", years.map((y) => y.net), formatEUR, { emphasize: true, heat: "normal" });
 	metricRow(tbody, "Savings rate", years.map((y) => y.savingsRate), (n) => formatPct(n), { heat: "normal" });
@@ -153,14 +157,18 @@ function renderHistoryChart(
 		panel,
 		categories,
 		[
-			{ label: "Savings rate", color: "var(--fp-chart-net)", values: years.map((y) => y.savingsRate * 100) },
+			{
+				label: "Savings rate",
+				color: "var(--fp-chart-net)",
+				values: years.map((y) => (y.savingsRate === undefined ? null : y.savingsRate * 100)),
+			},
 			{
 				label: "FI ratio",
 				color: "var(--fp-neutral)",
 				values: years.map((y) => (y.expenses > 0 ? (y.netWorthEOY / (y.expenses * fiMultiplier)) * 100 : 0)),
 			},
 			{
-				label: "Personal inflation rate",
+				label: "Spending change",
 				color: "var(--fp-chart-expenses)",
 				values: years.map((y, i) => (i === 0 || years[i - 1].expenses === 0 ? 0 : ((y.expenses - years[i - 1].expenses) / years[i - 1].expenses) * 100)),
 			},
@@ -203,12 +211,25 @@ export function renderAllAccountsDashboard(
 	const previous = comparedTo ? yearSummaryFor(allYears, comparedTo) : undefined;
 
 	// The FI number is 25× (or whatever multiple) a *year* of expenses. A week of spending × 25 is a
-	// number too, just not one worth showing, so the meter always reads a whole calendar year — the
-	// last one the period touches — and says which.
-	const fiYear = yearSummaryFor(allYears, (range?.to || "").slice(0, 4) || String(new Date().getFullYear()));
-	const fiNumber = fiYear ? fiYear.expenses * plugin.settings.fiMultiplier : 0;
+	// number too, just not one worth showing, so this is always built from a genuine annual figure.
+	// A past, closed calendar year already has a complete total to use directly; the still-in-progress
+	// current year does not, so that case falls back to the trailing 12 complete months annualized
+	// instead (FIN-011) — using that year's partial total as if it were the whole year silently
+	// understated the FI number (and, the same way, the monthly contribution rate below) every single
+	// day of the year except December 31st.
+	const todayYear = String(new Date().getFullYear());
+	const explicitYear = (range?.to || "").slice(0, 4) || todayYear;
+	const usingTrailing12 = explicitYear === todayYear;
+	const fiYear = usingTrailing12 ? undefined : yearSummaryFor(allYears, explicitYear);
+	const trailingBase = usingTrailing12 ? fiExpenseBase(store) : undefined;
+	const fiExpensesAnnual = usingTrailing12 ? (trailingBase?.annual ?? 0) : (fiYear?.expenses ?? 0);
+	const fiNumber = fiExpensesAnnual > 0 ? fiExpensesAnnual * plugin.settings.fiMultiplier : 0;
 	const fiRatio = fiNumber > 0 ? worth / fiNumber : 0;
-	const monthlyNet = fiYear ? fiYear.net / 12 : 0;
+	// The monthly contribution rate feeding the countdown, on the *same* window as the expense base
+	// above — a genuinely closed year divides its own net by 12; the trailing-12 case reuses
+	// trailingBase.netAnnual rather than a separately-windowed "this year so far" figure, so the two
+	// halves of the projection (target and pace) are never built from different observation periods.
+	const monthlyNet = usingTrailing12 ? (trailingBase?.netAnnual ?? 0) / 12 : (fiYear?.net ?? 0) / 12;
 	const yearsToFi = fiNumber > 0 ? fiProjection(worth, monthlyNet, plugin.settings.expectedReturn, fiNumber) : undefined;
 
 	// Net worth is a point-in-time figure regardless of the period filter, so "vs a year ago" still
@@ -222,6 +243,19 @@ export function renderAllAccountsDashboard(
 
 	const inPeriod = ` · ${periodLabel}`;
 	const savingsRateLabel = `Savings rate · ${periodLabel}`;
+
+	// Every figure below adds transactions across currencies at the store's configured rates; one
+	// missing rate passes that transaction through at 1:1 rather than dropping it (see currency.ts's
+	// convert()) — the least-wrong single option, but silently wrong all the same for a real
+	// multi-currency vault. Surfaced here rather than left invisible (FIN-008): net worth, income,
+	// expenses and the FI meter are the highest-traffic totals a bad rate would quietly skew.
+	const mixedCurrencies = unconvertibleCurrencies(store.transactions, store.fx);
+	if (mixedCurrencies.length > 0) {
+		container.createDiv({
+			cls: "fp-report-warning",
+			text: `Totals below include ${mixedCurrencies.join(", ")} counted at 1:1 — no exchange rate is set for ${mixedCurrencies.length === 1 ? "it" : "them"}. Set one in Settings → Currency for accurate totals.`,
+		});
+	}
 
 	const kpis = container.createDiv({ cls: "fp-kpi-grid" });
 	renderKpiCard(kpis, {
@@ -253,7 +287,9 @@ export function renderAllAccountsDashboard(
 	renderSpendingByCategoryCard(container, plugin, { scopeLabel: "All accounts", range, periodLabel });
 
 	const fiTail =
-		yearsToFi === undefined ? "" : ` · ${yearsToFi.toFixed(1)} years at current pace (${(plugin.settings.expectedReturn * 100).toFixed(0)}% return)`;
+		yearsToFi === undefined
+			? ""
+			: ` · ${yearsToFi.toFixed(1)} years at current pace (${(plugin.settings.expectedReturn * 100).toFixed(0)}% real return)`;
 	renderMeter(container, {
 		label: "Progress to financial independence",
 		value: fiRatio,
@@ -266,7 +302,14 @@ export function renderAllAccountsDashboard(
 						el.createSpan({ text: " of " });
 						el.createSpan({ cls: "fp-money", text: formatEUR(fiNumber) });
 						el.createSpan({ text: ` FI number${fiTail}` });
-						if (range && fiYear) el.createSpan({ cls: "fp-table-note", text: ` — based on ${fiYear.year}'s full year of expenses` });
+						if (fiYear) {
+							el.createSpan({ cls: "fp-table-note", text: ` — based on ${fiYear.year}'s full year of expenses` });
+						} else if (trailingBase) {
+							const basis = trailingBase.complete
+								? "the trailing 12 months"
+								: `the trailing ${trailingBase.monthsCovered} month${trailingBase.monthsCovered === 1 ? "" : "s"} (estimate — under a year of history)`;
+							el.createSpan({ cls: "fp-table-note", text: ` — based on ${basis} of expenses` });
+						}
 				  }
 				: undefined,
 	});

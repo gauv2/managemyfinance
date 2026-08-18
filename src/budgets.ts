@@ -1,5 +1,7 @@
 import { primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "./categories";
-import { categoryTotals, monthlySpendFor, primaryCategoryTotals, type KpiStore } from "./kpi";
+import { classifyTransaction } from "./finance/semantics";
+import { categoryTotals, monthlySpendFor, primaryCategoryIncomeTotals, primaryCategoryTotals, type KpiStore } from "./kpi";
+import { shiftMonthKey } from "./period";
 import type { Category, OneOffBudget } from "./types";
 
 /** "YYYY-MM" for the current calendar month — budgets are simple and monthly, no rollover. */
@@ -8,11 +10,7 @@ export function currentMonth(): string {
 	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-export function shiftMonth(month: string, delta: number): string {
-	const [y, m] = month.split("-").map(Number);
-	const d = new Date(Date.UTC(y, m - 1 + delta, 1));
-	return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
+export const shiftMonth = shiftMonthKey;
 
 /**
  * The planned budget on record for one category in one specific month — undefined if never set for
@@ -147,20 +145,26 @@ export function rolloverInto(store: KpiStore, categories: Category[], category: 
 /** Budget-vs-actual for every *primary* category that has a planned budget for this specific month —
  *  spend is rolled up across a primary and all of its secondary categories, and in "breakdown" mode
  *  the budget itself is the sum of the secondaries' own numbers (see `budgetForMonth`). Categories with
- *  rollover on are scored against budget + whatever earlier months left over (see `rolloverInto`). */
+ *  rollover on are scored against budget + whatever earlier months left over (see `rolloverInto`).
+ *
+ *  An income-kind category's "spent" comes from money actually earned into it (FIN-006) — sourcing it
+ *  from the same expense-only totals every other category uses would read a €3,000 freelance-income
+ *  target as permanently 0% met, since nothing ever counts as "spent" against an income category under
+ *  that path. */
 export function budgetStatuses(store: KpiStore, categories: Category[], month: string): CategoryBudgetStatus[] {
 	const spend = primaryCategoryTotals(store, month);
+	const income = primaryCategoryIncomeTotals(store, month);
 	return primaryCategories(categories)
 		.filter((c) => (budgetForMonth(categories, c, month) ?? 0) > 0)
 		.map((c) => {
 			const budget = budgetForMonth(categories, c, month)!;
 			const rollover = rolloverInto(store, categories, c, month);
 			const available = budget + rollover;
-			const spent = spend.get(c.id) ?? 0;
+			const isIncome = isIncomeCategory(c);
+			const spent = (isIncome ? income : spend).get(c.id) ?? 0;
 			// Divided by what's actually spendable, so a category carrying a surplus doesn't read as
 			// overspent the moment it passes this month's own line.
 			const pct = available > 0 ? spent / available : spent > 0 ? Infinity : 0;
-			const isIncome = isIncomeCategory(c);
 			return {
 				categoryId: c.id,
 				budget,
@@ -224,13 +228,14 @@ export interface AnnualBudgetStatus {
  */
 export function annualBudgetStatuses(store: KpiStore, categories: Category[], year: string): AnnualBudgetStatus[] {
 	const spend = primaryCategoryTotals(store, year);
+	const income = primaryCategoryIncomeTotals(store, year);
 	return primaryCategories(categories)
 		.filter((c) => (c.annualBudgets?.[year] ?? 0) > 0)
 		.map((c) => {
 			const budget = c.annualBudgets![year];
-			const spent = spend.get(c.id) ?? 0;
-			const pct = spent / budget;
 			const isIncome = isIncomeCategory(c);
+			const spent = (isIncome ? income : spend).get(c.id) ?? 0;
+			const pct = spent / budget;
 			return { categoryId: c.id, year, budget, spent, remaining: budget - spent, pct, tone: budgetTone(pct, isIncome), isIncome };
 		});
 }
@@ -254,6 +259,12 @@ export interface OneOffBudgetStatus {
  * Deliberately scored independently of the monthly envelopes rather than carved out of them: a
  * €3,000 holiday isn't a €3,000 overspend in Travel, it's a separate plan that happens to spend
  * through the same categories. Both readings are useful, and neither should overwrite the other.
+ *
+ * Nets refunds against the spend they returned against, and excludes transfers/trades/debt-principal
+ * via the shared classifier (FIN-007). The previous version skipped every non-negative row outright —
+ * so a store credit or a returned purchase inside the window never reduced `spent` at all, and an
+ * unrestricted pot (no `categoryIds`) had no way to exclude a transfer or investment buy landing on the
+ * same account in that window either.
  */
 export function oneOffBudgetStatus(store: KpiStore, budget: OneOffBudget, today = new Date()): OneOffBudgetStatus {
 	const wanted = budget.categoryIds && budget.categoryIds.length > 0 ? new Set(budget.categoryIds) : undefined;
@@ -261,7 +272,6 @@ export function oneOffBudgetStatus(store: KpiStore, budget: OneOffBudget, today 
 	let transactionCount = 0;
 
 	for (const tx of store.transactions) {
-		if (tx.amount >= 0) continue;
 		const date = (tx.date || "").slice(0, 10);
 		if (!date || date < budget.startDate || date > budget.endDate) continue;
 		if (wanted) {
@@ -271,7 +281,12 @@ export function oneOffBudgetStatus(store: KpiStore, budget: OneOffBudget, today 
 			const primary = resolvePrimaryId(store.categories, tx.categoryId);
 			if (!(own && wanted.has(own)) && !(primary && wanted.has(primary))) continue;
 		}
-		spent += -tx.amount;
+		const classified = classifyTransaction(store, tx);
+		// A transfer/trade/debt-principal row (affectsExpense === 0, isEconomicallyNeutral) and a
+		// straight income-kind row landing in the window both fall out here: neither is spend, and
+		// neither is a refund against spend.
+		if (classified.affectsExpense === 0) continue;
+		spent += classified.affectsExpense; // positive for an expense, negative for a net refund
 		transactionCount++;
 	}
 

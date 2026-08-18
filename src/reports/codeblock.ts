@@ -137,7 +137,7 @@ function renderSummary(body: HTMLElement, plugin: FinancePlugin, opts: BlockOpti
 	renderKpiCard(grid, { label: `Expenses ${opts.year}`, value: summary ? formatMoney(summary.expenses) : "—" });
 	renderKpiCard(grid, {
 		label: "Savings rate",
-		value: summary ? `${Math.round(summary.savingsRate * 100)}%` : "—",
+		value: summary?.savingsRate !== undefined ? `${Math.round(summary.savingsRate * 100)}%` : "—",
 		money: false,
 	});
 }

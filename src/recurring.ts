@@ -1,4 +1,5 @@
 import type { KpiStore } from "./kpi";
+import { classifyTransaction, isEconomicallyNeutral } from "./finance/semantics";
 import type { Transaction } from "./types";
 
 /**
@@ -221,46 +222,14 @@ function titleCase(raw: string): string {
 
 // ---------- transfer filtering ----------
 
-/** Same vocabulary as kpi.ts's private `isTransfer`. Duplicated rather than imported on purpose: that
- *  helper is module-private there, and a recurring "transfer" between your own accounts is a
- *  bookkeeping artefact, not a merchant relationship — a standing order into savings would otherwise
- *  be detected as a subscription. Callers that have a better classifier can inject one. */
-const TRANSFER_CATEGORY_NAMES = new Set(["transfers", "savings", "savings & transfers"]);
-const TRANSFER_ACCOUNT_MARKERS = new Set(["deposit", "withdraw", "withdrawal"]);
-
-/**
- * Id lookups for the two arrays `isTransferLike` consults, cached by array identity + length.
- *
- * This classifier runs once per transaction from `recurringSeries` and again from every insight
- * detector, and a linear `find` over categories *and* accounts inside that loop is the one hot spot in
- * detection — hundreds of thousands of comparisons on a 10k-row ledger, on every render. The map holds
- * the live objects rather than copies, so a renamed category takes effect immediately; only adding or
- * removing an entry changes the length, which is exactly what invalidates the cache. Same contract as
- * kpi.ts's transferPairCache.
- */
-const idIndexCache = new WeakMap<{ id: string }[], { length: number; byId: Map<string, { id: string }> }>();
-
-function indexById<T extends { id: string }>(items: T[]): Map<string, T> {
-	const cached = idIndexCache.get(items);
-	if (cached && cached.length === items.length) return cached.byId as Map<string, T>;
-	const byId = new Map<string, T>();
-	for (const item of items) byId.set(item.id, item);
-	idIndexCache.set(items, { length: items.length, byId });
-	return byId;
-}
-
+/** Delegates to the shared economic classifier (src/finance/semantics.ts) — this module used to keep
+ *  its own copy of the transfer vocabulary, which never learned about trades (a standing buy order
+ *  would've been detected as a subscription) or debt-principal payments. A recurring "transfer" between
+ *  the user's own accounts, a recurring trade, or a recurring debt payment is a bookkeeping artefact,
+ *  not a merchant relationship, so all three are excluded here. Callers that have a better classifier
+ *  can still inject one via RecurringOptions.isTransfer. */
 export function isTransferLike(store: KpiStore, tx: Transaction): boolean {
-	if (tx.categoryId) {
-		const cat = indexById(store.categories).get(tx.categoryId);
-		if (cat && TRANSFER_CATEGORY_NAMES.has(cat.name.trim().toLowerCase())) return true;
-	}
-	const account = indexById(store.accounts).get(tx.accountId);
-	if (account && (account.type === "saving" || account.type === "investing")) {
-		const action = (tx.action ?? "").trim().toLowerCase();
-		const type = (tx.type ?? "").trim().toLowerCase();
-		if (TRANSFER_ACCOUNT_MARKERS.has(action) || TRANSFER_ACCOUNT_MARKERS.has(type)) return true;
-	}
-	return false;
+	return isEconomicallyNeutral(classifyTransaction(store, tx));
 }
 
 // ---------- series ----------

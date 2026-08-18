@@ -42,9 +42,17 @@ function monthLabel(month: string): string {
 	return index >= 0 && index < 12 ? `${MONTH_NAMES[index]} ${month.slice(0, 4)}` : month;
 }
 
-/** A number for frontmatter: plain, unformatted, two decimals — Dataview has to be able to do maths on it. */
-function numeric(n: number): string {
+/** A number for frontmatter: plain, unformatted, two decimals — Dataview has to be able to do maths on
+ *  it. Undefined (a savings rate with no meaningful denominator) writes a blank value rather than a
+ *  fabricated 0, which YAML/Dataview both read as null instead of a real reading of zero. */
+function numeric(n: number | undefined): string {
+	if (n === undefined) return "";
 	return (Math.round(n * 100) / 100).toFixed(2);
+}
+
+/** A percentage for a markdown table cell — "N/A" for undefined instead of a fabricated 0%. */
+function pct(n: number | undefined): string {
+	return n === undefined ? "N/A" : `${Math.round(n * 100)}%`;
 }
 
 function money(n: number, currency: string): string {
@@ -115,7 +123,7 @@ export function buildMonthlyReport(ctx: ReportContext, month: string): string {
 				["Income", money(summary.income, currency)],
 				["Expenses", money(summary.expenses, currency)],
 				["Net", money(summary.net, currency)],
-				["Savings rate", `${Math.round(summary.savingsRate * 100)}%`],
+				["Savings rate", pct(summary.savingsRate)],
 				["Net worth (today)", money(netWorth(ctx.store), currency)],
 			]
 		)
@@ -143,7 +151,7 @@ export function buildMonthlyReport(ctx: ReportContext, month: string): string {
 }
 
 function yearRow(y: YearSummary, currency: string): string[] {
-	return [y.year, money(y.income, currency), money(y.expenses, currency), money(y.net, currency), `${Math.round(y.savingsRate * 100)}%`, money(y.netWorthEOY, currency)];
+	return [y.year, money(y.income, currency), money(y.expenses, currency), money(y.net, currency), pct(y.savingsRate), money(y.netWorthEOY, currency)];
 }
 
 /**
@@ -166,7 +174,7 @@ export function buildYearlyReport(ctx: ReportContext, year: string): string {
 			["income", numeric(summary?.income ?? 0)],
 			["expenses", numeric(summary?.expenses ?? 0)],
 			["net", numeric(summary?.net ?? 0)],
-			["savings_rate", numeric(summary?.savingsRate ?? 0)],
+			["savings_rate", numeric(summary?.savingsRate)],
 			["net_worth_eoy", numeric(summary?.netWorthEOY ?? netWorth(ctx.store))],
 			["generated", ctx.generatedAt ?? ""],
 			...(ctx.portfolioName ? ([["portfolio", ctx.portfolioName]] as [string, string][]) : []),
@@ -180,7 +188,7 @@ export function buildYearlyReport(ctx: ReportContext, year: string): string {
 	out.push(
 		table(
 			["Month", "Income", "Expenses", "Net", "Savings rate"],
-			months.map((m, i) => [MONTH_NAMES[i], money(m.income, currency), money(m.expenses, currency), money(m.net, currency), `${Math.round(m.savingsRate * 100)}%`])
+			months.map((m, i) => [MONTH_NAMES[i], money(m.income, currency), money(m.expenses, currency), money(m.net, currency), pct(m.savingsRate)])
 		)
 	);
 

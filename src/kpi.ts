@@ -1,6 +1,7 @@
 import { descendantIds, resolvePrimaryId } from "./categories";
 import { convert, type FxContext } from "./currency";
-import { inRange, transactionYears, type DateRange } from "./period";
+import { classifyTransaction, isEconomicallyNeutral, type ClassifiedTransaction } from "./finance/semantics";
+import { inRange, lastCompleteMonthKey, monthKeysBetween, monthsInRange, shiftMonthKey, transactionYears, type DateRange } from "./period";
 import { isLiabilityType, isLiquidType, type Account, type BalanceSnapshot, type Category, type Transaction } from "./types";
 
 /**
@@ -38,9 +39,15 @@ export interface YearSummary {
 	income: number;
 	expenses: number;
 	net: number;
-	savingsRate: number;
+	/** (income − expenses) / income, or undefined when income isn't positive — see savingsRateOf. */
+	savingsRate: number | undefined;
 	netWorthEOY: number;
 	passiveIncome: number;
+	/** Debt-principal payments this year — a credit/loan/mortgage account being paid down. Economically
+	 *  neutral (a balance-sheet movement, not spending or income), so it's tracked separately rather than
+	 *  folded into `income`: a card's "Paid off" figure reads from this, not from `income`, which is
+	 *  correctly ~0 for a credit account most years (FIN-012). */
+	debtPrincipal: number;
 	/** Months this year's liquid (debit/savings/cash) balance at year-end would have covered, at that
 	 *  year's own monthly spend, if income stopped entirely — a personal financial runway. 0 when the
 	 *  year had no recorded expenses to divide by. */
@@ -60,105 +67,50 @@ function inPeriod(date: string | undefined, period: string | DateRange | undefin
 	return inRange(date, period);
 }
 
-/** Moving your own money between your own accounts (e.g. checking → savings) is neither income nor expense.
- *  "Savings & Transfers" is this app's older category name, kept for backward compatibility.
- *  Matching is case-insensitive/trimmed since imported or hand-typed category names can vary in casing. */
-const TRANSFER_CATEGORY_NAMES = new Set(["transfers", "savings", "savings & transfers"]);
-/** Trade Republic (and any importer using the same vocabulary) tags cash moved into/out of a brokerage,
- *  as opposed to an actual trade, with these `action` values — see investingActivityByYear, which already
- *  treats them separately from buy/sell/dividend activity. ING's own export uses the same concept but puts
- *  it in the `type` field instead ("Withdrawal"/"Deposit"), and its category auto-mapping isn't reliable for
- *  these rows (e.g. a savings withdrawal can land in "Cash/ATM" instead of "Transfers") — checking both
- *  fields against this vocabulary catches the transfer regardless of which importer or category it got. */
-const TRANSFER_ACCOUNT_MARKERS = new Set(["deposit", "withdraw", "withdrawal"]);
 /**
- * Buying a share isn't an expense — it's cash exchanged for an asset of equal value, so net worth is
- * unchanged at the moment of the trade. Selling one back isn't income for the same reason: it's the
- * same asset exchanged back for cash. (What *would* be a real gain or loss — the difference between
- * what a position cost and what it sold for — isn't computed here; that needs cost-basis/lot tracking
- * this app doesn't do yet. Treating both legs as transfers is the honest state short of that: it stops
- * overstating both expenses and income by the full trade amount, rather than getting the direction of
- * the error right for buys and wrong for sells.) Only ever meaningful for investing accounts.
- */
-const TRADE_ACTION_MARKERS = new Set(["buy", "sell"]);
-/**
- * A transaction is a transfer if its two legs have been linked to each other (`transferGroupId` — the
- * only signal that's actually *knowable* rather than inferred, see src/transfers.ts), if it's
- * explicitly categorized as one, if it's cash moving into/out of a savings or investing account per its
- * own `action`/`type` (see TRANSFER_ACCOUNT_MARKERS), or if it's a trade inside an investing account
- * (see TRADE_ACTION_MARKERS) — a swap between cash and securities, not spending or earning.
- *
- * The linked case is checked first and on purpose: matching the two halves of a movement is the thing
- * that lets a transfer between two everyday (debit/credit/cash) accounts be recognized at all. The
- * category and broker-marker heuristics below remain for the many rows whose sibling leg was never
- * imported — a transfer to an account this vault doesn't track has only one half to go on.
+ * Whether a transaction should be excluded from income/expense entirely — a transfer between the
+ * user's own accounts, a trade (cash exchanged for a security of equal value), or a debt-principal
+ * movement (paying down what's owed). Delegates to the shared economic classifier — see
+ * src/finance/semantics.ts, which is the one place this decision is made; kpi.ts used to keep its own
+ * copy of the transfer/trade marker sets, which is exactly the drift the classifier exists to end.
  */
 export function isTransfer(store: KpiStore, tx: Transaction): boolean {
-	if (tx.transferGroupId) return true;
-	if (tx.categoryId) {
-		// Resolve through a secondary category to its primary first, so e.g. a "Savings Transfer"
-		// secondary nested under "Transfers" is still recognized as a transfer.
-		const primaryId = resolvePrimaryId(store.categories, tx.categoryId);
-		const cat = store.categories.find((c) => c.id === primaryId);
-		if (cat && TRANSFER_CATEGORY_NAMES.has(cat.name.trim().toLowerCase())) return true;
+	return isEconomicallyNeutral(classifyTransaction(store, tx));
+}
+
+/**
+ * (income − expenses) / income — undefined when income isn't positive, rather than a clamped or
+ * zeroed number (FIN-009).
+ *
+ * A period with next-to-no recorded income (a year where only a few cents of interest were ever
+ * categorized as income) used to make this clamp to -100%, and a period with literally zero income
+ * used to read as a flat 0% — both of which state a real, calculable percentage that happens to look
+ * tame, when the honest answer is that the ratio isn't meaningful at all (dividing by ~€0 or by €0).
+ * Silently substituting a presentable number for "not applicable" is exactly the kind of financial
+ * inconsistency this pass exists to remove; a caller that wants a chart with no gaps decides that for
+ * itself at render time; this function's job is only to say what's true. Callers show "N/A" for
+ * undefined — see formatPct.
+ */
+function savingsRateOf(income: number, expenses: number): number | undefined {
+	if (income <= 0) return undefined;
+	return (income - expenses) / income;
+}
+
+/** Applies one classified transaction's economic effect to an income/expense/passiveIncome bucket, in
+ *  the store's base currency — the one place summarizeByYear and summarizeByMonth agree on how a
+ *  classified row turns into a number, so the same transaction can never be read two different ways by
+ *  the two loops that walk it. */
+function applyClassified(
+	bucket: { income: number; expenses: number; passiveIncome: number },
+	classified: ClassifiedTransaction,
+	amountBase: number
+): void {
+	if (classified.affectsIncome > 0) {
+		bucket.income += amountBase;
+		if (classified.kind === "dividend" || classified.kind === "interest-income") bucket.passiveIncome += amountBase;
+	} else if (classified.affectsExpense !== 0) {
+		bucket.expenses += -amountBase;
 	}
-	const account = store.accounts.find((a) => a.id === tx.accountId);
-	if (account && (account.type === "saving" || account.type === "investing")) {
-		const action = (tx.action ?? "").trim().toLowerCase();
-		const type = (tx.type ?? "").trim().toLowerCase();
-		if (TRANSFER_ACCOUNT_MARKERS.has(action) || TRANSFER_ACCOUNT_MARKERS.has(type)) return true;
-		if (account.type === "investing" && TRADE_ACTION_MARKERS.has(action)) return true;
-	}
-	return false;
-}
-
-/**
- * Whether this store can tell income apart from a refund at all.
- *
- * The distinction rests entirely on `Category.kind`. A vault where nothing is flagged as income has
- * no way to know a salary from a returned purchase, so it keeps the old sign-only reading rather than
- * quietly reclassifying someone's salary as a negative expense — a silent, catastrophic change to
- * every figure they have. Flagging one category as income opts the whole vault in.
- */
-function refundsDistinguishable(store: KpiStore): boolean {
-	return store.categories.some((c) => c.kind === "income");
-}
-
-/**
- * Money coming *in* against an expense category — a returned purchase, a cancelled hotel, a duplicate
- * charge reversed.
- *
- * It is not income. Counting it as income overstates what you earned and flatters the savings rate
- * derived from it, while leaving the category it came back into showing the full original spend. A
- * refund undoes a purchase, so it belongs against that purchase.
- *
- * An uncategorized credit stays income: with nothing to net it against, guessing would be worse than
- * the status quo.
- */
-function isRefund(store: KpiStore, tx: Transaction, enabled: boolean): boolean {
-	if (!enabled || tx.amount < 0) return false;
-	const primaryId = resolvePrimaryId(store.categories, tx.categoryId);
-	if (!primaryId) return false;
-	const category = store.categories.find((c) => c.id === primaryId);
-	return !!category && category.kind !== "income";
-}
-
-/** Dividends and interest payouts, identified from the broker action/type text (e.g. Trade Republic exports). */
-function isPassiveIncome(tx: Transaction): boolean {
-	const text = `${tx.action ?? ""} ${tx.type ?? ""}`.toLowerCase();
-	return /dividend|interest/.test(text);
-}
-
-/**
- * (income - expenses) / income, clamped to [-100%, 100%]. A period with next-to-no recorded income
- * (e.g. a year where only a few cents of interest were ever categorized as income) makes the raw ratio
- * balloon toward -Infinity for perfectly ordinary expenses — mathematically "correct" but meaningless,
- * and it wrecks any chart's scale by dwarfing every other data point. Clamping keeps "way overspent
- * relative to income" visible without one sparse period distorting everything else.
- */
-function savingsRateOf(income: number, expenses: number): number {
-	if (income <= 0) return 0;
-	return Math.max(-1, Math.min(1, (income - expenses) / income));
 }
 
 /** Liquid (debit/savings/cash) accounts only, as of a date — the pool a runway figure draws from.
@@ -175,6 +127,13 @@ function runwayOf(liquid: number, monthlyExpenses: number): number {
 	return monthlyExpenses > 0 ? liquid / monthlyExpenses : 0;
 }
 
+/** Today, as "YYYY-MM-DD" in local time — matching every other "today" reading in this app (see
+ *  budgets.ts's currentMonth), not UTC, which can read a different calendar day near midnight. */
+function todayIsoLocal(): string {
+	const d = new Date();
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /**
  * When `accountId` is given, every KPI here is scoped to that one account instead of the whole store.
  *
@@ -187,11 +146,10 @@ function runwayOf(liquid: number, monthlyExpenses: number): number {
 export function summarizeByYear(store: KpiStore, accountId?: string, range?: DateRange): YearSummary[] {
 	const map = new Map<
 		string,
-		{ income: number; expenses: number; passiveIncome: number; netChange: number; transferAmount: number }
+		{ income: number; expenses: number; passiveIncome: number; debtPrincipal: number; netChange: number; transferAmount: number }
 	>();
 	/** Everything that happened before the range started, as a single opening figure. */
 	let carried = 0;
-	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
 		if (accountId && tx.accountId !== accountId) continue;
 		const year = tx.date?.slice(0, 4);
@@ -200,24 +158,17 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 			if (range?.from && tx.date! < range.from) carried += amountIn(store, tx);
 			continue;
 		}
-		if (!map.has(year)) map.set(year, { income: 0, expenses: 0, passiveIncome: 0, netChange: 0, transferAmount: 0 });
+		if (!map.has(year)) map.set(year, { income: 0, expenses: 0, passiveIncome: 0, debtPrincipal: 0, netChange: 0, transferAmount: 0 });
 		const bucket = map.get(year)!;
 		const amount = amountIn(store, tx);
 		bucket.netChange += amount;
-		if (isTransfer(store, tx)) {
+		const classified = classifyTransaction(store, tx);
+		if (isEconomicallyNeutral(classified)) {
 			bucket.transferAmount += amount;
+			if (classified.kind === "debt-principal") bucket.debtPrincipal += amount;
 			continue;
 		}
-		if (amount >= 0) {
-			// A refund reduces what that category cost rather than counting as money earned.
-			if (isRefund(store, tx, refunds)) bucket.expenses -= amount;
-			else {
-				bucket.income += amount;
-				if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
-			}
-		} else {
-			bucket.expenses += -amount;
-		}
+		applyClassified(bucket, classified, amount);
 	}
 
 	const years = Array.from(map.keys()).sort((a, b) => a.localeCompare(b));
@@ -230,13 +181,26 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 	const isPartial = (year: string): boolean =>
 		!!range && ((!!range.from && range.from > `${year}-01-01`) || (!!range.to && range.to < `${year}-12-31`));
 
+	/** How many calendar months this year's own `income`/`expenses` figures actually cover — never a
+	 *  flat 12 (FIN-010). A range filter can clip a year at either end, and the current calendar year is
+	 *  clipped at today regardless of any filter, since it hasn't finished yet; dividing a partial year's
+	 *  total by 12 understates its monthly rate and, for runway, overstates how long savings would last. */
+	const today = todayIsoLocal();
+	const monthsElapsedIn = (year: string): number => {
+		const yearStart = `${year}-01-01`;
+		const effectiveFrom = range?.from && range.from > yearStart ? range.from : yearStart;
+		const naturalEnd = closingDate(year);
+		const effectiveTo = naturalEnd < today ? naturalEnd : today;
+		return monthsInRange({ from: effectiveFrom, to: effectiveTo });
+	};
+
 	// With hand-recorded balances on file, each year's closing net worth is simply what the accounts
 	// were actually worth at that date — no walking, no inference. That's strictly better than the
 	// reconstruction below, which only exists because an untracked account's balance is otherwise a
 	// single flat number that never moves. See netWorthAsOf.
 	if (hasSnapshots(store)) {
 		return years.map((year) => {
-			const { income, expenses, passiveIncome } = map.get(year)!;
+			const { income, expenses, passiveIncome, debtPrincipal } = map.get(year)!;
 			return {
 				year,
 				income,
@@ -245,7 +209,8 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 				savingsRate: savingsRateOf(income, expenses),
 				netWorthEOY: netWorthAsOf(store, closingDate(year), accountId),
 				passiveIncome,
-				runwayMonths: runwayOf(liquidNetWorthAsOf(store, closingDate(year), accountId), expenses / 12),
+				debtPrincipal,
+				runwayMonths: runwayOf(liquidNetWorthAsOf(store, closingDate(year), accountId), expenses / monthsElapsedIn(year)),
 				partial: isPartial(year),
 			};
 		});
@@ -269,7 +234,7 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 	const useNetSavingsOnly = !accountId;
 
 	return years.map((year) => {
-		const { income, expenses, passiveIncome, netChange, transferAmount } = map.get(year)!;
+		const { income, expenses, passiveIncome, debtPrincipal, netChange, transferAmount } = map.get(year)!;
 		cumulative += useNetSavingsOnly ? income - expenses + transferAmount : netChange;
 		return {
 			year,
@@ -279,7 +244,8 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 			savingsRate: savingsRateOf(income, expenses),
 			netWorthEOY: cumulative,
 			passiveIncome,
-			runwayMonths: runwayOf(liquidNetWorthAsOf(store, closingDate(year), accountId), expenses / 12),
+			debtPrincipal,
+			runwayMonths: runwayOf(liquidNetWorthAsOf(store, closingDate(year), accountId), expenses / monthsElapsedIn(year)),
 			partial: isPartial(year),
 		};
 	});
@@ -302,6 +268,7 @@ export function summarizeTotal(years: YearSummary[]): YearSummary | undefined {
 		savingsRate: savingsRateOf(income, expenses),
 		netWorthEOY: last.netWorthEOY,
 		passiveIncome: years.reduce((sum, y) => sum + y.passiveIncome, 0),
+		debtPrincipal: years.reduce((sum, y) => sum + y.debtPrincipal, 0),
 		// A point-in-time figure like netWorthEOY, not a flow — the period's ending runway, not a sum.
 		runwayMonths: last.runwayMonths,
 		partial: years.some((y) => y.partial),
@@ -323,7 +290,7 @@ export interface MonthSummary {
 	income: number;
 	expenses: number;
 	net: number;
-	savingsRate: number;
+	savingsRate: number | undefined;
 	passiveIncome: number;
 }
 
@@ -334,24 +301,15 @@ export function summarizeByMonth(store: KpiStore, year: string, accountId?: stri
 		expenses: 0,
 		passiveIncome: 0,
 	}));
-	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
 		if (accountId && tx.accountId !== accountId) continue;
 		if (!tx.date?.startsWith(year)) continue;
 		const monthIdx = parseInt(tx.date.slice(5, 7), 10) - 1;
 		if (isNaN(monthIdx) || monthIdx < 0 || monthIdx > 11) continue;
 		const bucket = buckets[monthIdx];
-		if (isTransfer(store, tx)) continue;
-		const amount = amountIn(store, tx);
-		if (amount >= 0) {
-			if (isRefund(store, tx, refunds)) bucket.expenses -= amount;
-			else {
-				bucket.income += amount;
-				if (isPassiveIncome(tx)) bucket.passiveIncome += amount;
-			}
-		} else {
-			bucket.expenses += -amount;
-		}
+		const classified = classifyTransaction(store, tx);
+		if (isEconomicallyNeutral(classified)) continue;
+		applyClassified(bucket, classified, amountIn(store, tx));
 	}
 	return buckets.map((b, i) => ({
 		month: String(i + 1).padStart(2, "0"),
@@ -395,6 +353,29 @@ export function snapshotAsOf(store: KpiStore, accountId: string, asOf: string): 
 	return best;
 }
 
+/** One account's raw ledger balance as of a date — the anchor (a recorded snapshot if one exists on or
+ *  before `asOf`, else the opening balance) plus every transaction dated after that anchor and up to
+ *  `asOf`, converted to base currency. Pure cash-in/cash-out: for an investing/crypto account, a Buy
+ *  leaves this figure the same way any other cash outflow would, so this is the cash sitting in the
+ *  account, not the value of what it holds — see netWorthAsOf, which adds the open cost basis of
+ *  holdings back on top for exactly that reason. */
+function rawLedgerBalanceAsOf(
+	store: KpiStore,
+	account: Account,
+	asOf: string,
+	txByAccount: Map<string, Transaction[]>
+): { balance: number; snapshot: BalanceSnapshot | undefined } {
+	const snapshot = snapshotAsOf(store, account.id, asOf);
+	let balance = snapshot ? signedSnapshotBalance(store, account, snapshot) : signedOpeningBalance(store, account);
+	for (const tx of txByAccount.get(account.id) ?? []) {
+		const date = (tx.date || "").slice(0, 10);
+		if (!date || date > asOf) continue;
+		if (snapshot && date <= snapshot.date) continue;
+		balance += amountIn(store, tx);
+	}
+	return { balance, snapshot };
+}
+
 /**
  * What everything was worth on a given date, in base currency.
  *
@@ -404,6 +385,12 @@ export function snapshotAsOf(store: KpiStore, accountId: string, asOf: string): 
  * every assumption before it without discarding the activity since, which is what makes an account
  * you don't import (a pension, a house, a savings account you check twice a year) carry a real value
  * that moves over time instead of one flat number applied to every year alike.
+ *
+ * An investing/crypto account is valued differently (FIN-001/FIN-003): a Buy moves cash into a
+ * security, and a plain raw-cash sum has no way to record that the security is still worth roughly
+ * what was paid for it — the balance would silently drop by the purchase amount and never recover, and
+ * a Sell's full proceeds double-counts money already reflected in that account's value. See
+ * investingTotalValueAsOf for the anchor-plus-analytical-extrapolation this uses instead.
  */
 export function netWorthAsOf(store: KpiStore, asOf: string, accountId?: string): number {
 	const byAccount = new Map<string, Transaction[]>();
@@ -417,13 +404,10 @@ export function netWorthAsOf(store: KpiStore, asOf: string, accountId?: string):
 	let total = 0;
 	for (const account of store.accounts) {
 		if (accountId && account.id !== accountId) continue;
-		const snapshot = snapshotAsOf(store, account.id, asOf);
-		total += snapshot ? signedSnapshotBalance(store, account, snapshot) : signedOpeningBalance(store, account);
-		for (const tx of byAccount.get(account.id) ?? []) {
-			const date = (tx.date || "").slice(0, 10);
-			if (!date || date > asOf) continue;
-			if (snapshot && date <= snapshot.date) continue;
-			total += amountIn(store, tx);
+		if (HOLDS_POSITIONS_TYPES.has(account.type)) {
+			total += investingTotalValueAsOf(store, account, asOf, byAccount.get(account.id) ?? []);
+		} else {
+			total += rawLedgerBalanceAsOf(store, account, asOf, byAccount).balance;
 		}
 	}
 	return total;
@@ -489,6 +473,17 @@ export function accountBalanceParts(store: KpiStore, accountId: string, currency
 }
 
 /** Simulates monthly compounding to estimate years until `netWorthNow` reaches `target`. */
+/**
+ * Years until `netWorthNow`, compounding monthly at `annualReturn` with `monthlyContribution` added
+ * each month, reaches `target` — the FI countdown.
+ *
+ * The monthly rate is the one that actually compounds twelve times to the stated *annual* rate —
+ * `(1 + annualReturn)^(1/12) − 1` — not `annualReturn / 12` (FIN-011). The two are close for small
+ * returns but diverge as the return grows: at a 7% annual return the naive division uses a 0.5833%
+ * monthly rate, when the rate that truly compounds to 7% a year is 0.5654% — understating compounding
+ * and quietly overstating how long reaching FI takes. `annualReturn` is expected to already be a real
+ * (inflation-adjusted) rate — see the settings label this feeds from.
+ */
 export function fiProjection(
 	netWorthNow: number,
 	monthlyContribution: number,
@@ -499,7 +494,7 @@ export function fiProjection(
 	if (netWorthNow >= target) return 0;
 	if (monthlyContribution <= 0 && annualReturn <= 0) return undefined;
 
-	const monthlyReturn = annualReturn / 12;
+	const monthlyReturn = Math.pow(1 + annualReturn, 1 / 12) - 1;
 	let balance = netWorthNow;
 	for (let month = 1; month <= 12 * 60; month++) {
 		balance = balance * (1 + monthlyReturn) + monthlyContribution;
@@ -512,15 +507,14 @@ export function fiProjection(
  *  separate keys here. Use `primaryCategoryTotals` when you want secondaries rolled up into their parent. */
 export function categoryTotals(store: KpiStore, year?: string, accountId?: string): Map<string, number> {
 	const totals = new Map<string, number>();
-	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
-		// A refund nets off the category it came back into, exactly as it does in the year and month
-		// summaries — otherwise a returned purchase leaves the category showing the full original spend
-		// while the headline expense figure has already dropped, and the two views disagree.
-		if (tx.amount >= 0 && !isRefund(store, tx, refunds)) continue;
 		if (year && !tx.date?.startsWith(year)) continue;
 		if (accountId && tx.accountId !== accountId) continue;
-		if (isTransfer(store, tx)) continue;
+		// A refund nets off the category it came back into, exactly as it does in the year and month
+		// summaries — otherwise a returned purchase leaves the category showing the full original spend
+		// while the headline expense figure has already dropped, and the two views disagree. Neutral
+		// kinds (transfers, trades, debt principal) have no expense contribution and fall out here too.
+		if (classifyTransaction(store, tx).affectsExpense === 0) continue;
 		const key = tx.categoryId ?? "uncategorized";
 		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
 	}
@@ -533,14 +527,32 @@ export function categoryTotals(store: KpiStore, year?: string, accountId?: strin
  *  for the budgets that think in whole months and years, or a date range for the page period filter. */
 export function primaryCategoryTotals(store: KpiStore, period?: string | DateRange, accountId?: string): Map<string, number> {
 	const totals = new Map<string, number>();
-	const refunds = refundsDistinguishable(store);
 	for (const tx of store.transactions) {
-		if (tx.amount >= 0 && !isRefund(store, tx, refunds)) continue;
 		if (!inPeriod(tx.date, period)) continue;
 		if (accountId && tx.accountId !== accountId) continue;
-		if (isTransfer(store, tx)) continue;
+		if (classifyTransaction(store, tx).affectsExpense === 0) continue;
 		const key = resolvePrimaryId(store.categories, tx.categoryId) ?? "uncategorized";
 		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
+	}
+	return totals;
+}
+
+/**
+ * Economic income by primary category — the income-actual path FIN-006 requires: an income-kind
+ * category's "spent" must come from money actually earned into it, not from the expense-only totals
+ * above. A transaction the classifier calls investment-sell/investment-buy/internal-transfer/
+ * debt-principal never counts here even if a user mis-categorized it under an income category — the
+ * account+action evidence behind `kind` outranks the category label (see semantics.ts).
+ */
+export function primaryCategoryIncomeTotals(store: KpiStore, period?: string | DateRange, accountId?: string): Map<string, number> {
+	const totals = new Map<string, number>();
+	for (const tx of store.transactions) {
+		if (!inPeriod(tx.date, period)) continue;
+		if (accountId && tx.accountId !== accountId) continue;
+		const classified = classifyTransaction(store, tx);
+		if (classified.affectsIncome === 0) continue;
+		const key = resolvePrimaryId(store.categories, tx.categoryId) ?? "uncategorized";
+		totals.set(key, (totals.get(key) ?? 0) + amountIn(store, tx));
 	}
 	return totals;
 }
@@ -582,65 +594,300 @@ export function accountStats(store: KpiStore, accountId: string): { count: numbe
 	return { count, netWorth: netWorth(store, accountId) };
 }
 
-/** Average monthly spend across the given accounts (or every account, if omitted) — the denominator for "months of runway". */
+/**
+ * Average monthly spend across the given accounts (or every account, if omitted) — the denominator for
+ * "months of runway", the reserve target, and the FI expense base.
+ *
+ * Averaged over every complete calendar month between the ledger's earliest and latest tracked activity
+ * on these accounts — not just the months that happen to contain a qualifying expense (FIN-010). A month
+ * with genuinely zero spend is still a real data point: dropping it from the divisor overstates the
+ * average by treating "no expense rows this month" as "this month doesn't count" instead of "spent €0
+ * this month". The window never reaches past the last *complete* calendar month — the current,
+ * still-in-progress month is excluded rather than averaged in as if it had run its full course.
+ */
 export function averageMonthlyExpenses(store: KpiStore, accountIds?: string[]): number {
+	let earliestMonth: string | undefined;
+	let latestMonth: string | undefined;
 	const byMonth = new Map<string, number>();
 	for (const tx of store.transactions) {
 		if (accountIds && !accountIds.includes(tx.accountId)) continue;
-		if (tx.amount >= 0) continue;
-		if (isTransfer(store, tx)) continue;
 		const month = tx.date?.slice(0, 7);
 		if (!month) continue;
+		if (!earliestMonth || month < earliestMonth) earliestMonth = month;
+		if (!latestMonth || month > latestMonth) latestMonth = month;
+		if (tx.amount >= 0) continue;
+		if (isTransfer(store, tx)) continue;
 		byMonth.set(month, (byMonth.get(month) ?? 0) + -amountIn(store, tx));
 	}
-	const months = Array.from(byMonth.values());
+	if (!earliestMonth || !latestMonth) return 0;
+
+	const endMonth = latestMonth < lastCompleteMonthKey() ? latestMonth : lastCompleteMonthKey();
+	const months = monthKeysBetween(earliestMonth, endMonth);
 	if (months.length === 0) return 0;
-	return months.reduce((a, b) => a + b, 0) / months.length;
+	const total = months.reduce((sum, m) => sum + (byMonth.get(m) ?? 0), 0);
+	return total / months.length;
+}
+
+export interface FiExpenseBase {
+	/** Annualized expense figure — multiply by the FI multiplier to get the FI number. */
+	annual: number;
+	/** Annualized net (income − expenses) over the same window — the monthly-contribution rate a FI
+	 *  projection should compound forward, on the same trailing-12-month basis as `annual` rather than a
+	 *  different window (a mismatch that understates or overstates "current pace" relative to the FI
+	 *  number it's being compared against). */
+	netAnnual: number;
+	/** How many of the trailing 12 complete months actually have tracked history behind them. */
+	monthsCovered: number;
+	/** False once fewer than 12 complete months of history exist, so `annual` is extrapolated from a
+	 *  shorter window rather than a genuine trailing year — callers should label it as an estimate. */
+	complete: boolean;
+}
+
+/**
+ * The annualized expense figure financial-independence math should be built on (FIN-011): the trailing
+ * 12 complete calendar months of spending, or however many complete months exist if there's less than a
+ * year of history yet, annualized either way.
+ *
+ * A single calendar year's raw total used to stand in for this — correct once that year has actually
+ * run its full course, but for the current, still-in-progress year (the common case: viewing "this
+ * year" on the dashboard any month but December) it silently used a partial year's spend as if it were
+ * a whole year's, understating the FI number and making progress look further along than it really is.
+ * Zero-spend months inside the window still count in the average (FIN-010's fix, applied here too), and
+ * `complete: false` tells a caller to label the figure as an estimate rather than state it flatly.
+ */
+export function fiExpenseBase(store: KpiStore, accountIds?: string[]): FiExpenseBase {
+	let earliestMonth: string | undefined;
+	const expenseByMonth = new Map<string, number>();
+	const incomeByMonth = new Map<string, number>();
+	for (const tx of store.transactions) {
+		if (accountIds && !accountIds.includes(tx.accountId)) continue;
+		const month = tx.date?.slice(0, 7);
+		if (!month) continue;
+		if (!earliestMonth || month < earliestMonth) earliestMonth = month;
+		const classified = classifyTransaction(store, tx);
+		const amount = amountIn(store, tx);
+		// affectsExpense/affectsIncome are in the transaction's own currency (classification is
+		// currency-agnostic) — used here only as the sign/inclusion gate; the summed magnitude comes
+		// from `amount`, already converted to base currency, matching categoryTotals's same pattern.
+		if (classified.affectsExpense !== 0) expenseByMonth.set(month, (expenseByMonth.get(month) ?? 0) + -amount);
+		if (classified.affectsIncome > 0) incomeByMonth.set(month, (incomeByMonth.get(month) ?? 0) + amount);
+	}
+	if (!earliestMonth) return { annual: 0, netAnnual: 0, monthsCovered: 0, complete: false };
+
+	const end = lastCompleteMonthKey();
+	const twelveBack = shiftMonthKey(end, -11);
+	const windowStart = earliestMonth > twelveBack ? earliestMonth : twelveBack;
+	const months = monthKeysBetween(windowStart, end);
+	if (months.length === 0) return { annual: 0, netAnnual: 0, monthsCovered: 0, complete: false };
+
+	const totalExpense = months.reduce((sum, m) => sum + (expenseByMonth.get(m) ?? 0), 0);
+	const totalIncome = months.reduce((sum, m) => sum + (incomeByMonth.get(m) ?? 0), 0);
+	return {
+		annual: (totalExpense / months.length) * 12,
+		netAnnual: ((totalIncome - totalExpense) / months.length) * 12,
+		monthsCovered: months.length,
+		complete: months.length >= 12,
+	};
 }
 
 export interface Holding {
 	ticker: string;
 	assetClass?: string;
 	shares: number;
-	/** Net cash spent on the shares still held (buys minus sell proceeds) — a cost basis, not a live market value. */
+	/** Open cost basis for the shares still held — moving-average accounting: a buy adds its cash cost,
+	 *  a sell removes cost proportional to the pre-sale average unit cost. Not a live market value. */
 	netInvested: number;
 	avgCost: number;
+	/** Realized profit/loss this ticker has booked to date — proceeds from every sell minus the cost
+	 *  removed at that sell's pre-sale average unit cost. Distinct from netInvested, which only ever
+	 *  reflects what's still open; summing the two across a full sell-out reproduces total cash return. */
+	realizedPnL: number;
+}
+
+interface InvestmentBucket {
+	shares: number;
+	costBasis: number;
+	assetClass?: string;
+	realizedPnL: number;
 }
 
 /**
- * Current holdings inferred purely from Buy/Sell activity — there's no market-price feed here, so this is
- * cost-basis accounting (what you put in), not portfolio valuation (what it's worth today).
+ * Per-ticker Buy/Sell activity for one account, as of a date, using moving-average cost-basis
+ * accounting — the analytical (not tax) basis: a buy adds its cash cost to the ticker's basis in
+ * proportion to shares bought; a sell removes basis proportional to the *pre-sale average unit cost*,
+ * never to the sale proceeds. Removing basis at the proceeds price (the previous behavior) let a
+ * profitable sell erase more cost than was ever paid, and a loss-making sell leave phantom cost behind
+ * — silently fabricating or hiding gains. Returns every ticker ever traded, including fully closed ones,
+ * because a closed position's realized P/L still belongs in the account-level total.
  */
-export function investingHoldings(store: KpiStore, accountId: string): Holding[] {
-	const byTicker = new Map<string, { shares: number; net: number; assetClass?: string }>();
-	for (const tx of store.transactions) {
-		if (tx.accountId !== accountId) continue;
-		if (!tx.ticker || tx.ticker === "CASH") continue;
+function investmentBucketsAsOf(store: KpiStore, accountId: string, asOf: string): Map<string, InvestmentBucket> {
+	// Moving-average accounting depends on processing each ticker's buys/sells in chronological order —
+	// a sell's pre-sale average cost is only meaningful relative to the buys that actually preceded it.
+	// store.transactions carries no ordering guarantee (import order, manual entry order, whatever a
+	// provider happened to hand back), so this sorts a filtered copy rather than trusting array order.
+	const relevant = store.transactions.filter((tx) => {
+		if (tx.accountId !== accountId) return false;
+		if (!tx.ticker || tx.ticker === "CASH") return false;
+		const date = (tx.date || "").slice(0, 10);
+		if (!date || date > asOf) return false;
 		const action = (tx.action ?? "").toLowerCase();
-		if (action !== "buy" && action !== "sell") continue;
-		const bucket = byTicker.get(tx.ticker) ?? { shares: 0, net: 0, assetClass: tx.assetClass };
+		return action === "buy" || action === "sell";
+	});
+	relevant.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+	const byTicker = new Map<string, InvestmentBucket>();
+	for (const tx of relevant) {
+		const ticker = tx.ticker as string;
+		const action = (tx.action ?? "").toLowerCase();
+		const bucket = byTicker.get(ticker) ?? { shares: 0, costBasis: 0, assetClass: tx.assetClass, realizedPnL: 0 };
 		const shares = tx.shares ?? 0;
 		const cash = Math.abs(amountIn(store, tx));
 		if (action === "buy") {
 			bucket.shares += shares;
-			bucket.net += cash;
+			bucket.costBasis += cash;
 		} else {
-			bucket.shares -= shares;
-			bucket.net -= cash;
+			const preSaleShares = bucket.shares;
+			const avgCost = preSaleShares > 1e-9 ? bucket.costBasis / preSaleShares : 0;
+			const soldShares = Math.min(shares, preSaleShares);
+			const costRemoved = avgCost * soldShares;
+			bucket.realizedPnL += cash - costRemoved;
+			bucket.shares -= soldShares;
+			bucket.costBasis -= costRemoved;
 		}
 		if (tx.assetClass) bucket.assetClass = tx.assetClass;
-		byTicker.set(tx.ticker, bucket);
+		byTicker.set(ticker, bucket);
 	}
+	return byTicker;
+}
+
+/**
+ * Current holdings inferred purely from Buy/Sell activity — there's no market-price feed here, so this is
+ * cost-basis accounting (what you put in), not portfolio valuation (what it's worth today). Only open
+ * positions are returned; see `investingRealizedPnLAsOf` for the P/L booked by everything already sold.
+ */
+export function investingHoldings(store: KpiStore, accountId: string, asOf = "9999-12-31"): Holding[] {
+	const byTicker = investmentBucketsAsOf(store, accountId, asOf);
 	return Array.from(byTicker.entries())
 		.filter(([, b]) => b.shares > 1e-6)
 		.map(([ticker, b]) => ({
 			ticker,
 			assetClass: b.assetClass,
 			shares: b.shares,
-			netInvested: b.net,
-			avgCost: b.shares > 0 ? b.net / b.shares : 0,
+			netInvested: b.costBasis,
+			avgCost: b.shares > 0 ? b.costBasis / b.shares : 0,
+			realizedPnL: b.realizedPnL,
 		}))
 		.sort((a, b) => b.netInvested - a.netInvested);
+}
+
+/** Total realized profit/loss for an account, as of a date — every ticker ever traded, open or closed. */
+export function investingRealizedPnLAsOf(store: KpiStore, accountId: string, asOf = "9999-12-31"): number {
+	let total = 0;
+	for (const b of investmentBucketsAsOf(store, accountId, asOf).values()) total += b.realizedPnL;
+	return total;
+}
+
+/** Sum of open cost basis across every currently-held ticker in an account, as of a date — the
+ *  "what you'd still have to have bought back" figure that stands in for market value absent a price
+ *  feed. See `investingTotalValueAsOf`. */
+export function investingOpenCostBasisAsOf(store: KpiStore, accountId: string, asOf = "9999-12-31"): number {
+	return investingHoldings(store, accountId, asOf).reduce((sum, h) => sum + h.netInvested, 0);
+}
+
+/** Account types that hold priced positions rather than plain cash — see TRADE_ACCOUNT_TYPES in
+ *  src/finance/semantics.ts, which this mirrors; kept local since kpi.ts only needs the type check, not
+ *  the full classifier. */
+const HOLDS_POSITIONS_TYPES = new Set(["investing", "crypto"]);
+
+/** Whether a transaction is a trade (Buy/Sell) inside an account that holds priced positions — the one
+ *  kind of cash movement whose effect on total account value is handled analytically (cost basis +
+ *  realized P/L) rather than by its raw cash amount. See investingTotalValueAsOf. */
+function isTrade(tx: Transaction, account: Account): boolean {
+	if (!HOLDS_POSITIONS_TYPES.has(account.type)) return false;
+	const action = (tx.action ?? "").toLowerCase();
+	return action === "buy" || action === "sell";
+}
+
+/**
+ * Total value of an investing/crypto account as of a date: an anchor (a recorded snapshot on or before
+ * `asOf` if one exists, else the opening balance) plus every non-trade cash movement since that anchor
+ * (deposits, withdrawals, dividends, fees — real money crossing the account boundary) plus the realized
+ * P/L booked by every sell since the anchor.
+ *
+ * A Buy is deliberately left out of the sum: converting cash into a security assumed worth what was
+ * paid changes nothing about total value. A Sell's raw proceeds are left out too, in favor of just the
+ * realized gain/loss — the "return of capital" portion of those proceeds is already accounted for,
+ * either as open cost basis (no-snapshot case) or as part of the snapshot's own observed value
+ * (with-snapshot case). Both cases resolve to the same formula here because, for any window [D1, D2],
+ * (raw trade cash in that window) + (open-cost-basis change in that window) always equals exactly (the
+ * realized P/L booked in that window) — cost basis and realized P/L are two views of the same buy/sell
+ * ledger, so the raw-cash identity holds regardless of what the anchor itself represents. That's what
+ * makes "extrapolate forward from the anchor using this same rule" valid whether the anchor is a
+ * snapshot mid-history or the account's opening balance at the very start — see the worked proof and
+ * fixtures in kpi.test.ts's "netWorthAsOf — investing/crypto accounts" suite.
+ *
+ * A prior version of this fallback only applied when no snapshot existed at all, and once a snapshot
+ * was recorded, every trade *after* it went back to draining the account by its full raw cash amount —
+ * silently reproducing the exact bug this function exists to fix, just gated behind "have you ever
+ * recorded a balance". This version applies uniformly regardless of snapshot history.
+ */
+function investingTotalValueAsOf(store: KpiStore, account: Account, asOf: string, txs: Transaction[]): number {
+	const snapshot = snapshotAsOf(store, account.id, asOf);
+	const anchor = snapshot ? signedSnapshotBalance(store, account, snapshot) : signedOpeningBalance(store, account);
+	const anchorDate = snapshot ? snapshot.date : "0000-01-01";
+
+	let nonTradeCash = 0;
+	for (const tx of txs) {
+		const date = (tx.date || "").slice(0, 10);
+		if (!date || date > asOf || date <= anchorDate) continue;
+		if (isTrade(tx, account)) continue;
+		nonTradeCash += amountIn(store, tx);
+	}
+
+	const realizedPnLWindow = investingRealizedPnLAsOf(store, account.id, asOf) - investingRealizedPnLAsOf(store, account.id, anchorDate);
+	return anchor + nonTradeCash + realizedPnLWindow;
+}
+
+export interface InvestmentState {
+	/** Cash sitting in the account, in base currency — the account's raw ledger sum, which already nets
+	 *  every deposit, withdrawal, dividend, fee, buy, and sell in cash terms. */
+	cash: number;
+	holdings: Holding[];
+	/** Sum of open cost basis across current holdings — see investingOpenCostBasisAsOf. */
+	openCostBasis: number;
+	/** Realized P/L across every ticker ever traded in this account, open or closed. */
+	realizedPnL: number;
+	/** The account's most recent recorded balance, when one exists — the literal last observation, not
+	 *  extrapolated forward. See `totalValue` for the figure that accounts for activity since then. */
+	marketValue?: number;
+	/** The resolved total value as of the requested date — see investingTotalValueAsOf. */
+	totalValue: number;
+}
+
+/** The full investment picture for one account, as of a date — cash, holdings, open cost basis, and
+ *  realized P/L, plus the resolved total value. `cash` is the raw ledger balance (see
+ *  rawLedgerBalanceAsOf) — deliberately not `totalValue`, which values trades analytically instead of
+ *  at raw cash; reusing `cash` as the total would double-count in exactly the way netWorthAsOf's
+ *  docstring warns against. */
+export function investmentStateAsOf(store: KpiStore, accountId: string, asOf: string): InvestmentState {
+	const holdings = investingHoldings(store, accountId, asOf);
+	const openCostBasis = holdings.reduce((sum, h) => sum + h.netInvested, 0);
+	const realizedPnL = investingRealizedPnLAsOf(store, accountId, asOf);
+	const account = store.accounts.find((a) => a.id === accountId);
+	if (!account) return { cash: 0, holdings, openCostBasis, realizedPnL, totalValue: openCostBasis };
+
+	const txs = store.transactions.filter((t) => t.accountId === accountId);
+	const txByAccount = new Map<string, Transaction[]>([[accountId, txs]]);
+	const { balance: cash, snapshot } = rawLedgerBalanceAsOf(store, account, asOf, txByAccount);
+	const marketValue = snapshot ? signedSnapshotBalance(store, account, snapshot) : undefined;
+	return {
+		cash,
+		holdings,
+		openCostBasis,
+		realizedPnL,
+		marketValue,
+		totalValue: investingTotalValueAsOf(store, account, asOf, txs),
+	};
 }
 
 export interface InvestingYearActivity {

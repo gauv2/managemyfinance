@@ -8,7 +8,7 @@ import type { Transaction } from "./types";
  * Why this has to exist: a checking → savings move arrives as two independent rows from two separate
  * exports — a debit in one account and a credit in the other. Nothing in a bank export says they are
  * the same event. Summed naively, that one movement inflates income *and* expenses, which then
- * corrupts savings rate, personal inflation, the FI ratio and every year-over-year delta built on
+ * corrupts savings rate, spending change, the FI ratio and every year-over-year delta built on
  * them. Categorizing rows as "Transfers" catches some of it, but only when you remember to, and a
  * transfer between two everyday accounts usually looks like an ordinary payment.
  *

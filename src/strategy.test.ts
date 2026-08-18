@@ -79,6 +79,32 @@ describe("reserveStatus", () => {
 		const status = reserveStatus(s, { bufferTarget: 0, incomeLossMonths: 2 });
 		expect(status.incomeLossTarget).toBe(800); // 400/mo overall average × 2
 	});
+
+	it("excludes a transfer into an essential-flagged category from the average", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-05", accountId: checking.id, amount: -600, categoryId: catFood.id }),
+				// A transfer tagged (mistakenly, or via a linked pair) with the essential category — must
+				// not count as essential spend.
+				tx({ date: "2024-01-10", accountId: checking.id, amount: -400, categoryId: catFood.id, transferGroupId: "g1" }),
+			],
+		});
+		const status = reserveStatus(s, { bufferTarget: 0, incomeLossMonths: 1 });
+		expect(status.incomeLossTarget).toBeCloseTo(600, 6);
+	});
+
+	it("counts a zero-essential-spend month inside the tracked window in the average (FIN-010)", () => {
+		// Essential spend in January and March, nothing in February — the divisor must be 3 months, not
+		// the 2 months that happen to have an essential transaction.
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-05", accountId: checking.id, amount: -600, categoryId: catFood.id }),
+				tx({ date: "2024-03-05", accountId: checking.id, amount: -300, categoryId: catFood.id }),
+			],
+		});
+		const status = reserveStatus(s, { bufferTarget: 0, incomeLossMonths: 1 });
+		expect(status.incomeLossTarget).toBeCloseTo((600 + 300) / 3, 6);
+	});
 });
 
 // ---------- debtByAccount / orderDebtPayoff ----------

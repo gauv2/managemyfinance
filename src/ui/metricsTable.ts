@@ -4,7 +4,10 @@ export function formatEUR(n: number): string {
 	return formatMoneyRounded(n);
 }
 
-export function formatPct(n: number, digits = 0): string {
+/** "N/A" for undefined (a savings rate with no meaningful denominator — see kpi.ts's savingsRateOf)
+ *  rather than a number pretending to be one. */
+export function formatPct(n: number | undefined, digits = 0): string {
+	if (n === undefined) return "N/A";
 	return `${n * 100 >= 0 ? "+" : ""}${(n * 100).toFixed(digits)}%`;
 }
 
@@ -32,22 +35,32 @@ export function heatColor(t: number, invert: boolean): string {
  * relative to the other years in the same row (Excel color-scale conditional formatting), so the current year's
  * cell reads at a glance against its own history. `invert` flips the scale for metrics where lower is better.
  */
-export function metricRow(
+/**
+ * A metric row: one value per year/month, rendered via `format`. Generic over T so the ordinary case
+ * (a `number[]` with a plain formatter like `formatEUR`) keeps working exactly as before, while a row
+ * whose figure isn't always meaningful — a savings rate with no income to divide by — can pass a
+ * `(number | undefined)[]` with `formatPct` and render "N/A" for the gaps instead of a caller having to
+ * fake a 0 to satisfy the type.
+ */
+export function metricRow<T extends number | undefined>(
 	tbody: HTMLTableSectionElement,
 	label: string,
-	values: number[],
-	format: (n: number) => string,
+	values: T[],
+	format: (n: T) => string,
 	opts?: { emphasize?: boolean; heat?: "normal" | "invert" }
 ): void {
 	const tr = tbody.createEl("tr", { cls: opts?.emphasize ? "fp-table-row-emphasis" : undefined });
 	tr.createEl("td", { text: label });
-	const min = Math.min(...values);
-	const max = Math.max(...values);
-	const money = format === formatEUR;
+	// Undefined cells (no meaningful figure) sit out of the row's own min/max, so one N/A month doesn't
+	// collapse the heat scale for every other month.
+	const defined = values.filter((v): v is number & T => v !== undefined);
+	const min = Math.min(...defined);
+	const max = Math.max(...defined);
+	const money = (format as unknown) === formatEUR;
 	values.forEach((v) => {
 		const cell = tr.createEl("td", { text: format(v), cls: "fp-table-num" + (money ? " fp-money" : "") });
-		if (opts?.heat && max > min && v !== 0) {
-			const t = (v - min) / (max - min);
+		if (opts?.heat && v !== undefined && max > min && v !== 0) {
+			const t = ((v as number) - min) / (max - min);
 			cell.style.backgroundColor = heatColor(t, opts.heat === "invert");
 		}
 	});

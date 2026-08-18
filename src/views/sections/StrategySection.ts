@@ -150,10 +150,15 @@ export function renderStrategySection(container: HTMLElement, plugin: FinancePlu
 		const savingsGrid = savingsCard.createDiv({ cls: "fp-stat-grid" });
 		statTile(savingsGrid, {
 			label: "Actual, this year",
-			value: formatPct(actualYear?.savingsRate ?? 0),
+			value: formatPct(actualYear?.savingsRate),
 			iconName: "trending-up",
 			money: false,
-			tone: (actualYear?.savingsRate ?? 0) * 100 >= strategy.savingsPolicy.targetSavingsRatePct ? "good" : "warn",
+			tone:
+				actualYear?.savingsRate === undefined
+					? "neutral"
+					: actualYear.savingsRate * 100 >= strategy.savingsPolicy.targetSavingsRatePct
+						? "good"
+						: "warn",
 		});
 		statTile(savingsGrid, {
 			label: "Target",

@@ -26,7 +26,14 @@ export function renderCheckingDashboard(container: HTMLElement, plugin: FinanceP
 		label: `Savings rate (${scopeWord})`,
 		value: currentYear ? formatPct(currentYear.savingsRate) : "—",
 		iconName: "piggy-bank",
-		tone: !currentYear ? "neutral" : currentYear.savingsRate >= 0.4 ? "good" : currentYear.savingsRate >= 0.15 ? "warn" : "bad",
+		tone:
+			currentYear?.savingsRate === undefined
+				? "neutral"
+				: currentYear.savingsRate >= 0.4
+					? "good"
+					: currentYear.savingsRate >= 0.15
+						? "warn"
+						: "bad",
 		money: false,
 	});
 	statTile(tiles, {

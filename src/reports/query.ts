@@ -1,5 +1,6 @@
 import { categoryChain, descendantIds } from "../categories";
 import { baseCurrencyOf, convert, unconvertibleCurrencies, type FxContext } from "../currency";
+import { classifyTransaction, isEconomicallyNeutral, type ClassifyStore } from "../finance/semantics";
 import { merchantKey, merchantLabel } from "../import/merchantKey";
 import type { Account, Category, Transaction } from "../types";
 
@@ -34,7 +35,9 @@ export interface ReportQuery {
 	search?: string;
 	/** "out" is money spent, "in" is money received. */
 	direction?: "all" | "out" | "in";
-	/** Transfers between your own accounts aren't spending; excluded unless asked for. */
+	/** Transfers between your own accounts, trades (a buy/sell of equal cash and security value), and
+	 *  debt-principal payments aren't spending; excluded unless asked for. Named for the most familiar
+	 *  case, but gates all three — see classifyTransaction in ../finance/semantics. */
 	includeTransfers?: boolean;
 }
 
@@ -90,7 +93,12 @@ export function expandCategoryIds(categories: Category[], chosen: string[] | und
 }
 
 /** Whether one transaction belongs in the slice. Exported so a UI can count without building a result. */
-export function matchesQuery(tx: Transaction, query: ReportQuery, categoryIds: Set<string> | undefined): boolean {
+export function matchesQuery(
+	tx: Transaction,
+	query: ReportQuery,
+	categoryIds: Set<string> | undefined,
+	store: ClassifyStore
+): boolean {
 	if (query.from && tx.date < query.from) return false;
 	if (query.to && tx.date > query.to) return false;
 	if (query.accountIds && query.accountIds.length > 0 && !query.accountIds.includes(tx.accountId)) return false;
@@ -106,9 +114,11 @@ export function matchesQuery(tx: Transaction, query: ReportQuery, categoryIds: S
 	if (direction === "out" && tx.amount >= 0) return false;
 	if (direction === "in" && tx.amount <= 0) return false;
 
-	// A transfer is the same money appearing twice, once on each side. Counting it as spending would
-	// make "what did I spend this year" include every euro moved to savings.
-	if (!query.includeTransfers && tx.transferGroupId) return false;
+	// A transfer is the same money appearing twice, once on each side; a trade exchanges cash for a
+	// security of equal value; a debt-principal payment reduces what's owed. None of the three is
+	// spending or income — counting them as such would make "what did I spend this year" include every
+	// euro moved to savings, or an ETF purchase show up as €2,000 of spending (FIN-002).
+	if (!query.includeTransfers && isEconomicallyNeutral(classifyTransaction(store, tx))) return false;
 
 	const needle = (query.search ?? "").trim().toLowerCase();
 	if (needle) {
@@ -157,7 +167,7 @@ export function runReport(source: ReportSource, query: ReportQuery): ReportResul
 	const months = new Set<string>();
 
 	for (const tx of source.transactions) {
-		if (!matchesQuery(tx, query, categoryIds)) continue;
+		if (!matchesQuery(tx, query, categoryIds, source)) continue;
 		rows.push(tx);
 
 		const amount = convert(tx.amount, tx.currency, source.fx);
