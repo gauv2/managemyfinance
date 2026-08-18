@@ -62,6 +62,12 @@ export interface FinanceSettings {
 	/** Manual, user-maintained rate table (Settings → Currency) for converting non-EUR subscriptions into EUR when
 	 *  summing totals — keyed by currency code, 1 unit of that currency = this many EUR. No network calls, ever. */
 	exchangeRates?: Record<string, number>;
+	/** Historical ECB rates, keyed by "YYYY-MM-DD" then currency code — the dated counterpart to
+	 *  `exchangeRates`, used for flow (transaction-date) conversion. Populated only by the explicit
+	 *  "Backfill historical rates" action in Settings → Currency (v1.2.7 remediation Phase 3), never
+	 *  fetched automatically. Shared across portfolios, same as `exchangeRates` — a rate for a given
+	 *  currency on a given date doesn't depend on which portfolio is asking. */
+	exchangeRateHistory?: Record<string, Record<string, number>>;
 	/** User-dragged width of the sidebar, in pixels — undefined means the default (268px, set in CSS). */
 	navWidth?: number;
 	/** Which separators amounts are written with throughout the app — "1.234,56" vs "1,234.56".
@@ -165,9 +171,22 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 	"transferGroupId",
 	"importBatchId",
 	"subscriptionId",
+	// Same append-only rule as above — debt payment split (v1.2.7 Phase 4), added after everything else.
+	"principalAmount",
+	"interestAmount",
+	"feeAmount",
 ];
 
-const NUMERIC_COLUMNS: (keyof Transaction)[] = ["amount", "shares", "price", "fee", "tax"];
+const NUMERIC_COLUMNS: (keyof Transaction)[] = [
+	"amount",
+	"shares",
+	"price",
+	"fee",
+	"tax",
+	"principalAmount",
+	"interestAmount",
+	"feeAmount",
+];
 
 /**
  * The columns `Transaction` declares as always present, which a blank cell must therefore come back
@@ -216,7 +235,11 @@ export class FinanceStore {
 	 * render without anything having to invalidate anything.
 	 */
 	get fx(): FxContext {
-		return { baseCurrency: this.settings.baseCurrency ?? DEFAULT_BASE_CURRENCY, rates: this.settings.exchangeRates };
+		return {
+			baseCurrency: this.settings.baseCurrency ?? DEFAULT_BASE_CURRENCY,
+			rates: this.settings.exchangeRates,
+			history: this.settings.exchangeRateHistory,
+		};
 	}
 
 	private path(...parts: string[]): string {

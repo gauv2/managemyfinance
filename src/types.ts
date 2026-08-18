@@ -291,6 +291,20 @@ export interface Transaction {
 	/** The subscription this payment is an instance of, once linked. Drives "what have I actually paid
 	 *  for Netflix" and price-increase detection. */
 	subscriptionId?: string;
+	/**
+	 * A debt payment's split into what actually reduces the balance versus what it truly cost — a
+	 * mortgage or loan installment is rarely 100% principal (v1.2.7 remediation Phase 4, FIN-012).
+	 * All three are in the transaction's own currency; when set, `principalAmount + interestAmount +
+	 * feeAmount` should sum to (approximately) `amount`. Optional and independent — a plain credit-card
+	 * payoff with no split set is still read as pure principal, exactly as before these fields existed;
+	 * the classifier (src/finance/semantics.ts) only changes its reading of a debt-carrying account's
+	 * payment when at least one of `interestAmount`/`feeAmount` is actually present.
+	 */
+	principalAmount?: number;
+	/** Real cost of carrying the debt — an economic expense, unlike the principal portion. */
+	interestAmount?: number;
+	/** A fee bundled into the same debt payment (e.g. a loan servicing fee) — also an economic expense. */
+	feeAmount?: number;
 }
 
 export type GoalKind = "reserve-buffer" | "reserve-income-loss" | "debt-payoff" | "custom";

@@ -22,6 +22,7 @@ const loan: Account = { id: "acc-loan", name: "Personal loan", type: "loan", cur
 
 const catFood: Category = { id: "cat-food", name: "Food", color: "#000", icon: "utensils", aliases: [], essential: true };
 const catFun: Category = { id: "cat-fun", name: "Entertainment", color: "#000", icon: "sparkles", aliases: [] };
+const catSalary: Category = { id: "cat-salary", name: "Salary", color: "#000", icon: "coins", aliases: [], kind: "income" };
 
 let nextId = 0;
 function tx(partial: Partial<Transaction> & Pick<Transaction, "date" | "accountId" | "amount">): Transaction {
@@ -104,6 +105,19 @@ describe("reserveStatus", () => {
 		});
 		const status = reserveStatus(s, { bufferTarget: 0, incomeLossMonths: 1 });
 		expect(status.incomeLossTarget).toBeCloseTo((600 + 300) / 3, 6);
+	});
+
+	it("nets a refund against essential spend instead of dropping it entirely (v1.2.7 Phase 5.2)", () => {
+		const s = store({
+			categories: [catFood, catSalary], // refunds are only distinguishable with an income-kind category on record
+			transactions: [
+				tx({ date: "2024-01-05", accountId: checking.id, amount: -600, categoryId: catFood.id }),
+				tx({ date: "2024-01-10", accountId: checking.id, amount: 100, categoryId: catFood.id }), // partial refund
+			],
+		});
+		const status = reserveStatus(s, { bufferTarget: 0, incomeLossMonths: 1 });
+		// Net essential spend for the one tracked month is 600 - 100 = 500, not 600 (the refund ignored).
+		expect(status.incomeLossTarget).toBeCloseTo(500, 6);
 	});
 });
 

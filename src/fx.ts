@@ -1,7 +1,17 @@
 import { requestUrl } from "obsidian";
 import { CURRENCIES } from "./constants";
 
-const FRANKFURTER_URL = "https://api.frankfurter.dev/v1/latest";
+const FRANKFURTER_BASE = "https://api.frankfurter.dev/v1";
+
+/** Frankfurter answers "1 EUR = X {code}"; this app stores "1 {code} = ? EUR", so invert. Rounded to
+ *  6dp — full float precision (15+ digits) is noise no one will ever type or read. */
+function invertRates(rates: Record<string, number>): Record<string, number> {
+	const inverted: Record<string, number> = {};
+	for (const [code, rate] of Object.entries(rates)) {
+		if (rate > 0) inverted[code] = Math.round((1 / rate) * 1e6) / 1e6;
+	}
+	return inverted;
+}
 
 /**
  * Today's ECB reference rates for every non-EUR currency this app knows about, via Frankfurter
@@ -11,15 +21,25 @@ const FRANKFURTER_URL = "https://api.frankfurter.dev/v1/latest";
  */
 export async function fetchLatestRates(): Promise<Record<string, number>> {
 	const symbols = CURRENCIES.filter((c) => c !== "EUR").join(",");
-	const res = await requestUrl({ url: `${FRANKFURTER_URL}?base=EUR&symbols=${symbols}` });
+	const res = await requestUrl({ url: `${FRANKFURTER_BASE}/latest?base=EUR&symbols=${symbols}` });
 	const rates = res.json?.rates as Record<string, number> | undefined;
 	if (!rates) throw new Error("Unexpected response from the exchange-rate API.");
+	return invertRates(rates);
+}
 
-	// Frankfurter answers "1 EUR = X {code}"; this app stores "1 {code} = ? EUR", so invert.
-	// Rounded to 6dp — full float precision (15+ digits) is noise no one will ever type or read.
-	const inverted: Record<string, number> = {};
-	for (const [code, rate] of Object.entries(rates)) {
-		if (rate > 0) inverted[code] = Math.round((1 / rate) * 1e6) / 1e6;
-	}
-	return inverted;
+/**
+ * The ECB reference rates as of a specific past date, via the same Frankfurter endpoint dated instead
+ * of "latest" — the basis for historical/as-of conversion (v1.2.7 remediation Phase 3, FIN-008
+ * residual). The ECB doesn't publish on weekends/holidays; Frankfurter already resolves a non-trading
+ * date to the most recent prior trading day server-side, so this never needs to retry with an adjusted
+ * date itself. Only ever called from an explicit "Backfill historical rates" action or a batch import,
+ * never silently in the background — one request per date, and a vault with years of foreign-currency
+ * history could mean dozens of distinct dates to fetch.
+ */
+export async function fetchHistoricalRates(date: string): Promise<Record<string, number>> {
+	const symbols = CURRENCIES.filter((c) => c !== "EUR").join(",");
+	const res = await requestUrl({ url: `${FRANKFURTER_BASE}/${date}?base=EUR&symbols=${symbols}` });
+	const rates = res.json?.rates as Record<string, number> | undefined;
+	if (!rates) throw new Error(`Unexpected response from the exchange-rate API for ${date}.`);
+	return invertRates(rates);
 }

@@ -68,7 +68,9 @@ export function findTransferMatches(transactions: Transaction[], opts: TransferM
 	const outflows = candidates.filter((t) => t.amount < 0).sort((a, b) => a.date.localeCompare(b.date));
 	const inflows = candidates.filter((t) => t.amount > 0).sort((a, b) => a.date.localeCompare(b.date));
 
-	const baseAmount = (tx: Transaction): number => Math.abs(opts.fx ? convert(tx.amount, tx.currency, opts.fx) : tx.amount);
+	// A flow — convert at its own date (v1.2.7 Phase 3), not today's rate. If that leaves the amount
+	// unresolvable (NaN), the tolerance comparison below simply never matches — no false pairing.
+	const baseAmount = (tx: Transaction): number => Math.abs(opts.fx ? convert(tx.amount, tx.currency, opts.fx, tx.date) : tx.amount);
 
 	const used = new Set<string>();
 	const pairs: TransferPair[] = [];

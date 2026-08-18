@@ -71,9 +71,10 @@ export class CategoryDrilldownModal extends Modal {
 			.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 	}
 
-	/** Amounts are summed in base currency, exactly as the chart that led here did. */
+	/** Amounts are summed in base currency, exactly as the chart that led here did — at each
+	 *  transaction's own date (v1.2.7 Phase 3), not today's rate. */
 	private inBase(tx: Transaction): number {
-		return Math.abs(convert(tx.amount, tx.currency, this.plugin.store.fx));
+		return Math.abs(convert(tx.amount, tx.currency, this.plugin.store.fx, tx.date));
 	}
 
 	private render(): void {

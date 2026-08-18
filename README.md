@@ -1,6 +1,6 @@
 # Finance
 
-A personal finance dashboard, ledger, budgeting, and import pipeline for [Obsidian](https://obsidian.md) — everything stored locally in your vault as plain JSON and CSV, no telemetry, no background network calls. The one exception: an explicit "Fetch latest rates" button in Settings → Currency, which calls the free [Frankfurter](https://frankfurter.dev) API for daily exchange rates — nothing but currency codes is ever sent, and it only runs when you click it.
+A personal finance dashboard, ledger, budgeting, and import pipeline for [Obsidian](https://obsidian.md) — everything stored locally in your vault as plain JSON and CSV, no telemetry, no background network calls. The exceptions are a handful of explicit, user-initiated actions, each firing only when clicked: "Fetch latest rates" and "Backfill historical rates" in Settings → Currency, both calling the free [Frankfurter](https://frankfurter.dev) API for ECB exchange-rate data (nothing but currency codes and dates is ever sent); and, on the Investing/Crypto dashboards, an optional "Refresh price" action that queries Yahoo Finance (for stocks/ETFs) or CoinGecko (for crypto) to price your current holdings.
 
 ## Features
 

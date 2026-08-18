@@ -3,8 +3,9 @@ import { categoryChain } from "../categories";
 import { CURRENCIES } from "../constants";
 import { stableHash } from "../hash";
 import type FinancePlugin from "../main";
-import type { Transaction } from "../types";
+import { isLiabilityType, type Transaction } from "../types";
 import { icon, moneyInput, renderCategoryPicker, type CategoryPickerValue, type MoneyInputHandle } from "../ui/dom";
+import { formatMoneyRounded } from "../money";
 
 /**
  * Create or edit one transaction by hand.
@@ -27,6 +28,12 @@ export class TransactionEditModal extends Modal {
 	private counterparty = "";
 	private currency: string;
 	private notes = "";
+	/** A debt payment's split into principal/interest/fee (v1.2.7 Phase 4, FIN-012) — only meaningful
+	 *  (and only shown) for a credit into a debt-carrying account; undefined otherwise, same as a
+	 *  transaction that's never had a split recorded. */
+	private principalAmount?: number;
+	private interestAmount?: number;
+	private feeAmount?: number;
 
 	constructor(
 		app: App,
@@ -47,6 +54,17 @@ export class TransactionEditModal extends Modal {
 		this.currency =
 			tx?.currency || store.accounts.find((a) => a.id === this.accountId)?.currency || plugin.settings.baseCurrency || "EUR";
 		this.notes = tx?.notes ?? "";
+		this.principalAmount = tx?.principalAmount;
+		this.interestAmount = tx?.interestAmount;
+		this.feeAmount = tx?.feeAmount;
+	}
+
+	/** Whether the debt-split fields are relevant at all: a credit (money in) landing on a credit/loan/
+	 *  mortgage account — exactly the case classifyTransaction reads them for. */
+	private get showsDebtSplit(): boolean {
+		const account = this.plugin.store.accounts.find((a) => a.id === this.accountId);
+		if (!account) return false;
+		return this.direction === "in" && (isLiabilityType(account.type) || account.type === "credit");
 	}
 
 	private get isEdit(): boolean {
@@ -147,6 +165,12 @@ export class TransactionEditModal extends Modal {
 			this.amountField?.setCurrency(this.currency);
 		});
 
+		const debtSplit = this.renderDebtSplitFields(form);
+		const refreshDebtSplitVisibility = (): void => debtSplit.toggle(this.showsDebtSplit);
+		refreshDebtSplitVisibility();
+		accountSelect.addEventListener("change", refreshDebtSplitVisibility);
+		directionGroup.addEventListener("click", refreshDebtSplitVisibility);
+
 		const categoryRow = form.createDiv({ cls: "fp-form-row" });
 		categoryRow.createEl("label", { text: "Category" });
 		renderCategoryPicker(categoryRow.createDiv({ cls: "fp-field-control" }), {
@@ -180,6 +204,59 @@ export class TransactionEditModal extends Modal {
 		saveBtn.addEventListener("click", () => void this.save());
 	}
 
+	/**
+	 * Optional principal/interest/fee split for a debt payment (v1.2.7 remediation Phase 4, FIN-012) —
+	 * shown only when the account and direction actually mean "a credit onto a debt-carrying account",
+	 * hidden (via `toggle`) otherwise. Left blank, a payment reads exactly as it always did: 100%
+	 * principal, economically neutral. Filling in interest and/or fee tells the classifier that portion
+	 * is a real cost — see semantics.ts's split-payment rule, which is the one place this data is read.
+	 */
+	private renderDebtSplitFields(form: HTMLElement): { toggle: (visible: boolean) => void } {
+		const section = form.createDiv({ cls: "fp-form-section" });
+		section.createDiv({
+			cls: "fp-step-desc",
+			text: "This looks like a payment toward a debt. If it's a plain payoff, leave this blank — the whole amount is principal. If it includes interest or a fee (a mortgage or loan installment), split it out below so that portion counts as a real cost instead of a balance-sheet movement.",
+		});
+
+		const numField = (label: string, value: number | undefined, onChange: (v: number | undefined) => void): void => {
+			const row = section.createDiv({ cls: "fp-form-row" });
+			row.createEl("label", { text: label });
+			moneyInput(row.createDiv({ cls: "fp-field-control" }), {
+				value,
+				currency: this.currency,
+				allowNegative: false,
+				placeholder: "Optional",
+				onChange: (v) => {
+					onChange(v);
+					updateRemainder();
+				},
+			});
+		};
+
+		numField("Principal", this.principalAmount, (v) => (this.principalAmount = v));
+		numField("Interest", this.interestAmount, (v) => (this.interestAmount = v));
+		numField("Fee", this.feeAmount, (v) => (this.feeAmount = v));
+
+		const remainder = section.createDiv({ cls: "fp-setting-note" });
+		const updateRemainder = (): void => {
+			const total = this.amountField?.value();
+			const split = (this.principalAmount ?? 0) + (this.interestAmount ?? 0) + (this.feeAmount ?? 0);
+			if (!total || split === 0) {
+				remainder.setText("");
+				return;
+			}
+			const diff = total - split;
+			remainder.setText(
+				Math.abs(diff) < 0.01
+					? `Accounted for: ${formatMoneyRounded(split, this.currency)} of ${formatMoneyRounded(total, this.currency)}.`
+					: `${formatMoneyRounded(split, this.currency)} of ${formatMoneyRounded(total, this.currency)} split out — ${formatMoneyRounded(Math.abs(diff), this.currency)} ${diff > 0 ? "unaccounted for" : "over"}.`
+			);
+		};
+		updateRemainder();
+
+		return { toggle: (visible) => section.toggleClass("is-hidden", !visible) };
+	}
+
 	/** The signed amount, from the magnitude typed plus the direction chosen. */
 	private signedAmount(): number | undefined {
 		const magnitude = this.amountField?.value();
@@ -208,6 +285,11 @@ export class TransactionEditModal extends Modal {
 
 		const store = this.plugin.store;
 		const categoryId = this.category.secondaryId ?? this.category.primaryId;
+		// Only kept when the split section actually applied — a value typed in, then abandoned by
+		// switching the account or direction away from a debt payment, shouldn't silently persist.
+		const split = this.showsDebtSplit
+			? { principalAmount: this.principalAmount, interestAmount: this.interestAmount, feeAmount: this.feeAmount }
+			: { principalAmount: undefined, interestAmount: undefined, feeAmount: undefined };
 		const patch: Partial<Transaction> = {
 			date: this.date,
 			accountId: this.accountId,
@@ -217,6 +299,7 @@ export class TransactionEditModal extends Modal {
 			currency: this.currency,
 			categoryId,
 			notes: this.notes.trim() || undefined,
+			...split,
 		};
 
 		if (this.opts.transaction) {
@@ -246,6 +329,7 @@ export class TransactionEditModal extends Modal {
 				source: "manual",
 				// Nothing to review: you just entered it, so it arrives already signed off.
 				review: "approved",
+				...split,
 			});
 			// A hand-entered row is a decision about that merchant too — the cash payments people type
 			// in by hand are exactly the recurring ones worth remembering.

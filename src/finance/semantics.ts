@@ -171,7 +171,21 @@ export function classifyTransaction(store: ClassifyStore, tx: Transaction): Clas
 		return result(tx, "internal-transfer", "derived", { isInternalTransfer: true });
 	}
 
-	// 6. Refund into an expense category — money returning against a purchase, not new income. Checked
+	// 6. A debt payment explicitly split into principal/interest/fee (v1.2.7 Phase 4, FIN-012) — a
+	//    mortgage or loan installment is rarely 100% principal. Checked ahead of the refund rule below
+	//    and the bare debt-principal rule after it: someone who actually recorded a split meant it, and
+	//    that's stronger evidence than either a category guess or the mere fact of a positive credit on
+	//    a debt-carrying account. Only the interest/fee portion is a real economic cost; the principal
+	//    portion stays a balance-sheet movement, same as an unsplit payment always has been.
+	if (account && (isLiabilityType(account.type) || account.type === "credit") && amount >= 0) {
+		const interest = tx.interestAmount ?? 0;
+		const fee = tx.feeAmount ?? 0;
+		if (interest !== 0 || fee !== 0) {
+			return result(tx, "debt-principal", "explicit", { affectsExpense: interest + fee });
+		}
+	}
+
+	// 7. Refund into an expense category — money returning against a purchase, not new income. Checked
 	//    ahead of the debt-principal rule below on purpose: a merchant refund credited back onto a
 	//    credit card is still a refund against that category's spend, and a categorized positive row is
 	//    much stronger evidence of "refund" than the bare fact that the account happens to carry debt.
@@ -182,17 +196,16 @@ export function classifyTransaction(store: ClassifyStore, tx: Transaction): Clas
 		return result(tx, "refund", "derived", { affectsExpense: -amount });
 	}
 
-	// 7. Debt-carrying account (credit card, loan, mortgage): a credit reduces what's owed — a payment
-	//    or principal repayment, a balance-sheet movement, not income to that account. Charges (debits)
-	//    fall through to the ordinary expense case below, which is already correct for card purchases.
-	//    Only reached once rule 6 above has ruled out a categorized refund. Principal-vs-interest
-	//    splitting proper arrives once Transaction carries the fields for it (FIN-012); until then, a
-	//    bare uncategorized (or non-refund-categorized) credit here is presumptively principal.
+	// 8. Debt-carrying account (credit card, loan, mortgage), no split recorded: a credit reduces what's
+	//    owed — a payment or principal repayment, a balance-sheet movement, not income to that account.
+	//    Charges (debits) fall through to the ordinary expense case below, which is already correct for
+	//    card purchases. A bare, unsplit credit here is presumptively pure principal — the common case
+	//    (a credit-card payoff has no interest to split out at all).
 	if (account && (isLiabilityType(account.type) || account.type === "credit") && amount >= 0) {
 		return result(tx, "debt-principal", "derived");
 	}
 
-	// 8. Fallback: plain sign-based income/expense, using whatever category evidence exists to set
+	// 9. Fallback: plain sign-based income/expense, using whatever category evidence exists to set
 	//    confidence rather than kind.
 	const hasEvidence = !!tx.categoryId || !!action || !!type;
 	const confidence: ClassifiedTransaction["confidence"] = hasEvidence ? "derived" : "ambiguous";

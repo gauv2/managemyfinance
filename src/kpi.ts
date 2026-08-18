@@ -24,14 +24,22 @@ export interface KpiStore {
 /**
  * A transaction's amount in the store's base currency. Every sum in this file goes through here —
  * adding a dollar row straight into a euro total is the kind of wrong that still looks like money.
+ *
+ * A transaction is a flow, so this always converts at its *own* date — see currency.ts's convert() doc
+ * comment for flow-vs-stock. Once a historical rate for that date has been backfilled, the result is
+ * stable regardless of what today's rate later becomes; until then it falls back to today's rate rather
+ * than reading as incomplete outright (a deliberate compromise — see convert()'s `optionalRateFor`).
  */
 function amountIn(store: KpiStore, tx: Transaction): number {
-	return store.fx ? convert(tx.amount, tx.currency, store.fx) : tx.amount;
+	return store.fx ? convert(tx.amount, tx.currency, store.fx, tx.date) : tx.amount;
 }
 
-/** An account-denominated figure (opening balance, snapshot) in the store's base currency. */
-function accountAmountIn(store: KpiStore, account: Account, amount: number): number {
-	return store.fx ? convert(amount, account.currency, store.fx) : amount;
+/** An account-denominated figure (opening balance, snapshot) in the store's base currency. An opening
+ *  balance has no date of its own and is a *current* starting point, so it always uses today's rate
+ *  (`date` omitted). A snapshot is dated, and — being a stock observation as of that date, not a flow —
+ *  should be valued at *that date's* rate, not today's; pass `snapshot.date` for that case. */
+function accountAmountIn(store: KpiStore, account: Account, amount: number, date?: string): number {
+	return store.fx ? convert(amount, account.currency, store.fx, date) : amount;
 }
 
 export interface YearSummary {
@@ -96,20 +104,52 @@ function savingsRateOf(income: number, expenses: number): number | undefined {
 	return (income - expenses) / income;
 }
 
+/** The principal-only portion of a debt payment, in base currency: the full (already-converted) payment
+ *  amount when no explicit principal/interest/fee split is recorded on the transaction (the common
+ *  case — a bare credit-card payoff is pure principal, same as before these fields existed), or the
+ *  proportional slice `principalAmount` represents of the transaction's own raw amount, applied to the
+ *  base-currency total, when a split is present (v1.2.7 Phase 4, FIN-012). Scaling proportionally
+ *  rather than converting `principalAmount` separately avoids a second currency lookup for what's
+ *  already the same currency and date as the transaction it's part of. */
+function debtPrincipalPortion(tx: Transaction, amountBase: number): number {
+	if (tx.principalAmount === undefined || !tx.amount) return amountBase;
+	return amountBase * (tx.principalAmount / tx.amount);
+}
+
+/**
+ * Scales a classified field (`affectsIncome`/`affectsExpense`, in the transaction's own currency —
+ * classification is currency-agnostic, see semantics.ts) into base currency, proportionally against the
+ * transaction's own raw `tx.amount` rather than substituting `amountBase`'s full magnitude directly.
+ *
+ * For every kind before v1.2.7 Phase 4, this scaling factor was always exactly ±1
+ * (`affectsIncome === amount`, `affectsExpense === -amount` for both a plain expense and a refund), so
+ * `amountBase` itself and the properly-scaled value were always identical — every caller of this
+ * function used to just use `amountBase` directly, which happened to work by coincidence, not by
+ * design. A split debt payment breaks that coincidence: `affectsExpense` there is only the interest+fee
+ * portion of a much larger `tx.amount` (the rest is principal, economically neutral), so substituting
+ * the full converted amount would book the *entire* payment as an expense instead of just its real cost
+ * — the one place every caller below needed to change together.
+ */
+export function scaledEconomicAmount(tx: Transaction, fieldValue: number, amountBase: number): number {
+	return tx.amount ? amountBase * (fieldValue / tx.amount) : 0;
+}
+
 /** Applies one classified transaction's economic effect to an income/expense/passiveIncome bucket, in
  *  the store's base currency — the one place summarizeByYear and summarizeByMonth agree on how a
  *  classified row turns into a number, so the same transaction can never be read two different ways by
- *  the two loops that walk it. */
+ *  the two loops that walk it. See `scaledEconomicAmount` for why this isn't just `amountBase` directly. */
 function applyClassified(
 	bucket: { income: number; expenses: number; passiveIncome: number },
+	tx: Transaction,
 	classified: ClassifiedTransaction,
 	amountBase: number
 ): void {
 	if (classified.affectsIncome > 0) {
-		bucket.income += amountBase;
-		if (classified.kind === "dividend" || classified.kind === "interest-income") bucket.passiveIncome += amountBase;
+		const scaled = scaledEconomicAmount(tx, classified.affectsIncome, amountBase);
+		bucket.income += scaled;
+		if (classified.kind === "dividend" || classified.kind === "interest-income") bucket.passiveIncome += scaled;
 	} else if (classified.affectsExpense !== 0) {
-		bucket.expenses += -amountBase;
+		bucket.expenses += scaledEconomicAmount(tx, classified.affectsExpense, amountBase);
 	}
 }
 
@@ -163,12 +203,28 @@ export function summarizeByYear(store: KpiStore, accountId?: string, range?: Dat
 		const amount = amountIn(store, tx);
 		bucket.netChange += amount;
 		const classified = classifyTransaction(store, tx);
+		// Tracked unconditionally, not only in the fully-neutral branch below: a split debt payment
+		// (interest/fee carved out — Phase 4) is *not* economically neutral overall, but its principal
+		// portion is still a real debt-principal movement that belongs in this bucket.
+		if (classified.kind === "debt-principal") bucket.debtPrincipal += debtPrincipalPortion(tx, amount);
 		if (isEconomicallyNeutral(classified)) {
 			bucket.transferAmount += amount;
-			if (classified.kind === "debt-principal") bucket.debtPrincipal += amount;
 			continue;
 		}
-		applyClassified(bucket, classified, amount);
+		// A split payment (Phase 4) is only *partially* economic — the rest of `amount` that
+		// applyClassified below won't touch is still a neutral, balance-sheet-only movement (the
+		// principal portion of a split debt payment) and must still land in transferAmount, or this
+		// year's `income - expenses + transferAmount` stops reconstructing `netChange` for that one
+		// transaction, silently drifting the no-snapshots aggregate net-worth walk away from what
+		// netWorthAsOf computes directly from the raw ledger. `economicConsumption` is expressed in the
+		// same signed convention as `amount` itself (unlike `applyClassified`'s bucket fields, which flip
+		// sign for expenses), so `amount - economicConsumption` is exactly the leftover to carry forward.
+		const economicConsumption =
+			classified.affectsIncome > 0
+				? scaledEconomicAmount(tx, classified.affectsIncome, amount)
+				: -scaledEconomicAmount(tx, classified.affectsExpense, amount);
+		bucket.transferAmount += amount - economicConsumption;
+		applyClassified(bucket, tx, classified, amount);
 	}
 
 	const years = Array.from(map.keys()).sort((a, b) => a.localeCompare(b));
@@ -309,7 +365,7 @@ export function summarizeByMonth(store: KpiStore, year: string, accountId?: stri
 		const bucket = buckets[monthIdx];
 		const classified = classifyTransaction(store, tx);
 		if (isEconomicallyNeutral(classified)) continue;
-		applyClassified(bucket, classified, amountIn(store, tx));
+		applyClassified(bucket, tx, classified, amountIn(store, tx));
 	}
 	return buckets.map((b, i) => ({
 		month: String(i + 1).padStart(2, "0"),
@@ -339,7 +395,10 @@ function signedOpeningBalance(store: KpiStore, account: Account): number {
 }
 
 function signedSnapshotBalance(store: KpiStore, account: Account, snapshot: BalanceSnapshot): number {
-	return accountAmountIn(store, account, isLiabilityType(account.type) ? -snapshot.balance : snapshot.balance);
+	// A snapshot is a dated observation — what the account was worth on snapshot.date — so its foreign-
+	// currency amount is converted at *that* date's rate, not today's (v1.2.7 Phase 3's "historical
+	// snapshots use snapshot-date FX" requirement).
+	return accountAmountIn(store, account, isLiabilityType(account.type) ? -snapshot.balance : snapshot.balance, snapshot.date);
 }
 
 /** The most recent snapshot for `accountId` dated on or before `asOf`, if any. */
@@ -514,9 +573,12 @@ export function categoryTotals(store: KpiStore, year?: string, accountId?: strin
 		// summaries — otherwise a returned purchase leaves the category showing the full original spend
 		// while the headline expense figure has already dropped, and the two views disagree. Neutral
 		// kinds (transfers, trades, debt principal) have no expense contribution and fall out here too.
-		if (classifyTransaction(store, tx).affectsExpense === 0) continue;
+		// A split debt payment (Phase 4) only contributes its interest+fee portion — see
+		// scaledEconomicAmount for why this can't just be the full converted amount.
+		const classified = classifyTransaction(store, tx);
+		if (classified.affectsExpense === 0) continue;
 		const key = tx.categoryId ?? "uncategorized";
-		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
+		totals.set(key, (totals.get(key) ?? 0) + scaledEconomicAmount(tx, classified.affectsExpense, amountIn(store, tx)));
 	}
 	return totals;
 }
@@ -530,9 +592,10 @@ export function primaryCategoryTotals(store: KpiStore, period?: string | DateRan
 	for (const tx of store.transactions) {
 		if (!inPeriod(tx.date, period)) continue;
 		if (accountId && tx.accountId !== accountId) continue;
-		if (classifyTransaction(store, tx).affectsExpense === 0) continue;
+		const classified = classifyTransaction(store, tx);
+		if (classified.affectsExpense === 0) continue;
 		const key = resolvePrimaryId(store.categories, tx.categoryId) ?? "uncategorized";
-		totals.set(key, (totals.get(key) ?? 0) + -amountIn(store, tx));
+		totals.set(key, (totals.get(key) ?? 0) + scaledEconomicAmount(tx, classified.affectsExpense, amountIn(store, tx)));
 	}
 	return totals;
 }
@@ -552,14 +615,18 @@ export function primaryCategoryIncomeTotals(store: KpiStore, period?: string | D
 		const classified = classifyTransaction(store, tx);
 		if (classified.affectsIncome === 0) continue;
 		const key = resolvePrimaryId(store.categories, tx.categoryId) ?? "uncategorized";
-		totals.set(key, (totals.get(key) ?? 0) + amountIn(store, tx));
+		totals.set(key, (totals.get(key) ?? 0) + scaledEconomicAmount(tx, classified.affectsIncome, amountIn(store, tx)));
 	}
 	return totals;
 }
 
 /**
  * One category's spend for many months in a single pass — same filters as `primaryCategoryTotals`
- * (expenses only, transfers excluded, converted to base currency), keyed by "YYYY-MM".
+ * (net of refunds, transfers/trades/debt-principal excluded, converted to base currency), keyed by
+ * "YYYY-MM". Feeds `rolloverInto`'s carry-forward chain, so a refund must net here exactly the way it
+ * does in the budget page's own "spent" figure the rollover is supposed to agree with (v1.2.7
+ * remediation Phase 5.1) — a sign-only `tx.amount >= 0` skip used to drop every refund entirely instead
+ * of netting it, so a category's rollover balance and its plain monthly "spent" total could disagree.
  *
  * Exists because walking a rollover chain month by month would otherwise re-read the entire ledger
  * once per month walked, for every rollover category, on every render of the budgets page.
@@ -568,12 +635,12 @@ export function monthlySpendFor(store: KpiStore, categoryId: string): Map<string
 	const ids = new Set(descendantIds(store.categories, categoryId));
 	const byMonth = new Map<string, number>();
 	for (const tx of store.transactions) {
-		if (tx.amount >= 0) continue;
 		if (!tx.categoryId || !ids.has(tx.categoryId)) continue;
-		if (isTransfer(store, tx)) continue;
+		const classified = classifyTransaction(store, tx);
+		if (classified.affectsExpense === 0) continue;
 		const month = tx.date?.slice(0, 7);
 		if (!month) continue;
-		byMonth.set(month, (byMonth.get(month) ?? 0) + -amountIn(store, tx));
+		byMonth.set(month, (byMonth.get(month) ?? 0) + scaledEconomicAmount(tx, classified.affectsExpense, amountIn(store, tx)));
 	}
 	return byMonth;
 }
@@ -666,11 +733,15 @@ export function fiExpenseBase(store: KpiStore, accountIds?: string[]): FiExpense
 		if (!earliestMonth || month < earliestMonth) earliestMonth = month;
 		const classified = classifyTransaction(store, tx);
 		const amount = amountIn(store, tx);
-		// affectsExpense/affectsIncome are in the transaction's own currency (classification is
-		// currency-agnostic) — used here only as the sign/inclusion gate; the summed magnitude comes
-		// from `amount`, already converted to base currency, matching categoryTotals's same pattern.
-		if (classified.affectsExpense !== 0) expenseByMonth.set(month, (expenseByMonth.get(month) ?? 0) + -amount);
-		if (classified.affectsIncome > 0) incomeByMonth.set(month, (incomeByMonth.get(month) ?? 0) + amount);
+		// See scaledEconomicAmount: affectsExpense/affectsIncome are in the transaction's own currency
+		// and, for a split debt payment, only a fraction of tx.amount — scaled proportionally rather
+		// than assuming the full converted amount applies.
+		if (classified.affectsExpense !== 0) {
+			expenseByMonth.set(month, (expenseByMonth.get(month) ?? 0) + scaledEconomicAmount(tx, classified.affectsExpense, amount));
+		}
+		if (classified.affectsIncome > 0) {
+			incomeByMonth.set(month, (incomeByMonth.get(month) ?? 0) + scaledEconomicAmount(tx, classified.affectsIncome, amount));
+		}
 	}
 	if (!earliestMonth) return { annual: 0, netAnnual: 0, monthsCovered: 0, complete: false };
 
@@ -808,6 +879,120 @@ function isTrade(tx: Transaction, account: Account): boolean {
 	return action === "buy" || action === "sell";
 }
 
+/** An account's cash position as of a date, from the raw ledger alone — opening balance plus every
+ *  transaction's amount, completely ignoring any recorded snapshot. Deliberately snapshot-blind: it
+ *  exists only so investmentBucketsForValuation can ask "how much of the snapshot's total is cash, so
+ *  the rest can be attributed to securities" without that question answering itself circularly. */
+function pureCashAsOf(store: KpiStore, account: Account, asOf: string): number {
+	let balance = signedOpeningBalance(store, account);
+	for (const tx of store.transactions) {
+		if (tx.accountId !== account.id) continue;
+		const date = (tx.date || "").slice(0, 10);
+		if (!date || date > asOf) continue;
+		balance += amountIn(store, tx);
+	}
+	return balance;
+}
+
+/**
+ * The cost-basis buckets to use for *valuation* as of a date — as opposed to `investmentBucketsAsOf`,
+ * which is pure historical-cost accounting and stays that way for `investingHoldings`/
+ * `investingRealizedPnLAsOf` (a user's real, all-time cost basis and realized gain, for their own
+ * record). This function exists only to feed `investingTotalValueAsOf`, and differs in one way: when a
+ * snapshot exists, every currently-held ticker's cost basis is rescaled at the snapshot date so the
+ * total reconciles with what the snapshot actually said the account was worth then.
+ *
+ * Why: a snapshot states real market value, which is exactly the number historical cost is *not* — a
+ * position bought for €1,000 and worth €1,500 at snapshot time is still carried at €1,000 of historical
+ * cost. Selling it after the snapshot for €1,500 books a €500 "realized gain" against that historical
+ * cost — true, but already fully reflected in the snapshot's own €1,500. Adding it again double-counts
+ * appreciation the snapshot had already captured (this was a real bug: see the regression tests below).
+ * Rescaling at the snapshot date treats "you were worth what the snapshot said" as the new starting
+ * point for valuation purposes — a mark-to-market reset — so a sale at exactly the snapshot-implied
+ * price now nets to zero, and only genuinely *new* gain/loss since the snapshot shows up.
+ *
+ * The rescale is proportional across every ticker held at snapshot time, weighted by pre-reset cost
+ * basis: `impliedSecuritiesValue = snapshot.balance − cash(asOf snapshot.date)` backs out the known cash
+ * from the snapshot's total, and whatever's left is distributed across tickers in proportion to what
+ * each was already carrying, on the assumption that a single whole-account balance can't say which
+ * ticker specifically moved by how much. A ticker bought only *after* the snapshot is untouched by this
+ * — it starts fresh at its own real cost, same as investmentBucketsAsOf.
+ *
+ * MVP simplification (documented limitations, not attempted here):
+ * - With more than one snapshot on record, only the most recent one on or before `asOf` resets
+ *   anything — an earlier snapshot's own reset isn't chained forward. Correct for the common case (one
+ *   snapshot, or snapshots taken well apart); a position revalued at *two* snapshots in sequence would
+ *   need chained resets to be exactly right.
+ * - The single account-wide `resetFactor` is applied uniformly to every ticker held at snapshot time.
+ *   If two tickers moved in *different* directions before the snapshot (one up, one down) but happened
+ *   to net to roughly the same combined value, each ticker's individual post-reset basis can still be
+ *   wrong even though the *account total* is exactly right — a whole-account balance genuinely can't
+ *   say which position moved by how much. Fully correct per-ticker attribution would need
+ *   position-level snapshot state (the audit's "preferred approach"), not attempted here.
+ * - Degenerate case, handled rather than silently reproducing the bug: if every ticker held at snapshot
+ *   time has ~€0 of historical cost basis (originalOpenCostBasis ≈ 0), the proportional-scaling ratio
+ *   is undefined (dividing by ~0) — `impliedSecuritiesValue` is split evenly across those tickers
+ *   instead. Exactly right for the common instance of this (a single near-zero-cost position); an even
+ *   split is still an assumption, not a derivation, when multiple near-zero-cost tickers are held at
+ *   once — but leaving `resetFactor` at a no-op `1` here (the reset never applying) would have quietly
+ *   reintroduced the exact double-count this function exists to fix, for exactly the positions where
+ *   the bug's effect is largest (a huge gain relative to a near-zero cost basis).
+ */
+function investmentBucketsForValuation(store: KpiStore, account: Account, asOf: string): Map<string, InvestmentBucket> {
+	const snapshot = snapshotAsOf(store, account.id, asOf);
+	if (!snapshot) return investmentBucketsAsOf(store, account.id, asOf);
+
+	const atSnapshot = investmentBucketsAsOf(store, account.id, snapshot.date);
+	const originalOpenCostBasis = Array.from(atSnapshot.values()).reduce((sum, b) => sum + b.costBasis, 0);
+	const cashAtSnapshot = pureCashAsOf(store, account, snapshot.date);
+	const impliedSecuritiesValue = signedSnapshotBalance(store, account, snapshot) - cashAtSnapshot;
+	const resetFactor = originalOpenCostBasis > 1e-9 ? impliedSecuritiesValue / originalOpenCostBasis : undefined;
+	const evenShare = atSnapshot.size > 0 ? impliedSecuritiesValue / atSnapshot.size : 0;
+
+	const buckets = new Map<string, InvestmentBucket>();
+	for (const [ticker, b] of atSnapshot) {
+		const costBasis = resetFactor !== undefined ? b.costBasis * resetFactor : evenShare;
+		buckets.set(ticker, { shares: b.shares, costBasis, assetClass: b.assetClass, realizedPnL: 0 });
+	}
+
+	// Continue moving-average accounting from the reset baseline for everything after the snapshot date
+	// — same algorithm as investmentBucketsAsOf, just starting from `buckets` instead of empty ones. A
+	// ticker with no pre-snapshot position (bought fresh after the snapshot) simply isn't in `buckets`
+	// yet and starts at {0, 0} the first time it's touched, exactly as investmentBucketsAsOf would.
+	const relevant = store.transactions.filter((tx) => {
+		if (tx.accountId !== account.id) return false;
+		if (!tx.ticker || tx.ticker === "CASH") return false;
+		const date = (tx.date || "").slice(0, 10);
+		if (!date || date <= snapshot.date || date > asOf) return false;
+		const action = (tx.action ?? "").toLowerCase();
+		return action === "buy" || action === "sell";
+	});
+	relevant.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+	for (const tx of relevant) {
+		const ticker = tx.ticker as string;
+		const action = (tx.action ?? "").toLowerCase();
+		const bucket = buckets.get(ticker) ?? { shares: 0, costBasis: 0, assetClass: tx.assetClass, realizedPnL: 0 };
+		const shares = tx.shares ?? 0;
+		const cash = Math.abs(amountIn(store, tx));
+		if (action === "buy") {
+			bucket.shares += shares;
+			bucket.costBasis += cash;
+		} else {
+			const preSaleShares = bucket.shares;
+			const avgCost = preSaleShares > 1e-9 ? bucket.costBasis / preSaleShares : 0;
+			const soldShares = Math.min(shares, preSaleShares);
+			const costRemoved = avgCost * soldShares;
+			bucket.realizedPnL += cash - costRemoved;
+			bucket.shares -= soldShares;
+			bucket.costBasis -= costRemoved;
+		}
+		if (tx.assetClass) bucket.assetClass = tx.assetClass;
+		buckets.set(ticker, bucket);
+	}
+	return buckets;
+}
+
 /**
  * Total value of an investing/crypto account as of a date: an anchor (a recorded snapshot on or before
  * `asOf` if one exists, else the opening balance) plus every non-trade cash movement since that anchor
@@ -818,18 +1003,21 @@ function isTrade(tx: Transaction, account: Account): boolean {
  * paid changes nothing about total value. A Sell's raw proceeds are left out too, in favor of just the
  * realized gain/loss — the "return of capital" portion of those proceeds is already accounted for,
  * either as open cost basis (no-snapshot case) or as part of the snapshot's own observed value
- * (with-snapshot case). Both cases resolve to the same formula here because, for any window [D1, D2],
- * (raw trade cash in that window) + (open-cost-basis change in that window) always equals exactly (the
- * realized P/L booked in that window) — cost basis and realized P/L are two views of the same buy/sell
- * ledger, so the raw-cash identity holds regardless of what the anchor itself represents. That's what
- * makes "extrapolate forward from the anchor using this same rule" valid whether the anchor is a
- * snapshot mid-history or the account's opening balance at the very start — see the worked proof and
- * fixtures in kpi.test.ts's "netWorthAsOf — investing/crypto accounts" suite.
+ * (with-snapshot case).
  *
- * A prior version of this fallback only applied when no snapshot existed at all, and once a snapshot
- * was recorded, every trade *after* it went back to draining the account by its full raw cash amount —
- * silently reproducing the exact bug this function exists to fix, just gated behind "have you ever
- * recorded a balance". This version applies uniformly regardless of snapshot history.
+ * The no-snapshot case uses plain historical-cost realized P/L (`investingRealizedPnLAsOf`), which is
+ * exactly right when the anchor is €0/the opening balance — there's nothing for historical cost to
+ * disagree with yet. Once a snapshot exists, though, historical cost and the snapshot's own market
+ * value are two different numbers for the same position, and using historical-cost realized P/L there
+ * double-counts whatever gain/loss the snapshot had already captured — see
+ * `investmentBucketsForValuation`'s doc comment for the concrete failure case and the fix: a rescaled
+ * ("mark-to-market") bucket set anchored at the snapshot, used only for this valuation window.
+ *
+ * A prior version of this fallback only applied the analytical add-back when no snapshot existed at
+ * all, and once a snapshot was recorded, every trade *after* it went back to draining the account by
+ * its full raw cash amount. A version after that fixed trades on positions opened *after* the snapshot,
+ * but still double-counted a *pre-snapshot* position's already-captured appreciation when it was sold
+ * post-snapshot. This version handles both.
  */
 function investingTotalValueAsOf(store: KpiStore, account: Account, asOf: string, txs: Transaction[]): number {
 	const snapshot = snapshotAsOf(store, account.id, asOf);
@@ -844,7 +1032,9 @@ function investingTotalValueAsOf(store: KpiStore, account: Account, asOf: string
 		nonTradeCash += amountIn(store, tx);
 	}
 
-	const realizedPnLWindow = investingRealizedPnLAsOf(store, account.id, asOf) - investingRealizedPnLAsOf(store, account.id, anchorDate);
+	const realizedPnLWindow = snapshot
+		? Array.from(investmentBucketsForValuation(store, account, asOf).values()).reduce((sum, b) => sum + b.realizedPnL, 0)
+		: investingRealizedPnLAsOf(store, account.id, asOf) - investingRealizedPnLAsOf(store, account.id, anchorDate);
 	return anchor + nonTradeCash + realizedPnLWindow;
 }
 
@@ -898,7 +1088,11 @@ export interface InvestingYearActivity {
 	fees: number;
 }
 
-/** Deposits/withdrawals/dividends/fees for a broker account, by year — the cash-flow side of investing. */
+/** Deposits/withdrawals/dividends/fees for a broker account, by year — the cash-flow side of investing.
+ *  `tx.fee` is denominated in the transaction's own currency, same as `tx.amount`, unless an importer
+ *  explicitly records otherwise — so it's converted the same way, at the transaction's own date
+ *  (v1.2.7 remediation Phase 5.3: `fee` used to be summed raw, so a $10 fee on a EUR-base vault was
+ *  silently presented as €10). */
 export function investingActivityByYear(store: KpiStore, accountId: string): InvestingYearActivity[] {
 	const map = new Map<string, InvestingYearActivity>();
 	for (const tx of store.transactions) {
@@ -912,7 +1106,10 @@ export function investingActivityByYear(store: KpiStore, accountId: string): Inv
 		if (action === "deposit") bucket.deposits += cash;
 		else if (action === "withdraw") bucket.withdrawals += cash;
 		else if (action === "dividend" || action.startsWith("interest")) bucket.dividends += cash;
-		if (tx.fee) bucket.fees += Math.abs(tx.fee);
+		if (tx.fee) {
+			const feeBase = store.fx ? convert(tx.fee, tx.currency, store.fx, tx.date) : tx.fee;
+			bucket.fees += Math.abs(feeBase);
+		}
 	}
 	return Array.from(map.values()).sort((a, b) => a.year.localeCompare(b.year));
 }

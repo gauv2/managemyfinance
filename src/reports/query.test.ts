@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { summarizeByYear } from "../kpi";
 import { describePeriod, describeQuery, expandCategoryIds, reportSlug, runReport, UNCATEGORIZED, type ReportSource } from "./query";
 import type { Account, Category, Transaction } from "../types";
 
@@ -7,7 +8,8 @@ const restaurants: Category = { id: "rest", name: "Restaurants", color: "#2", ic
 const groceries: Category = { id: "groc", name: "Groceries", color: "#3", icon: "cart", aliases: [], parentId: "food" };
 const transport: Category = { id: "trans", name: "Transport", color: "#4", icon: "car", aliases: [] };
 const fuel: Category = { id: "fuel", name: "Fuel", color: "#5", icon: "fuel", aliases: [], parentId: "trans" };
-const categories = [food, restaurants, groceries, transport, fuel];
+const salary: Category = { id: "salary", name: "Salary", color: "#6", icon: "coins", aliases: [], kind: "income" };
+const categories = [food, restaurants, groceries, transport, fuel, salary];
 
 const accounts: Account[] = [
 	{ id: "acc1", name: "Checking", type: "debit", currency: "EUR" },
@@ -130,10 +132,75 @@ describe("runReport — filters", () => {
 		expect(result.rows[0].categoryId).toBeUndefined();
 	});
 
-	it("excludes transfers unless asked for — moved money is not spending", () => {
+	it("excludes transfers from the row set unless asked for — moved money is not spending", () => {
 		const rows = [tx("2025-01-01", -500, undefined, { transferGroupId: "g1" }), tx("2025-01-02", -20, "rest")];
 		expect(runReport(source(rows), {}).spent).toBe(20);
-		expect(runReport(source(rows), { includeTransfers: true }).spent).toBe(520);
+		expect(runReport(source(rows), {}).count).toBe(1);
+		expect(runReport(source(rows), { includeTransfers: true }).count).toBe(2);
+	});
+
+	// v1.2.7 remediation Phase 2: economic mode's `spent` never counts a transfer, even when
+	// includeTransfers makes the row visible in the list — a transfer isn't economic expense no matter
+	// how you slice it, and `spent`/`received` are meant to answer "what did this cost", not "what's in
+	// the row list". Cash-flow mode is the escape hatch for "how much cash actually moved".
+	it("economic mode never counts a transfer's cash toward `spent`, even with includeTransfers — that's what cash-flow mode is for", () => {
+		const rows = [tx("2025-01-01", -500, undefined, { transferGroupId: "g1" }), tx("2025-01-02", -20, "rest")];
+		expect(runReport(source(rows), { includeTransfers: true }).spent).toBe(20);
+		expect(runReport(source(rows), { measure: "cash-flow", includeTransfers: true }).spent).toBe(520);
+	});
+});
+
+// ---------- economic vs cash-flow semantics (v1.2.7 remediation Phase 2) ----------
+
+describe("runReport — economic measure (the default)", () => {
+	it("Test A: nets a refund against the expense it returned", () => {
+		const rows = [tx("2025-01-01", -300, "rest"), tx("2025-01-02", 50, "rest")];
+		expect(runReport(source(rows), {}).spent).toBe(250);
+		expect(runReport(source(rows), { direction: "out" }).spent).toBe(250);
+	});
+
+	it("Test B: a refund does not count as income", () => {
+		const rows = [tx("2025-01-01", 2000, "salary"), tx("2025-01-02", 50, "rest")];
+		const all = runReport(source(rows), {});
+		expect(all.received).toBe(2000);
+		// An income-direction report excludes the refund row entirely — it isn't income.
+		const incomeOnly = runReport(source(rows), { direction: "in" });
+		expect(incomeOnly.received).toBe(2000);
+		expect(incomeOnly.count).toBe(1);
+	});
+
+	it("Test C: investment trades stay excluded from economic totals, dividends still count as income", () => {
+		const rows = [
+			tx("2025-01-01", -2000, undefined, { accountId: "acc-invest", action: "buy", ticker: "VWCE", shares: 10 }),
+			tx("2025-01-02", 2500, undefined, { accountId: "acc-invest", action: "sell", ticker: "VWCE", shares: 10 }),
+			tx("2025-01-03", 30, undefined, { accountId: "acc-invest", action: "dividend", ticker: "VWCE" }),
+		];
+		const investingAccounts: Account[] = [...accounts, { id: "acc-invest", name: "Investing", type: "investing", currency: "EUR" }];
+		const result = runReport({ transactions: rows, categories, accounts: investingAccounts }, {});
+		expect(result.received).toBe(30);
+		expect(result.spent).toBe(0);
+	});
+
+	it("Test D: the same trade example only shows gross cash movement in cash-flow mode", () => {
+		const rows = [
+			tx("2025-01-01", -2000, undefined, { accountId: "acc-invest", action: "buy", ticker: "VWCE", shares: 10 }),
+			tx("2025-01-02", 2500, undefined, { accountId: "acc-invest", action: "sell", ticker: "VWCE", shares: 10 }),
+			tx("2025-01-03", 30, undefined, { accountId: "acc-invest", action: "dividend", ticker: "VWCE" }),
+		];
+		const investingAccounts: Account[] = [...accounts, { id: "acc-invest", name: "Investing", type: "investing", currency: "EUR" }];
+		const result = runReport({ transactions: rows, categories, accounts: investingAccounts }, { measure: "cash-flow" });
+		expect(result.spent).toBe(2000);
+		expect(result.received).toBe(2530);
+	});
+
+	it("Test E: economic report totals agree with kpi.ts's totals on the identical fixture (cross-module consistency)", () => {
+		// FIN-005's cross-module invariant: a report and the dashboard must never disagree about what
+		// "spent"/"income" mean for the same rows.
+		const rows = [tx("2025-01-01", -300, "rest"), tx("2025-01-02", 50, "rest"), tx("2025-01-03", 2000, "salary")];
+		const result = runReport(source(rows), {});
+		const [year] = summarizeByYear({ accounts, categories, transactions: rows });
+		expect(result.spent).toBe(year.expenses);
+		expect(result.received).toBe(year.income);
 	});
 });
 

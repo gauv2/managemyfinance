@@ -2370,6 +2370,17 @@
 	color: var(--text-normal);
 	font-size: var(--font-ui-small);
 }
+.fp-form-section {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 12px;
+	border-radius: var(--fp-radius-md);
+	background: var(--background-secondary);
+}
+.fp-form-section.is-hidden {
+	display: none;
+}
 .fp-form-money-wrap {
 	display: flex;
 	gap: 6px;

@@ -34,7 +34,7 @@ import { ScheduleEditModal } from "../modals/ScheduleEditModal";
 import { buildBackup, serializeBackup, transactionsToCsv, writeExport } from "../data/backup";
 import { merchantDisplayName } from "../import/merchantKey";
 import { unknownMerchants } from "../import/merchantMemory";
-import { fetchLatestRates } from "../fx";
+import { fetchHistoricalRates, fetchLatestRates } from "../fx";
 import { decimalSeparator, formatMoneyForInput, parseMoney } from "../money";
 import type FinancePlugin from "../main";
 import { DeleteAllDataModal } from "../modals/DeleteAllDataModal";
@@ -122,7 +122,7 @@ const FEATURES: { icon: string; title: string; desc: string }[] = [
 	{
 		icon: "coins",
 		title: "Currency & exchange rates",
-		desc: "Subscriptions can use any currency. A manual rate table converts them into EUR for combined totals — edit rates yourself, or fetch the day's ECB reference rates on demand (the only network request this plugin ever makes).",
+		desc: "Subscriptions can use any currency. A manual rate table converts them into EUR for combined totals — edit rates yourself, or fetch the day's ECB reference rates on demand (one of a handful of explicit, user-initiated network requests this plugin makes — see Settings → Currency).",
 	},
 	{
 		icon: "smartphone",
@@ -1867,8 +1867,10 @@ export class FinanceSettingTab extends PluginSettingTab {
 		const card = rateGroup.content;
 		this.note(
 			card,
-			`Used only to combine subscriptions and totals that aren't already in ${BASE_CURRENCY}. Type your own, or fetch today's from api.frankfurter.dev — free, no key, no account data sent, and the only network request this plugin ever makes.`
+			`Used only to combine subscriptions and totals that aren't already in ${BASE_CURRENCY}. Type your own, or fetch today's from api.frankfurter.dev — free, no key, no account data sent. (This plugin also makes optional, user-initiated requests to Yahoo Finance and CoinGecko for investment/crypto price refreshes — see the Investing/Crypto dashboards.)`
 		);
+
+		this.renderHistoricalRatesBackfill(card);
 
 		const grid = card.createDiv({ cls: "fp-currency-grid" });
 		CURRENCIES.filter((code) => code !== BASE_CURRENCY).forEach((code) => {
@@ -1902,6 +1904,76 @@ export class FinanceSettingTab extends PluginSettingTab {
 			input.addEventListener("keydown", (ev) => {
 				if (ev.key === "Enter") input.blur();
 			});
+		});
+	}
+
+	/**
+	 * The distinct dates that actually need a historical rate: every date a non-base-currency
+	 * transaction or account snapshot falls on. A vault where every row is already in the base currency
+	 * needs no backfill at all — this returns empty and the button below stays hidden for exactly that
+	 * (common, single-currency) case.
+	 */
+	private datesNeedingHistoricalRate(): string[] {
+		const base = (this.plugin.settings.baseCurrency ?? BASE_CURRENCY).toUpperCase();
+		const dates = new Set<string>();
+		for (const tx of this.plugin.store.transactions) {
+			const code = (tx.currency || base).toUpperCase();
+			if (code !== base && tx.date) dates.add(tx.date.slice(0, 10));
+		}
+		const accountCurrency = new Map(this.plugin.store.accounts.map((a) => [a.id, (a.currency || base).toUpperCase()]));
+		for (const snap of this.plugin.store.snapshots) {
+			const code = accountCurrency.get(snap.accountId);
+			if (code && code !== base && snap.date) dates.add(snap.date.slice(0, 10));
+		}
+		return Array.from(dates).sort();
+	}
+
+	/**
+	 * Backfilling historical rates (v1.2.7 remediation Phase 3, FIN-008): without this, every foreign-
+	 * currency transaction is valued at *today's* rate regardless of how old it is — a 2019 dollar
+	 * balance shown at whatever rate happens to be configured right now, moving every time that rate is
+	 * refreshed. One request per missing date (Frankfurter has no documented rate limit, per the note
+	 * above, but a vault with years of foreign-currency history can still mean a genuinely long-running
+	 * fetch) — never automatic, only ever run when explicitly clicked here.
+	 */
+	private renderHistoricalRatesBackfill(card: HTMLElement): void {
+		const missing = this.datesNeedingHistoricalRate().filter((d) => !this.plugin.settings.exchangeRateHistory?.[d]);
+		if (missing.length === 0) return;
+
+		const row = card.createDiv({ cls: "fp-setting-note" });
+		row.createSpan({
+			text: `${missing.length} date${missing.length === 1 ? "" : "s"} of ledger history ${
+				missing.length === 1 ? "has" : "have"
+			} no historical rate yet — those transactions are valued at today's rate until backfilled. `,
+		});
+		const btn = card.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+		icon(btn, "history");
+		const label = btn.createSpan({ text: "Backfill historical rates" });
+		btn.addEventListener("click", async () => {
+			btn.setAttribute("disabled", "true");
+			const settings = this.plugin.settings;
+			settings.exchangeRateHistory ??= {};
+			let done = 0;
+			let failed = 0;
+			for (const date of missing) {
+				label.setText(`Backfilling ${date}… (${done + 1}/${missing.length})`);
+				try {
+					settings.exchangeRateHistory[date] = await fetchHistoricalRates(date);
+					done++;
+				} catch {
+					failed++;
+				}
+			}
+			await this.plugin.saveSettings();
+			this.plugin.refreshViews();
+			new Notice(
+				failed > 0
+					? `Backfilled ${done} of ${missing.length} dates — ${failed} failed and can be retried by running this again.`
+					: `Backfilled ${done} date${done === 1 ? "" : "s"} of historical rates.`
+			);
+			// Re-render rather than manually clearing this button: on a partial failure, the still-missing
+			// dates need a fresh, clickable "Backfill" button to retry, not a removed one.
+			this.renderBody();
 		});
 	}
 
@@ -1950,7 +2022,7 @@ export class FinanceSettingTab extends PluginSettingTab {
 				missing.length > 0
 					? `Your ledger holds transactions in ${Array.from(foreign).join(", ")}. No rate is set for ${missing.join(
 							", "
-					  )}, so those amounts are currently counted one-for-one — set a rate below to convert them properly.`
+					  )}, so totals involving those amounts currently read as "Incomplete" rather than a number — set a rate below to convert them.`
 					: `Your ledger holds transactions in ${Array.from(foreign).join(", ")}, all of which have a rate set.`
 			);
 		}

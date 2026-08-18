@@ -89,9 +89,10 @@ export function scaleMonthly(monthlyAmount: number, cycle: DisplayCycle): number
 /** Manual, user-maintained rate table (Settings → Currency) — 1 unit of the key currency = that many EUR. No network calls, ever. */
 export type ExchangeRates = Record<string, number>;
 
-/** Converts an amount from `currency` into the app's base currency. Missing/invalid rates pass through
- *  unconverted (1:1), same as before rates existed. `baseCurrency` defaults to EUR, which is what every
- *  caller meant before the base currency became a setting. */
+/** Converts an amount from `currency` into the app's base currency, at today's rate — a subscription's
+ *  cost is a recurring current figure, not a dated flow, so there's no "as of" date to convert at.
+ *  `baseCurrency` defaults to EUR, which is what every caller meant before it became a setting. Missing
+ *  or invalid rates return NaN (see currency.ts's convert) rather than a plausible 1:1 passthrough. */
 export function toBaseCurrency(amount: number, currency: string, rates: ExchangeRates | undefined, baseCurrency?: string): number {
 	return convert(amount, currency, { baseCurrency, rates });
 }

@@ -141,6 +141,48 @@ describe("classifyTransaction — debt (FIN-012 groundwork)", () => {
 	});
 });
 
+// ---------- debt principal/interest/fee splitting (v1.2.7 remediation Phase 4, FIN-012) ----------
+
+describe("classifyTransaction — split debt payments", () => {
+	it("mortgage split: a payment with both principal and interest only affects expense by the interest portion", () => {
+		const t = tx({ date: "2024-01-01", accountId: loan.id, amount: 1000, principalAmount: 700, interestAmount: 300 });
+		const c = classifyTransaction(store(), t);
+		expect(c.kind).toBe("debt-principal");
+		expect(c.affectsExpense).toBe(300);
+		expect(c.affectsIncome).toBe(0);
+		expect(c.confidence).toBe("explicit");
+		expect(isEconomicallyNeutral(c)).toBe(false); // not fully neutral — the interest portion is real spend
+	});
+
+	it("loan with fee: principal, interest, and fee all coexist in one payment", () => {
+		const t = tx({ date: "2024-01-01", accountId: loan.id, amount: 1050, principalAmount: 900, interestAmount: 100, feeAmount: 50 });
+		const c = classifyTransaction(store(), t);
+		expect(c.kind).toBe("debt-principal");
+		expect(c.affectsExpense).toBe(150); // interest + fee, not principal
+	});
+
+	it("a bare credit-card payment (no split fields set) is still fully economically neutral — unaffected by Phase 4", () => {
+		const t = tx({ date: "2024-01-01", accountId: creditCard.id, amount: 500 });
+		const c = classifyTransaction(store(), t);
+		expect(c.kind).toBe("debt-principal");
+		expect(c.affectsExpense).toBe(0);
+		expect(isEconomicallyNeutral(c)).toBe(true);
+	});
+
+	it("an explicit split takes priority over a category-based refund guess", () => {
+		const t = tx({ date: "2024-01-01", accountId: creditCard.id, amount: 300, categoryId: catFood.id, interestAmount: 300 });
+		const c = classifyTransaction(store(), t);
+		expect(c.kind).toBe("debt-principal");
+		expect(c.affectsExpense).toBe(300);
+	});
+
+	it("split fields on a non-debt account are ignored — the rule only applies to a debt-carrying account's credit", () => {
+		const t = tx({ date: "2024-01-01", accountId: checking.id, amount: 1000, principalAmount: 700, interestAmount: 300 });
+		const c = classifyTransaction(store(), t);
+		expect(c.kind).not.toBe("debt-principal");
+	});
+});
+
 describe("classifyTransaction — refunds and income", () => {
 	it("classifies a positive amount into a non-income category as a refund, reducing expense", () => {
 		const t = tx({ date: "2024-01-01", accountId: checking.id, amount: 40, categoryId: catFood.id });

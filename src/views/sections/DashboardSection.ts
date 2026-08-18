@@ -244,16 +244,17 @@ export function renderAllAccountsDashboard(
 	const inPeriod = ` · ${periodLabel}`;
 	const savingsRateLabel = `Savings rate · ${periodLabel}`;
 
-	// Every figure below adds transactions across currencies at the store's configured rates; one
-	// missing rate passes that transaction through at 1:1 rather than dropping it (see currency.ts's
-	// convert()) — the least-wrong single option, but silently wrong all the same for a real
-	// multi-currency vault. Surfaced here rather than left invisible (FIN-008): net worth, income,
-	// expenses and the FI meter are the highest-traffic totals a bad rate would quietly skew.
+	// Every figure below adds transactions across currencies at the store's configured rates; a
+	// currency with no rate at all — current or historical — makes convert() return NaN rather than a
+	// plausible-looking number (see currency.ts's convert(), v1.2.7 Phase 3), which renders as
+	// "Incomplete" wherever it lands (formatMoney/formatPct) instead of a total that's silently wrong.
+	// Surfaced here too, up front, rather than left for the reader to notice a stray "Incomplete" tile:
+	// net worth, income, expenses and the FI meter are the highest-traffic totals a missing rate reaches.
 	const mixedCurrencies = unconvertibleCurrencies(store.transactions, store.fx);
 	if (mixedCurrencies.length > 0) {
 		container.createDiv({
 			cls: "fp-report-warning",
-			text: `Totals below include ${mixedCurrencies.join(", ")} counted at 1:1 — no exchange rate is set for ${mixedCurrencies.length === 1 ? "it" : "them"}. Set one in Settings → Currency for accurate totals.`,
+			text: `Totals below may read "Incomplete" — no exchange rate is set for ${mixedCurrencies.join(", ")}. Set one in Settings → Currency to fix them.`,
 		});
 	}
 

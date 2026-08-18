@@ -66,6 +66,13 @@ describe("rollover", () => {
 		const s = store([], [cat]);
 		expect(rolloverInto(s, [cat], cat, "2024-03")).toBe(200);
 	});
+
+	it("nets a refund against the spend it returned, agreeing with the budget page's own net-of-refund total (v1.2.7 Phase 5.1)", () => {
+		const cat: Category = { ...food, rollover: true, budgetHistory: { "2024-01": 300, "2024-02": 300 } };
+		// Spent 200, then 50 of it refunded — net spend is 150, so February should carry 150 (300 - 150).
+		const s = store([tx("2024-01-10", -200, cat.id), tx("2024-01-15", 50, cat.id)], [cat, salary]);
+		expect(rolloverInto(s, [cat], cat, "2024-02")).toBe(150);
+	});
 });
 
 describe("income categories", () => {

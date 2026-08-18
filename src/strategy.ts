@@ -1,7 +1,7 @@
 import { resolvePrimaryId } from "./categories";
 import { convert } from "./currency";
-import { classifyTransaction, isEconomicallyNeutral } from "./finance/semantics";
-import { averageMonthlyExpenses, netWorth, type KpiStore } from "./kpi";
+import { classifyTransaction } from "./finance/semantics";
+import { averageMonthlyExpenses, netWorth, scaledEconomicAmount, type KpiStore } from "./kpi";
 import { lastCompleteMonthKey, monthKeysBetween, monthsInRange } from "./period";
 import { isLiabilityType, isLiquidType, type Account, type DebtPayoffStrategy, type FinancialGoal, type ReservePlan, type ReviewCadence, type Strategy } from "./types";
 
@@ -41,7 +41,10 @@ function isEssentialCategory(store: KpiStore, categoryId: string | undefined): b
  *  earliest and latest (complete) essential-spend activity, not just the months that happen to contain
  *  an essential transaction, so a genuinely zero-spend month doesn't silently shrink the divisor and
  *  inflate the average — and the same transfer/trade/debt-principal exclusion via the shared classifier,
- *  so a transfer into an essential-flagged category can't inflate the reserve target. */
+ *  so a transfer into an essential-flagged category can't inflate the reserve target. A refund against
+ *  an essential purchase also nets correctly now (v1.2.7 Phase 5.2) — a sign-only `tx.amount >= 0` skip
+ *  used to drop every refund entirely instead of reducing essential spend by it, overstating the
+ *  reserve target this feeds. */
 function essentialMonthlyAverage(store: KpiStore): number {
 	let earliestMonth: string | undefined;
 	let latestMonth: string | undefined;
@@ -52,10 +55,11 @@ function essentialMonthlyAverage(store: KpiStore): number {
 		if (!month) continue;
 		if (!earliestMonth || month < earliestMonth) earliestMonth = month;
 		if (!latestMonth || month > latestMonth) latestMonth = month;
-		if (isEconomicallyNeutral(classifyTransaction(store, tx))) continue;
-		if (tx.amount >= 0) continue;
-		const amount = store.fx ? convert(tx.amount, tx.currency, store.fx) : tx.amount;
-		byMonth.set(month, (byMonth.get(month) ?? 0) - amount);
+		const classified = classifyTransaction(store, tx);
+		if (classified.affectsExpense === 0) continue;
+		// A flow — convert at its own date (v1.2.7 Phase 3), not today's rate.
+		const amountBase = store.fx ? convert(tx.amount, tx.currency, store.fx, tx.date) : tx.amount;
+		byMonth.set(month, (byMonth.get(month) ?? 0) + scaledEconomicAmount(tx, classified.affectsExpense, amountBase));
 	}
 	if (!earliestMonth || !latestMonth) return 0;
 

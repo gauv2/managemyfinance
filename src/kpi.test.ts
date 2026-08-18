@@ -31,6 +31,7 @@ const savings: Account = { id: "acc-savings", name: "Savings", type: "saving", c
 const investing: Account = { id: "acc-investing", name: "Investing", type: "investing", currency: "EUR", openingBalance: 0 };
 const crypto: Account = { id: "acc-crypto", name: "Crypto", type: "crypto", currency: "EUR", openingBalance: 0 };
 const credit: Account = { id: "acc-credit", name: "Credit card", type: "credit", currency: "EUR", openingBalance: 0 };
+const mortgage: Account = { id: "acc-mortgage", name: "Mortgage", type: "mortgage", currency: "EUR", openingBalance: 200000 };
 
 const catFood: Category = { id: "cat-food", name: "Food", color: "#000", icon: "utensils", aliases: [] };
 const catIncome: Category = { id: "cat-income", name: "Income", color: "#000", icon: "coins", aliases: [] };
@@ -714,6 +715,88 @@ describe("summarizeByYear — debtPrincipal", () => {
 	});
 });
 
+// ---------- debt principal/interest/fee splitting (v1.2.7 remediation Phase 4, FIN-012) ----------
+
+describe("summarizeByYear / categoryTotals — split debt payments", () => {
+	it("mortgage split: only the interest counts as expense, only the principal counts as debtPrincipal", () => {
+		const s = store({
+			accounts: [mortgage],
+			transactions: [
+				tx({ date: "2024-01-05", accountId: mortgage.id, amount: 1000, principalAmount: 700, interestAmount: 300, categoryId: catFood.id }),
+			],
+		});
+		const [year] = summarizeByYear(s, mortgage.id);
+		expect(year.expenses).toBeCloseTo(300, 6);
+		expect(year.debtPrincipal).toBeCloseTo(700, 6);
+		expect(year.income).toBe(0);
+		// categoryTotals must agree with the year summary on the same figure, not double- or under-count.
+		expect(categoryTotals(s, "2024", mortgage.id).get(catFood.id)).toBeCloseTo(300, 6);
+	});
+
+	it("loan with fee: principal, interest, and fee all coexist correctly in one payment", () => {
+		const s = store({
+			accounts: [mortgage],
+			transactions: [
+				tx({ date: "2024-01-05", accountId: mortgage.id, amount: 1050, principalAmount: 900, interestAmount: 100, feeAmount: 50 }),
+			],
+		});
+		const [year] = summarizeByYear(s, mortgage.id);
+		expect(year.expenses).toBeCloseTo(150, 6); // interest + fee, not principal
+		expect(year.debtPrincipal).toBeCloseTo(900, 6);
+	});
+
+	it("a credit-card payment with no split recorded stays fully net-worth-neutral, exactly as before Phase 4", () => {
+		const s = store({
+			accounts: [credit],
+			transactions: [tx({ date: "2024-01-05", accountId: credit.id, amount: 500 })],
+		});
+		const [year] = summarizeByYear(s, credit.id);
+		expect(year.income).toBe(0);
+		expect(year.expenses).toBe(0);
+		expect(year.debtPrincipal).toBe(500);
+	});
+
+	it("sums correctly across several split payments in the same year", () => {
+		const s = store({
+			accounts: [mortgage],
+			transactions: [
+				tx({ date: "2024-01-05", accountId: mortgage.id, amount: 1000, principalAmount: 700, interestAmount: 300 }),
+				tx({ date: "2024-02-05", accountId: mortgage.id, amount: 1005, principalAmount: 705, interestAmount: 300 }),
+			],
+		});
+		const [year] = summarizeByYear(s, mortgage.id);
+		expect(year.expenses).toBeCloseTo(600, 6);
+		expect(year.debtPrincipal).toBeCloseTo(1405, 6);
+	});
+
+	it("the aggregate (all-accounts, no-snapshots) net-worth walk still reconstructs the same total netWorthAsOf computes directly, with a split payment in the mix", () => {
+		// Regression found by an independent review: bucket.transferAmount used to only track the fully-
+		// neutral case, so a split payment's principal portion (neutral) fell out of the
+		// income-expenses+transferAmount walk entirely once its interest portion made the row no longer
+		// fully neutral — silently drifting the walked netWorthEOY away from the real total. This only
+		// shows up with no accountId (aggregate) and no snapshots anywhere (summarizeByYear routes to the
+		// walking-cumulative branch only then) — a single-account call like the tests above never
+		// exercised the walk at all, which is exactly why this slipped through.
+		const s = store({
+			accounts: [checking, mortgage],
+			transactions: [
+				tx({ date: "2024-01-01", accountId: checking.id, amount: 5000, categoryId: catIncome.id }),
+				tx({ date: "2024-01-05", accountId: mortgage.id, amount: 1000, principalAmount: 700, interestAmount: 300 }),
+			],
+		});
+		const years = summarizeByYear(s); // no accountId -> aggregate, useNetSavingsOnly path
+		const [year] = years;
+		// netWorthAsOf sums every account's raw ledger balance directly (liability-signed opening
+		// balance plus every transaction's raw amount, unconditionally — it has no notion of a
+		// principal/interest split at all). The walked reconstruction must land on exactly the same
+		// total despite going through the classifier and the income/expenses/transferAmount split to get
+		// there — that agreement is the actual regression test; before the fix, the walk read €300 too
+		// low (the interest expense was subtracted from the walk without the matching +300 that
+		// netWorthAsOf's raw sum never subtracted out in the first place).
+		expect(year.netWorthEOY).toBeCloseTo(netWorthAsOf(s, "2024-12-31"), 6);
+	});
+});
+
 // ---------- moving-average cost basis + realized P/L (FIN-001) ----------
 
 describe("moving-average cost basis on sell", () => {
@@ -865,6 +948,93 @@ describe("netWorthAsOf — investing/crypto accounts without a snapshot", () => 
 	});
 });
 
+// ---------- pre-snapshot position sold post-snapshot (v1.2.7 remediation Phase 1) ----------
+//
+// A snapshot states real market value, which historical cost is not. Selling a position that already
+// existed *before* the snapshot, for a price that matches (or differs from) the value the snapshot had
+// already assigned it, must not add the historical-cost gain/loss on top of a snapshot that already
+// contains it — that was a real bug in the fallback above (it only handled positions opened *after*
+// the snapshot correctly). Fixtures include an explicit deposit before the buy, matching a real
+// checking-then-invest sequence, so pureCashAsOf's "cash at snapshot time" reads as the deposit-minus-buy
+// figure a real vault would have, not an unrealistic bare negative balance.
+describe("netWorthAsOf — selling a pre-snapshot position after the snapshot", () => {
+	it("Test A: selling a fully appreciated pre-snapshot position at exactly its snapshot-implied value is net-worth neutral", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: 1000, action: "deposit" }),
+				tx({ date: "2024-01-02", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				tx({ date: "2024-08-01", accountId: investing.id, amount: 1500, action: "sell", ticker: "VWCE", shares: 10 }),
+			],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 1500 }],
+		});
+		// Nothing financially happened at the sale: €1,500 of shares became €1,500 of cash.
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(1500, 6);
+		// Historical-cost realized P/L (a separate, "for your records" figure) still shows the true
+		// all-time gain against what was actually paid — untouched by the valuation-side reset.
+		expect(investingRealizedPnLAsOf(s, investing.id)).toBeCloseTo(500, 6);
+	});
+
+	it("Test B: selling a depreciated pre-snapshot position at exactly its snapshot-implied value is net-worth neutral, and the loss isn't subtracted twice", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: 1000, action: "deposit" }),
+				tx({ date: "2024-01-02", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				tx({ date: "2024-08-01", accountId: investing.id, amount: 700, action: "sell", ticker: "VWCE", shares: 10 }),
+			],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 700 }],
+		});
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(700, 6);
+		expect(investingRealizedPnLAsOf(s, investing.id)).toBeCloseTo(-300, 6);
+	});
+
+	it("Test C: a partial disposal at the snapshot-implied per-share price leaves total value unchanged", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: 1000, action: "deposit" }),
+				tx({ date: "2024-01-02", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				// Snapshot implies €150/share (1500 total / 10 shares); selling 5 at that same rate (€750)
+				// is just converting half the position to cash, not a gain or loss.
+				tx({ date: "2024-08-01", accountId: investing.id, amount: 750, action: "sell", ticker: "VWCE", shares: 5 }),
+			],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 1500 }],
+		});
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(1500, 6);
+	});
+
+	it("a sale above the snapshot-implied price still books the genuinely new gain since the snapshot", () => {
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: 1000, action: "deposit" }),
+				tx({ date: "2024-01-02", accountId: investing.id, amount: -1000, action: "buy", ticker: "VWCE", shares: 10 }),
+				// Snapshot implies €150/share; sold for €160/share (€1,600) — €100 of genuinely new gain
+				// accrued after the snapshot, on top of the €500 the snapshot already captured.
+				tx({ date: "2024-08-01", accountId: investing.id, amount: 1600, action: "sell", ticker: "VWCE", shares: 10 }),
+			],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 1500 }],
+		});
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(1600, 6);
+	});
+
+	it("degenerate case: a near-zero (free-share) cost basis at snapshot time still doesn't double-count on a later sell", () => {
+		// Shares recorded at zero cost (e.g. a stock grant) held at snapshot time: the proportional
+		// reset factor (impliedValue / originalCostBasis) is undefined when the denominator is ~0. Falling
+		// back to a no-op reset (factor of 1) would leave the original ~€0 cost basis in place, and
+		// selling later would book the *entire* sale price as a "gain" — reproducing the exact
+		// double-counting bug this mechanism exists to prevent, for exactly the positions where its
+		// effect is largest.
+		const s = store({
+			transactions: [
+				tx({ date: "2024-01-01", accountId: investing.id, amount: 0, action: "buy", ticker: "VWCE", shares: 10 }),
+				tx({ date: "2024-08-01", accountId: investing.id, amount: 1500, action: "sell", ticker: "VWCE", shares: 10 }),
+			],
+			snapshots: [{ id: "snap-1", accountId: investing.id, date: "2024-06-01", balance: 1500 }],
+		});
+		// Selling at exactly the snapshot-implied value is net-worth neutral, same as every other "sold
+		// at the snapshot's own price" case — not a windfall €1,500 gain.
+		expect(netWorthAsOf(s, "2024-12-31", investing.id)).toBeCloseTo(1500, 6);
+	});
+});
+
 describe("investmentStateAsOf", () => {
 	it("reports cash, holdings, open cost basis, and realized P/L as separate, non-overlapping figures", () => {
 		const s = store({
@@ -905,6 +1075,16 @@ describe("investingActivityByYear", () => {
 		});
 		const [year] = investingActivityByYear(s, investing.id);
 		expect(year).toMatchObject({ year: "2024", deposits: 1000, withdrawals: 200, dividends: 5, fees: 1 });
+	});
+
+	it("converts a fee in a foreign currency into the base currency, not the raw figure (v1.2.7 Phase 5.3)", () => {
+		const s = store({
+			transactions: [tx({ date: "2024-01-01", accountId: investing.id, amount: -1000, action: "buy", currency: "USD", fee: 10 })],
+			fx: { baseCurrency: "EUR", rates: { USD: 0.9 } },
+		});
+		const [year] = investingActivityByYear(s, investing.id);
+		// $10 fee at 0.9 EUR/USD = €9, not the raw $10 figure.
+		expect(year.fees).toBeCloseTo(9, 6);
 	});
 });
 
@@ -999,6 +1179,51 @@ describe("fiExpenseBase", () => {
 		const base = fiExpenseBase(s);
 		expect(base.annual).toBe(0);
 		expect(base.netAnnual).toBe(0);
+	});
+});
+
+// ---------- flow vs stock FX end-to-end (v1.2.7 remediation Phase 3) ----------
+
+describe("netWorthAsOf — historical (dated) FX wiring", () => {
+	const usDollar: Account = { id: "acc-usd", name: "US account", type: "debit", currency: "USD" };
+
+	it("converts a flow (a transaction) at its own date, not today's rate", () => {
+		const s = store({
+			accounts: [usDollar],
+			transactions: [tx({ date: "2020-01-01", accountId: usDollar.id, amount: 1000, currency: "USD" })],
+			fx: { baseCurrency: "EUR", rates: { USD: 0.9 }, history: { "2020-01-01": { USD: 0.8 } } },
+		});
+		// Historical rate (0.8) applies, not today's (0.9): 1000 * 0.8 = 800, not 900.
+		expect(netWorthAsOf(s, "2024-12-31", usDollar.id)).toBeCloseTo(800, 6);
+	});
+
+	it("converts a snapshot (a stock, but a dated observation) at the snapshot's own date, not today's rate", () => {
+		const s = store({
+			accounts: [usDollar],
+			transactions: [],
+			snapshots: [{ id: "snap-1", accountId: usDollar.id, date: "2022-06-01", balance: 1000 }],
+			fx: { baseCurrency: "EUR", rates: { USD: 0.9 }, history: { "2022-06-01": { USD: 0.85 } } },
+		});
+		expect(netWorthAsOf(s, "2024-12-31", usDollar.id)).toBeCloseTo(850, 6);
+	});
+
+	it("an opening balance (no date of its own) always uses today's rate, not history", () => {
+		const withOpeningBalance: Account = { ...usDollar, openingBalance: 1000 };
+		const s = store({
+			accounts: [withOpeningBalance],
+			transactions: [],
+			fx: { baseCurrency: "EUR", rates: { USD: 0.9 }, history: { "2020-01-01": { USD: 0.8 } } },
+		});
+		expect(netWorthAsOf(s, "2024-12-31", withOpeningBalance.id)).toBeCloseTo(900, 6);
+	});
+
+	it("reads as incomplete rather than a plausible number when a flow's own date has no historical rate and no current rate exists either", () => {
+		const s = store({
+			accounts: [usDollar],
+			transactions: [tx({ date: "2020-01-01", accountId: usDollar.id, amount: 1000, currency: "USD" })],
+			fx: { baseCurrency: "EUR" }, // no rates at all
+		});
+		expect(netWorthAsOf(s, "2024-12-31", usDollar.id)).toBeNaN();
 	});
 });
 

@@ -4,10 +4,12 @@ export function formatEUR(n: number): string {
 	return formatMoneyRounded(n);
 }
 
-/** "N/A" for undefined (a savings rate with no meaningful denominator — see kpi.ts's savingsRateOf)
- *  rather than a number pretending to be one. */
+/** "N/A" for undefined (a savings rate with no meaningful denominator — see kpi.ts's savingsRateOf).
+ *  "Incomplete" for NaN — a percentage built from an unconvertible currency (see currency.ts's convert)
+ *  — rather than either one rendering as a number that isn't real. */
 export function formatPct(n: number | undefined, digits = 0): string {
 	if (n === undefined) return "N/A";
+	if (Number.isNaN(n)) return "Incomplete";
 	return `${n * 100 >= 0 ? "+" : ""}${(n * 100).toFixed(digits)}%`;
 }
 

@@ -175,8 +175,15 @@ export interface FormatMoneyOptions {
 /**
  * The single money formatter for the whole plugin. Everything displayed goes through here so one
  * setting flips every amount at once, instead of each section hard-coding its own locale.
+ *
+ * NaN specifically (as opposed to Infinity, which stays treated as 0 below — a different kind of bad
+ * input, not this app's incomplete-conversion sentinel) renders as "Incomplete" rather than silently
+ * becoming "€0". currency.ts's `convert()` deliberately returns NaN when a transaction's currency has
+ * no resolvable exchange rate (FIN-008) precisely so that it — and any sum it's added into — can't be
+ * mistaken for a real total here. A confidently wrong "€0" would be worse than this looking unfinished.
  */
 export function formatMoney(amount: number, opts: FormatMoneyOptions = {}): string {
+	if (Number.isNaN(amount)) return "Incomplete";
 	const maximumFractionDigits = opts.maximumFractionDigits ?? 2;
 	let value = isFinite(amount) ? amount : 0;
 	// Intl checks the sign before rounding, so floating-point noise or a genuinely tiny balance (e.g.

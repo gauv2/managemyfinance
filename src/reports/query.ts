@@ -18,6 +18,25 @@ import type { Account, Category, Transaction } from "../types";
  * exported from — the same reason the monthly/yearly builders share their calculation modules.
  */
 
+/**
+ * Which of two different questions a report is answering (v1.2.7 remediation Phase 2):
+ *
+ * "economic" (the default) is the same meaning every other screen in the app uses — income/expense as
+ * `classifyTransaction` reads them. A refund nets against the purchase it returned; a transfer, trade,
+ * or debt-principal payment isn't spending or income at all. This is what "what did I spend on
+ * restaurants" or "what's my income" should mean, and it's what makes a report agree with the
+ * dashboard/budgets on the same figure.
+ *
+ * "cash-flow" is the literal, unfiltered question: how much money moved through this account,
+ * regardless of what it meant. A refund is just another inbound euro, not netted against anything; a
+ * trade's full buy/sell cash and a transfer's full amount count too — `includeTransfers` defaults to
+ * true in this mode for exactly that reason, though an explicit `includeTransfers: false` still wins.
+ * This is the right mode for "how much cash moved through this account this month", never for a
+ * spending/income figure — see the report spec's FIN-002/FIN-005 residual findings for why conflating
+ * the two was the bug.
+ */
+export type ReportMeasure = "economic" | "cash-flow";
+
 /** What a report asks for. Every field is optional; an empty query means "the whole ledger". */
 export interface ReportQuery {
 	/** Inclusive "YYYY-MM-DD" bounds. */
@@ -33,11 +52,19 @@ export interface ReportQuery {
 	accountIds?: string[];
 	/** Free text over description, counterparty and notes. */
 	search?: string;
-	/** "out" is money spent, "in" is money received. */
+	/** Defaults to "economic" — see `ReportMeasure`. Changes what "out"/"in" below mean. */
+	measure?: ReportMeasure;
+	/**
+	 * In "economic" mode (the default): "out" means an economic expense (affectsExpense !== 0 — a
+	 * purchase and any refund against it, netted); "in" means economic income (affectsIncome !== 0 —
+	 * excludes a refund, which is not income). In "cash-flow" mode: "out"/"in" are the transaction's raw
+	 * signed amount, exactly as before.
+	 */
 	direction?: "all" | "out" | "in";
 	/** Transfers between your own accounts, trades (a buy/sell of equal cash and security value), and
 	 *  debt-principal payments aren't spending; excluded unless asked for. Named for the most familiar
-	 *  case, but gates all three — see classifyTransaction in ../finance/semantics. */
+	 *  case, but gates all three — see classifyTransaction in ../finance/semantics. Defaults to true in
+	 *  "cash-flow" mode (see `ReportMeasure`), false otherwise. */
 	includeTransfers?: boolean;
 }
 
@@ -110,15 +137,28 @@ export function matchesQuery(
 		} else if (!categoryIds.has(id)) return false;
 	}
 
+	const measure = query.measure ?? "economic";
 	const direction = query.direction ?? "all";
-	if (direction === "out" && tx.amount >= 0) return false;
-	if (direction === "in" && tx.amount <= 0) return false;
+	if (measure === "economic") {
+		// "out"/"in" mean economic expense/income, not raw sign — a refund passes an "out" (expense)
+		// filter (it nets against the purchase it returned) but fails an "in" (income) filter (it isn't
+		// income), which is exactly backwards from what raw-sign filtering did before (FIN-002/FIN-005).
+		const classified = classifyTransaction(store, tx);
+		if (direction === "out" && classified.affectsExpense === 0) return false;
+		if (direction === "in" && classified.affectsIncome === 0) return false;
+	} else if (direction === "out" && tx.amount >= 0) {
+		return false;
+	} else if (direction === "in" && tx.amount <= 0) {
+		return false;
+	}
 
 	// A transfer is the same money appearing twice, once on each side; a trade exchanges cash for a
 	// security of equal value; a debt-principal payment reduces what's owed. None of the three is
 	// spending or income — counting them as such would make "what did I spend this year" include every
-	// euro moved to savings, or an ETF purchase show up as €2,000 of spending (FIN-002).
-	if (!query.includeTransfers && isEconomicallyNeutral(classifyTransaction(store, tx))) return false;
+	// euro moved to savings, or an ETF purchase show up as €2,000 of spending (FIN-002). Cash-flow mode
+	// wants the opposite by default: every euro that actually moved, transfers and trades included.
+	const includeTransfers = query.includeTransfers ?? measure === "cash-flow";
+	if (!includeTransfers && isEconomicallyNeutral(classifyTransaction(store, tx))) return false;
 
 	const needle = (query.search ?? "").trim().toLowerCase();
 	if (needle) {
@@ -166,12 +206,27 @@ export function runReport(source: ReportSource, query: ReportQuery): ReportResul
 	const byAccount = new Map<string, ReportGroup>();
 	const months = new Set<string>();
 
+	const measure = query.measure ?? "economic";
 	for (const tx of source.transactions) {
 		if (!matchesQuery(tx, query, categoryIds, source)) continue;
 		rows.push(tx);
 
-		const amount = convert(tx.amount, tx.currency, source.fx);
-		if (amount < 0) {
+		// A report row is a flow — convert at its own date (v1.2.7 Phase 3), not today's rate.
+		const amount = convert(tx.amount, tx.currency, source.fx, tx.date);
+		if (measure === "economic") {
+			// A refund's affectsExpense is negative (it nets off the purchase it returned), so summing it
+			// straight into `spent` alongside genuine expenses already nets correctly — no separate
+			// "refund" bucket needed. A refund never has affectsIncome > 0, so it can never inflate
+			// `received` either (FIN-002/FIN-005: raw-sign totals used to do both wrong).
+			const classified = classifyTransaction(source, tx);
+			if (classified.affectsExpense !== 0) {
+				const expenseAmount = -amount;
+				spent += expenseAmount;
+				largest = Math.max(largest, expenseAmount);
+			} else if (classified.affectsIncome > 0) {
+				received += amount;
+			}
+		} else if (amount < 0) {
 			spent += -amount;
 			largest = Math.max(largest, -amount);
 		} else {

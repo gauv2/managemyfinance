@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requestUrl } from "obsidian";
-import { fetchLatestRates } from "./fx";
+import { fetchHistoricalRates, fetchLatestRates } from "./fx";
 
 vi.mock("obsidian", async (importOriginal) => {
 	const actual = (await importOriginal()) as Record<string, unknown>;
@@ -56,5 +56,23 @@ describe("fetchLatestRates", () => {
 	it("throws a readable error when the response isn't what it should be", async () => {
 		mockRequest.mockResolvedValue({ json: {} } as never);
 		await expect(fetchLatestRates()).rejects.toThrow(/Unexpected response/);
+	});
+});
+
+describe("fetchHistoricalRates", () => {
+	beforeEach(() => mockRequest.mockReset());
+
+	it("hits the dated endpoint instead of /latest, same inversion as fetchLatestRates", async () => {
+		mockRequest.mockResolvedValue({ json: { rates: { USD: 1.1 } } } as never);
+		const rates = await fetchHistoricalRates("2020-03-15");
+		expect(rates.USD).toBeCloseTo(0.909_091, 6);
+		const url = (mockRequest.mock.calls[0][0] as { url: string }).url;
+		expect(url).toContain("/2020-03-15?");
+		expect(url).not.toContain("/latest");
+	});
+
+	it("throws a readable, date-identifying error when the response isn't what it should be", async () => {
+		mockRequest.mockResolvedValue({ json: {} } as never);
+		await expect(fetchHistoricalRates("2020-03-15")).rejects.toThrow(/2020-03-15/);
 	});
 });

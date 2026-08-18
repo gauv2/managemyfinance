@@ -36,13 +36,14 @@ describe("multi-currency totals", () => {
 		expect(netWorth({ ...s, fx })).toBeCloseTo(900, 6);
 	});
 
-	it("adds dollars to euros as dollars only when no rate is set", () => {
-		// Documented behaviour: an unknown rate passes through 1:1 rather than dropping the row.
+	it("reads as incomplete (NaN), not a plausible 1:1 number, when no rate is set for a currency in use (v1.2.7: FIN-008)", () => {
+		// convert() used to pass an unconvertible amount through 1:1; it now returns NaN so a total
+		// built from it can't be mistaken for a real number (see currency.ts's convert doc comment).
 		const s = store({
 			accounts: [checking, dollars],
 			transactions: [tx({ date: "2024-01-01", accountId: dollars.id, amount: 1000, currency: "USD" })],
 		});
-		expect(netWorth({ ...s, fx: { baseCurrency: "EUR" } })).toBe(1000);
+		expect(netWorth({ ...s, fx: { baseCurrency: "EUR" } })).toBeNaN();
 	});
 
 	it("converts income, expenses and category totals alike", () => {
