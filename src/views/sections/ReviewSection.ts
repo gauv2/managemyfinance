@@ -404,6 +404,10 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 	function renderCounters(): void {
 		countersEl?.remove();
 		countersEl = container.createDiv();
+		// createDiv appends, which is right on the first pass and wrong on every later one: redrawing
+		// the counters after an account change left the stat tiles sitting *below* the filter row they
+		// belong above, and nothing put them back.
+		if (controlsEl?.parentElement === container) container.insertBefore(countersEl, controlsEl);
 		const host = countersEl;
 
 		// Scoped to the account being reviewed, not the whole ledger. Reading every account at once
@@ -995,6 +999,7 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 
 	function renderControls(): void {
 		const controls = container.createDiv({ cls: "fp-ledger-controls" });
+		controlsEl = controls;
 		searchInput(controls, {
 			placeholder: "Search description, counterparty or notes…",
 			value: reviewState.search,
@@ -1166,6 +1171,10 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 	let categoryPanelExpanded = false;
 	const expandedCategories = new Set<string>();
 	let countersEl: HTMLElement | undefined;
+	/** Anchor for the counters, which have to sit above the filters — see renderCounters. */
+	let controlsEl: HTMLElement | undefined;
+	/** One <tr> per rendered transaction, so a single row can be refreshed without rebuilding the table. */
+	let rowEls = new Map<string, HTMLElement>();
 	let categoryPanelEl: HTMLElement | undefined;
 	let merchantPanelEl: HTMLElement | undefined;
 	let bulkBarEl: HTMLElement | undefined;
@@ -1394,6 +1403,7 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 
 		const visible = rows.slice(0, reviewState.shown);
 		visibleRows = visible;
+		rowEls = new Map();
 		visible.forEach((tx) => renderRow(tbody, tx));
 
 		if (rows.length > visible.length) {
@@ -1511,9 +1521,51 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		field.input.select();
 	}
 
+	/** Rebuilds one row in place, leaving every other row — and anything focused in them — untouched. */
+	function refreshRow(tx: Transaction): void {
+		const existing = rowEls.get(tx.id);
+		if (!existing?.parentElement) return;
+		const scratch = document.createElement("tbody");
+		renderRow(scratch, tx);
+		const fresh = scratch.lastElementChild;
+		if (fresh instanceof HTMLElement) {
+			existing.replaceWith(fresh);
+			rowEls.set(tx.id, fresh);
+		}
+	}
+
+	/**
+	 * Everything the section shows except the table.
+	 *
+	 * Setting a category from a row used to call render(), which rebuilds the whole section — including
+	 * the <select> your pointer is already on its way to. A full render is 52ms and replaces that node
+	 * outright, so choosing a primary category and then reaching for the subcategory beside it landed on
+	 * a dead element: the dropdown either refused to open or shut the instant the ledger write returned.
+	 *
+	 * The counters, panels and bulk bar all still have to move, so they are redrawn and put back in
+	 * front of the table rather than appended after it.
+	 */
+	function refreshKeepingTable(): void {
+		if (!tableEl?.parentElement) {
+			render();
+			return;
+		}
+		renderCounters();
+		categoryPanelEl?.remove();
+		merchantPanelEl?.remove();
+		bulkBarEl?.remove();
+		renderCategoryPanel();
+		renderMerchantPanel();
+		renderBulkBar(filtered());
+		for (const el of [categoryPanelEl, merchantPanelEl, bulkBarEl]) {
+			if (el) container.insertBefore(el, tableEl);
+		}
+	}
+
 	function renderRow(tbody: HTMLElement, tx: Transaction): void {
 		const status = statusOf(tx);
 		const tr = tbody.createEl("tr", { cls: `fp-review-row is-${status}` + (selected.has(tx.id) ? " is-selected" : "") });
+		rowEls.set(tx.id, tr);
 
 		const checkCell = tr.createEl("td", { cls: "fp-review-check-cell col-check" });
 		const check = checkCell.createEl("input", { type: "checkbox", cls: "fp-review-check" });
@@ -1593,8 +1645,14 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 				if (alsoTagged > 0) {
 					new Notice(`Also applied to ${alsoTagged} other transaction${alsoTagged === 1 ? "" : "s"} from this merchant.`);
 				}
-				plugin.refreshViews();
-				render();
+				// This row is left exactly as it is — replacing it is what broke the subcategory dropdown,
+				// and its chip has already been updated above. Every other row the fan-out reached is
+				// rebuilt on its own so its category can't go stale, and refreshViews is deliberately not
+				// called: it re-renders this view too, which is the same sledgehammer by another name.
+				for (const [row, previous] of before) {
+					if (row.id !== tx.id && row.categoryId !== previous) refreshRow(row);
+				}
+				refreshKeepingTable();
 			},
 		});
 
