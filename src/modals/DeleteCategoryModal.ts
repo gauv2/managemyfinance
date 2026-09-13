@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { descendantIds, primaryCategories, secondaryCategoriesOf } from "../categories";
 import type FinancePlugin from "../main";
 import type { Category, Transaction } from "../types";
@@ -12,7 +13,7 @@ import { categoryChip, icon } from "../ui/dom";
  * This asks the one question that avoids that: where should those transactions go? Reassigning is the
  * default; clearing the category outright is available but stated plainly as what it is.
  */
-export class DeleteCategoryModal extends Modal {
+export class DeleteCategoryModal extends FinanceModal {
 	private moveToId = "";
 
 	constructor(app: App, private plugin: FinancePlugin, private category: Category, private onDone: () => void) {

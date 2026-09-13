@@ -96,6 +96,16 @@ export async function aiCategorize(
 			if (assignment.confidence >= threshold) {
 				map = remember(map, assignment.merchant, assignment.categoryId, "ai");
 				result.applied++;
+			} else if (applyLow) {
+				// Applied now, flagged for review — the behaviour `applyLowConfidence` has always claimed
+				// and never delivered for answers given in the same run. Parking them meant a merchant
+				// left the "unrecognized" list (it now has a memory entry) while its rows stayed
+				// uncategorized, because `applyPatches` needs a categoryId and a parked suggestion has
+				// none. The answer only took effect on the *next* pass, so asking once looked like the
+				// model had barely helped, and asking twice quietly did the rest.
+				map = remember(map, assignment.merchant, assignment.categoryId, "ai");
+				lowConfidence.add(assignment.merchant);
+				result.flagged++;
 			} else {
 				map = rememberSuggestion(map, assignment.merchant, {
 					categoryId: assignment.categoryId,

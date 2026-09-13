@@ -1,9 +1,11 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { ACCOUNT_TYPE_META } from "../constants";
 import { formatMoneyRounded } from "../money";
 import { accountStats } from "../kpi";
 import type FinancePlugin from "../main";
 import { icon } from "../ui/dom";
+import { ConfirmDeleteAccountModal } from "./ConfirmDeleteAccountModal";
 import { CreateAccountModal } from "./CreateAccountModal";
 import { EditAccountModal } from "./EditAccountModal";
 
@@ -12,7 +14,7 @@ function formatEUR(n: number): string {
 }
 
 /** Full account roster: per-account transaction count and net total, plus add/remove — the "exact numbers per account" view. */
-export class ManageAccountsModal extends Modal {
+export class ManageAccountsModal extends FinanceModal {
 	constructor(app: App, private plugin: FinancePlugin, private onChange?: () => void) {
 		super(app);
 	}
@@ -82,14 +84,39 @@ export class ManageAccountsModal extends Modal {
 		closeBtn.addEventListener("click", () => this.close());
 	}
 
-	private async remove(accountId: string, name: string): Promise<void> {
+	/** Asks first, and says exactly what is attached — see ConfirmDeleteAccountModal. */
+	private remove(accountId: string, name: string): void {
 		const store = this.plugin.store;
-		store.accounts = store.accounts.filter((a) => a.id !== accountId);
-		if (this.plugin.settings.activeAccountId === accountId) {
-			this.plugin.settings.activeAccountId = undefined;
-			await this.plugin.saveSettings();
+		const impact = {
+			transactions: store.transactions.filter((t) => t.accountId === accountId).length,
+			snapshots: store.snapshots.filter((s) => s.accountId === accountId).length,
+			cards: store.cards.filter((c) => c.accountId === accountId).length,
+			subscriptions: store.subscriptions.filter((s) => s.accountId === accountId).length,
+			debts: store.debts.filter((d) => d.accountId === accountId).length,
+		};
+		new ConfirmDeleteAccountModal(this.app, name, impact, (deleteTransactions) => {
+			void this.performRemove(accountId, name, impact, deleteTransactions);
+		}).open();
+	}
+
+	private async performRemove(
+		accountId: string,
+		name: string,
+		impact: { transactions: number; cards: number },
+		deleteTransactions: boolean
+	): Promise<void> {
+		const store = this.plugin.store;
+
+		// The ledger first: rewriting it is the only step that can fail on I/O, and failing it *after*
+		// the account is gone is what produces the orphan this whole dialog exists to prevent.
+		if (deleteTransactions && impact.transactions > 0) {
+			await store.deleteTransactions(store.transactions.filter((t) => t.accountId === accountId).map((t) => t.id));
 		}
-		await store.saveAccounts();
+
+		// Recorded balances describe an account's worth at a date, so they cannot outlive it either way.
+		const snapshotsBefore = store.snapshots.length;
+		store.snapshots = store.snapshots.filter((s) => s.accountId !== accountId);
+		if (store.snapshots.length !== snapshotsBefore) await store.saveSnapshots();
 
 		// Cards always require a linked account — an orphaned card pointing at a deleted account isn't a valid state.
 		const linkedCards = store.cards.filter((c) => c.accountId === accountId);
@@ -98,7 +125,40 @@ export class ManageAccountsModal extends Modal {
 			await store.saveCards();
 		}
 
-		new Notice(`Removed "${name}"${linkedCards.length > 0 ? ` and ${linkedCards.length} linked card${linkedCards.length === 1 ? "" : "s"}` : ""}`);
+		// These only *refer* to the account, so they survive with the reference cleared rather than
+		// silently pointing at something that no longer exists.
+		let clearedSubscriptions = 0;
+		for (const subscription of store.subscriptions) {
+			if (subscription.accountId === accountId) {
+				subscription.accountId = undefined;
+				clearedSubscriptions++;
+			}
+		}
+		if (clearedSubscriptions > 0) await store.saveSubscriptions();
+
+		let clearedDebts = 0;
+		for (const debt of store.debts) {
+			if (debt.accountId === accountId) {
+				debt.accountId = undefined;
+				clearedDebts++;
+			}
+		}
+		if (clearedDebts > 0) await store.saveDebts();
+
+		store.accounts = store.accounts.filter((a) => a.id !== accountId);
+		if (this.plugin.settings.activeAccountId === accountId) {
+			this.plugin.settings.activeAccountId = undefined;
+			await this.plugin.saveSettings();
+		}
+		await store.saveAccounts();
+
+		const removed = [
+			deleteTransactions && impact.transactions > 0
+				? `${impact.transactions.toLocaleString()} transaction${impact.transactions === 1 ? "" : "s"}`
+				: "",
+			linkedCards.length > 0 ? `${linkedCards.length} card${linkedCards.length === 1 ? "" : "s"}` : "",
+		].filter(Boolean);
+		new Notice(`Removed "${name}"${removed.length > 0 ? ` and ${removed.join(" and ")}` : ""}`);
 		this.render();
 		this.onChange?.();
 	}

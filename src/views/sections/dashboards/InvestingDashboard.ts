@@ -6,7 +6,7 @@ import { fetchPrice } from "../../../marketData";
 import { BalanceSnapshotModal } from "../../../modals/BalanceSnapshotModal";
 import type { Account } from "../../../types";
 import { emptyState, icon, statTile } from "../../../ui/dom";
-import { formatEUR, metricRow, yearHeaderRow } from "../../../ui/metricsTable";
+import { formatEUR, metricRow, metricsTable, yearHeaderRow } from "../../../ui/metricsTable";
 
 /**
  * There's no market-price feed here, so an investing account can't show live portfolio value or
@@ -80,7 +80,7 @@ export function renderInvestingDashboard(container: HTMLElement, plugin: Finance
 	if (activity.length > 0) {
 		const activityCard = container.createDiv({ cls: "fp-card" });
 		activityCard.createEl("h3", { text: "Activity by year" });
-		const table = activityCard.createEl("table", { cls: "fp-table fp-table-metrics" });
+		const table = metricsTable(activityCard);
 		yearHeaderRow(table, activity.map((y) => y.year));
 		const tbody = table.createEl("tbody");
 		metricRow(tbody, "Deposits", activity.map((y) => y.deposits), formatEUR, { heat: "normal" });

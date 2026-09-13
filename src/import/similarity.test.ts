@@ -168,3 +168,40 @@ describe("findMatches — filtering and reporting", () => {
 		expect(hasMatches(findMatches([subject, tx("Albert Heijn")], subject))).toBe(true);
 	});
 });
+
+describe("a card payment is compared by shop, not by where the terminal stood", () => {
+	function card(counterparty: string, description: string, amount: number): Transaction {
+		return {
+			id: `t-${counterparty}-${amount}`,
+			date: "2019-07-18",
+			accountId: "acc",
+			description,
+			counterparty,
+			amount,
+			currency: "EUR",
+			source: "manual",
+		};
+	}
+
+	it("does not call two different shops in one town the same", () => {
+		// The descriptions differ only by timestamp, so comparing them scored every card payment made
+		// in one town on one card as "100% alike" — 60 unrelated shops arrived pre-ticked under a fuel
+		// transaction, and approving them would have filed the lot as Fuel.
+		const fuel = card("Tango Capelle/IJ", "CAPELLE AAN D 18-07-2019 07:30 Pas: 4333", -76.39);
+		const bakery = card("Bakkerij Vreugdenhil", "CAPELLE AAN D 14-04-2019 17:41 Pas: 4333", -3.5);
+		expect(similarity(comparableText(fuel), comparableText(bakery))).toBeLessThan(0.5);
+	});
+
+	it("still calls the same shop the same", () => {
+		const a = card("Tango Capelle/IJ", "CAPELLE AAN D 18-07-2019 07:30 Pas: 4333", -76.39);
+		const b = card("Tango Capelle/IJ", "CAPELLE AAN D 11-07-2019 18:06 Pas: 4333", -78.04);
+		expect(similarity(comparableText(a), comparableText(b))).toBe(1);
+	});
+
+	it("still reads the description where that is the merchant", () => {
+		// The banks this was written for put the shop in the description and nothing beside it.
+		const a = card("", "ALBERT HEIJN 1423 DEN HAAG", -12);
+		const b = card("", "ALBERT HEIJN 0891 UTRECHT", -18);
+		expect(similarity(comparableText(a), comparableText(b))).toBeGreaterThan(0.5);
+	});
+});

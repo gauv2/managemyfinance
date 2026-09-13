@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { ACCOUNT_TYPE_META } from "../constants";
 import { netWorth, snapshotAsOf } from "../kpi";
 import type FinancePlugin from "../main";
@@ -18,7 +19,7 @@ import { icon, moneyInput } from "../ui/dom";
  * A snapshot supersedes every assumption before its date and lets the transactions after it carry on
  * from there, so recording one occasionally is enough to keep the headline number honest.
  */
-export class BalanceSnapshotModal extends Modal {
+export class BalanceSnapshotModal extends FinanceModal {
 	private date = new Date().toISOString().slice(0, 10);
 	private accountId: string;
 	private note = "";

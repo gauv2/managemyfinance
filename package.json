@@ -1,6 +1,6 @@
 {
 	"name": "finance-plugin",
-	"version": "1.2.11",
+	"version": "1.2.12",
 	"description": "A personal finance dashboard, ledger, budgeting, and import pipeline for Obsidian.",
 	"main": "main.js",
 	"scripts": {

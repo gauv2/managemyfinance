@@ -1,4 +1,5 @@
 import { Notice } from "obsidian";
+import { activeAccounts } from "../accounts";
 import type FinancePlugin from "../main";
 import { CURRENCIES } from "../constants";
 import {
@@ -94,7 +95,7 @@ export function openSubscriptionWizard(plugin: FinancePlugin, existing?: Subscri
 
 				const accountField = formSelectFieldVL(grid, "Paid from account (optional)", [
 					{ value: "", label: "None" },
-					...store.accounts.map((a) => ({ value: a.id, label: a.name })),
+					...activeAccounts(store.accounts, accountId).map((a) => ({ value: a.id, label: a.name })),
 				]);
 				accountField.select.value = accountId;
 				accountField.select.addEventListener("change", () => (accountId = accountField.select.value));

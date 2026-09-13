@@ -7,7 +7,7 @@ import { inRange, type DateRange } from "../../period";
 import { lineChart, stackedShareBar } from "../../ui/charts";
 import { icon, tabSwitcher } from "../../ui/dom";
 import { renderKpiCard, renderMeter } from "../../ui/kpiCard";
-import { deltaRow, formatEUR, formatPct, metricRow, partialYearsNote, yearHeaderRow, yearLabeller, yoy } from "../../ui/metricsTable";
+import { deltaRow, formatEUR, formatPct, metricRow, metricsTable, partialYearsNote, yearHeaderRow, yearLabeller, yoy } from "../../ui/metricsTable";
 import { renderSpendingByCategoryCard } from "./dashboards/SpendingByCategoryCard";
 
 const CAT_COLORS = ["var(--fp-cat-1)", "var(--fp-cat-2)", "var(--fp-cat-3)", "var(--fp-cat-4)", "var(--fp-cat-5)"];
@@ -66,7 +66,7 @@ function renderAccountsOverview(container: HTMLElement, plugin: FinancePlugin, r
 }
 
 function renderHistoryTable(panel: HTMLElement, plugin: FinancePlugin, years: YearSummary[], fiMultiplier: number, periodLabel: string): void {
-	const table = panel.createEl("table", { cls: "fp-table fp-table-metrics" });
+	const table = metricsTable(panel);
 	yearHeaderRow(table, years.map((y) => y.year), {
 		onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year).open(),
 		labelFor: yearLabeller(years),

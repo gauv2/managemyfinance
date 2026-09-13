@@ -7,6 +7,7 @@ import type { NumberFormatPreference } from "./money";
 import type { AiSettings } from "./ai/provider";
 import type { EmailSettings, TelegramSettings, TestDeliverySettings } from "./delivery/channels";
 import type { ReportSchedule } from "./reports/schedule";
+import { reviewCounts, type ReviewCounts } from "./review";
 import { defaultStrategy } from "./strategy";
 import type {
 	Account,
@@ -14,6 +15,7 @@ import type {
 	Card,
 	Category,
 	CategoryRule,
+	Debt,
 	ImportBatch,
 	OneOffBudget,
 	Portfolio,
@@ -28,6 +30,7 @@ export type FinanceViewId =
 	| "budgets"
 	| "categories"
 	| "subscriptions"
+	| "debts"
 	| "cards"
 	| "review"
 	| "reports"
@@ -47,6 +50,13 @@ export interface FinanceSettings {
 	activeAccountId?: string;
 	/** Selects a workspace page that isn't account-scoped, e.g. the subscriptions tracker. */
 	activeView?: FinanceViewId;
+	/** Whether Review's "By merchant" panel is folded away. It sits above the queue and is worth
+	 *  hiding once its merchants are filed, without losing it. */
+	reviewMerchantPanelCollapsed?: boolean;
+	reviewCategoryPanelCollapsed?: boolean;
+	/** Whether the sidebar's "Closed" group is open. Collapsed by default: a closed account is history
+	 *  you occasionally consult, not something that should compete with the accounts you use. */
+	closedAccountsExpanded?: boolean;
 	/** Blurs every displayed amount (hover to reveal) — for demoing the plugin without exposing real numbers. */
 	privacyMode?: boolean;
 	/** Every portfolio the vault knows about — each is a fully separate set of accounts/transactions/subscriptions. */
@@ -176,7 +186,23 @@ const TX_COLUMNS: (keyof Transaction)[] = [
 	"principalAmount",
 	"interestAmount",
 	"feeAmount",
+	// Same append-only rule again — category-rule provenance, added last.
+	"categoryRuleId",
 ];
+
+/**
+ * A category set by anything other than the rule itself is no longer the rule's doing, so the
+ * provenance stamp comes off with it.
+ *
+ * Applied here rather than at each call site because there are a dozen ways to re-file a row — the
+ * detail modal, the edit modal, bulk re-categorize, the Review page, merchant memory, a later import
+ * — and a stale "set by rule" badge on a row you fixed by hand is worse than no badge at all. A patch
+ * that names `categoryRuleId` explicitly is left alone: that is the rule engine stamping its own work.
+ */
+function clearStaleRuleProvenance(patch: Partial<Transaction>): Partial<Transaction> {
+	if (!("categoryId" in patch) || "categoryRuleId" in patch) return patch;
+	return { ...patch, categoryRuleId: undefined };
+}
 
 const NUMERIC_COLUMNS: (keyof Transaction)[] = [
 	"amount",
@@ -211,11 +237,25 @@ const REQUIRED_TX_STRINGS = new Set<string>(["id", "date", "accountId", "descrip
  * Everything here is plain text so it stays diffable and readable outside the plugin too.
  */
 export class FinanceStore {
+	/**
+	 * Told the review tallies either side of any write that could move them.
+	 *
+	 * Lives here because this is the one place every path goes through: fifteen files write a
+	 * transaction, and anything that watched only some of them would miss the rest.
+	 */
+	onReviewChange?: (before: ReviewCounts, after: ReviewCounts) => void;
+
+	private reviewTally(): ReviewCounts {
+		return reviewCounts(this.transactions);
+	}
+
 	accounts: Account[] = [];
 	categories: Category[] = [];
 	rules: CategoryRule[] = [];
 	transactions: Transaction[] = [];
 	subscriptions: Subscription[] = [];
+	/** Informal debts with people and companies — a register, deliberately outside every total. See Debt. */
+	debts: Debt[] = [];
 	cards: Card[] = [];
 	/** merchant key → what this portfolio has learned about it. See import/merchantMemory.ts. */
 	merchants: MerchantMap = {};
@@ -270,6 +310,7 @@ export class FinanceStore {
 		this.accounts = await this.readJson<Account[]>(this.path("data", "accounts.json"), []);
 		this.rules = await this.readJson<CategoryRule[]>(this.path("data", "rules.json"), []);
 		this.subscriptions = await this.readJson<Subscription[]>(this.path("data", "subscriptions.json"), []);
+		this.debts = await this.readJson<Debt[]>(this.path("data", "debts.json"), []);
 		this.cards = await this.readJson<Card[]>(this.path("data", "cards.json"), []);
 		this.merchants = await this.readJson<MerchantMap>(this.path("data", "merchants.json"), {});
 		this.snapshots = await this.readJson<BalanceSnapshot[]>(this.path("data", "snapshots.json"), []);
@@ -462,6 +503,10 @@ export class FinanceStore {
 		await this.app.vault.adapter.write(this.path("data", "subscriptions.json"), JSON.stringify(this.subscriptions, null, "\t"));
 	}
 
+	async saveDebts(): Promise<void> {
+		await this.app.vault.adapter.write(this.path("data", "debts.json"), JSON.stringify(this.debts, null, "\t"));
+	}
+
 	async saveCards(): Promise<void> {
 		await this.app.vault.adapter.write(this.path("data", "cards.json"), JSON.stringify(this.cards, null, "\t"));
 	}
@@ -612,7 +657,9 @@ export class FinanceStore {
 		const tx = this.transactions.find((t) => t.id === id);
 		if (!tx) return;
 		const previousKey = this.ledgerKey(tx);
-		Object.assign(tx, patch);
+		const before = this.onReviewChange ? this.reviewTally() : undefined;
+		Object.assign(tx, clearStaleRuleProvenance(patch));
+		if (before) this.onReviewChange?.(before, this.reviewTally());
 		const nextKey = this.ledgerKey(tx);
 		await this.rewriteLedgerFile(nextKey);
 		if (previousKey !== nextKey) await this.rewriteLedgerFile(previousKey);
@@ -679,7 +726,9 @@ export class FinanceStore {
 	async updateTransaction(id: string, patch: Partial<Transaction>): Promise<void> {
 		const tx = this.transactions.find((t) => t.id === id);
 		if (!tx) return;
-		Object.assign(tx, patch);
+		const before = this.onReviewChange ? this.reviewTally() : undefined;
+		Object.assign(tx, clearStaleRuleProvenance(patch));
+		if (before) this.onReviewChange?.(before, this.reviewTally());
 
 		// Was a hand-inlined copy of rewriteLedgerFile that derived the year twice, and differently:
 		// the filename used `tx.date.slice(0,4) || "unknown"` while the row filter compared against
@@ -709,10 +758,12 @@ export class FinanceStore {
 	 */
 	async updateTransactions(patches: Map<string, Partial<Transaction>>): Promise<number> {
 		const touchedFiles = new Set<string>();
+		const before = this.onReviewChange ? this.reviewTally() : undefined;
 		let count = 0;
 		for (const tx of this.transactions) {
-			const patch = patches.get(tx.id);
-			if (!patch) continue;
+			const raw = patches.get(tx.id);
+			if (!raw) continue;
+			const patch = clearStaleRuleProvenance(raw);
 			const keys = Object.keys(patch) as (keyof Transaction)[];
 			if (keys.every((k) => tx[k] === patch[k])) continue;
 			Object.assign(tx, patch);
@@ -720,6 +771,7 @@ export class FinanceStore {
 			count++;
 		}
 		for (const key of touchedFiles) await this.rewriteLedgerFile(key);
+		if (before) this.onReviewChange?.(before, this.reviewTally());
 		return count;
 	}
 
@@ -768,6 +820,7 @@ export class FinanceStore {
 		await this.saveCategories();
 		await this.saveRules();
 		await this.saveSubscriptions();
+		await this.saveDebts();
 		await this.saveCards();
 		await this.saveMerchants();
 		await this.saveSnapshots();

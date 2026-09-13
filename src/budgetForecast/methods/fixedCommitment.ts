@@ -5,7 +5,7 @@ import { detectForecastCommitments, recurringAttributedMonthlySpend } from "../c
 import { distributionShape, volatilityLabel } from "../diagnostics";
 import { buildCategorySpendHistory } from "../history";
 import { notForecastable } from "../quantileEngine";
-import { median, relativeIqr } from "../statistics";
+import { relativeIqr } from "../statistics";
 import type { BudgetForecastDiagnostics, BudgetForecastRequest, BudgetForecastResult, BudgetForecastScenario, BudgetScenarioKey, ForecastStore } from "../types";
 
 /**
@@ -19,7 +19,10 @@ import type { BudgetForecastDiagnostics, BudgetForecastRequest, BudgetForecastRe
  *    series that `detectForecastCommitments` already projects forward);
  * 2. the latest tracked non-zero month's amount, when nothing projects into the target itself
  *    (a rent that hasn't yet built up 3 occurrences as a detected series, say);
- * 3. the historical median, when even a "latest" reading isn't available.
+ *
+ * There is deliberately no third rung below those two. A category with tracked months but not one
+ * payment of its own has no fixed cost to state, so it comes back not-forecastable rather than as a
+ * confident €0 (see the `nonZero` branch below).
  *
  * Confidence is read off the same formula every method uses (§26), fed the amounts actually backing
  * whichever rung of the cascade produced the number — a rent paid identically for three years reads
@@ -59,9 +62,17 @@ export function forecastFixedCommitment(store: ForecastStore, request: BudgetFor
 			sampleAmounts = nonZero.slice(-24).map((h) => h.economicExpense);
 			basis = "your most recent payment";
 		} else if (history.length > 0) {
-			amount = median(history.map((h) => h.economicExpense)) ?? 0;
-			sampleAmounts = history.map((h) => h.economicExpense);
-			basis = "your historical average — no recent payment to go on";
+			// Tracked months exist, but not one of them carries a payment for *this* category. The
+			// median of an all-zero series is zero, so the old "historical average" rung could only
+			// ever answer €0 — and then reported the empty month buckets as if they were payments
+			// ("79 historical payments back this estimate" for a category with none), at a confidence
+			// score the all-zero `sparseMonthRatio` never got to penalise. A fixed cost nobody has
+			// ever been charged isn't a €0 budget; it's an absence of evidence.
+			return notForecastable(
+				request,
+				"fixed-commitment",
+				"No payments recorded for this category yet, so there's no fixed cost to base a budget on."
+			);
 		} else {
 			return notForecastable(request, "fixed-commitment", "No spending history for this category yet.");
 		}

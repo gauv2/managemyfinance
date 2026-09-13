@@ -1,5 +1,6 @@
 import readXlsxFile from "read-excel-file/browser";
 import { detectFormat, DetectedFormat } from "./detect";
+import { KNAB_HEADERS, looksLikeKnabSheet } from "./knabSheet";
 
 export interface DetectedTable {
 	sheetName: string;
@@ -30,6 +31,22 @@ export async function extractTransactionTables(data: ArrayBuffer): Promise<Detec
 	for (const sheet of sheets) {
 		const rows = sheet.data;
 		if (rows.length === 0) continue;
+
+		// A sheet with no header row at all — its first cell is already a transaction. Recognising the
+		// layout by content supplies the names the rest of the pipeline reads, so KNAB imports on the
+		// same path as every bank whose export bothers to label its columns.
+		if (looksLikeKnabSheet(rows)) {
+			const headers = [...KNAB_HEADERS];
+			tables.push({
+				sheetName: sheet.sheet,
+				format: detectFormat(headers),
+				headers,
+				// Every row is data here; there is no header line to skip.
+				rows: rows.map((r) => headers.map((_, i) => cellToString(r[i]))),
+			});
+			continue;
+		}
+
 		const headers = rows[0].map((c) => cellToString(c).trim());
 		const format: DetectedFormat = detectFormat(headers);
 		if (format === "unknown") continue;

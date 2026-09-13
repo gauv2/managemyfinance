@@ -1,11 +1,12 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import type FinancePlugin from "../main";
 import { icon } from "../ui/dom";
 import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { ConfirmDeletePortfolioModal } from "./ConfirmDeletePortfolioModal";
 
 /** Full portfolio roster: rename in place, add via the wizard, remove from the list (files on disk are left untouched). */
-export class ManagePortfoliosModal extends Modal {
+export class ManagePortfoliosModal extends FinanceModal {
 	constructor(app: App, private plugin: FinancePlugin, private onChange?: () => void) {
 		super(app);
 	}

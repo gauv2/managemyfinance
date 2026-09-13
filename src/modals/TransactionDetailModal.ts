@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { categoryChain } from "../categories";
 import { formatMoney } from "../money";
 import type FinancePlugin from "../main";
@@ -6,6 +7,7 @@ import { transferSiblings } from "../transfers";
 import type { ReviewStatus, Transaction } from "../types";
 import { renderAttachmentControl } from "../ui/attachment";
 import { badge, categoryChainChip, icon, renderCategoryPicker } from "../ui/dom";
+import { CreateCategoryRuleModal } from "./CreateCategoryRuleModal";
 import { LinkSubscriptionModal } from "./SubscriptionLinkModal";
 import { TransactionEditModal } from "./TransactionEditModal";
 
@@ -27,7 +29,7 @@ function row(container: HTMLElement, label: string, value: string | HTMLElement,
  * and deleting live here too — this is where you land when a row looks wrong, so it's where the fix
  * has to be.
  */
-export class TransactionDetailModal extends Modal {
+export class TransactionDetailModal extends FinanceModal {
 	constructor(app: App, private plugin: FinancePlugin, private tx: Transaction) {
 		super(app);
 	}
@@ -58,6 +60,31 @@ export class TransactionDetailModal extends Modal {
 		const chipHolder = catValue.createDiv();
 		const chain = categoryChain(store.categories, this.tx.categoryId);
 		categoryChainChip(chipHolder, chain.primary, chain.secondary);
+		// Says *why* this row sits where it does, so a category you did not choose is never a mystery.
+		// Re-read from the transaction rather than captured once: changing the category below clears
+		// the rule's claim on this row (see Transaction.categoryRuleId), and this line has to follow.
+		const ruleNote = catValue.createDiv({ cls: "fp-rule-note" });
+		const renderRuleNote = (): void => {
+			ruleNote.empty();
+			const rule = this.tx.categoryRuleId ? store.rules.find((r) => r.id === this.tx.categoryRuleId) : undefined;
+			if (!rule) return;
+			icon(ruleNote, "wand-2");
+			ruleNote.createSpan({ text: `Set by the rule "${rule.pattern}"` });
+			// The obvious next question after "why is it filed here" is "then change it", so the answer
+			// carries the way to act on it rather than making you go and find the rules list.
+			const edit = ruleNote.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-tiny" });
+			edit.createSpan({ text: "Edit rule" });
+			edit.addEventListener("click", () => {
+				new CreateCategoryRuleModal(this.app, this.plugin, {
+					rule,
+					onDone: () => {
+						renderRuleNote();
+						this.plugin.refreshViews();
+					},
+				}).open();
+			});
+		};
+		renderRuleNote();
 		renderCategoryPicker(catValue, {
 			categories: store.categories,
 			value: { primaryId: chain.primary?.id, secondaryId: chain.secondary?.id },
@@ -73,6 +100,7 @@ export class TransactionDetailModal extends Modal {
 				const newChain = categoryChain(store.categories, categoryId);
 				chipHolder.empty();
 				categoryChainChip(chipHolder, newChain.primary, newChain.secondary);
+				renderRuleNote();
 				this.plugin.refreshViews();
 				new Notice(
 					alsoTagged > 0

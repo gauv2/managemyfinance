@@ -1,7 +1,8 @@
 import { Notice } from "obsidian";
+import { accountReviewProgress, reviewCounts } from "../../review";
 import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
 import { merchantKey, merchantLabel } from "../../import/merchantKey";
-import { dismissSuggestion, siblingsOf, unknownMerchants } from "../../import/merchantMemory";
+import { dismissSuggestion, unknownMerchants } from "../../import/merchantMemory";
 import type FinancePlugin from "../../main";
 import { formatMoney } from "../../money";
 import { BulkMatchModal } from "../../modals/BulkMatchModal";
@@ -9,7 +10,7 @@ import { buildRecheckTargets } from "../../ai/recheck";
 import { RecheckModal } from "../../modals/RecheckModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import type { ReviewStatus, Transaction } from "../../types";
-import { badge, categoryChainChip, emptyState, icon, moneyInput, renderCategoryPicker, statTile } from "../../ui/dom";
+import { badge, categoryChainChip, emptyState, icon, moneyInput, renderCategoryPicker, searchInput, statTile } from "../../ui/dom";
 
 type StatusFilter = "all" | ReviewStatus | "uncategorized";
 
@@ -17,6 +18,8 @@ interface ReviewFilterState {
 	search: string;
 	status: StatusFilter;
 	accountId: string;
+	/** Scopes the queue to one merchant key — see the "By merchant" panel. "" for all. */
+	merchantKey: string;
 	/** A primary category id, "__uncategorized", or "" for all. */
 	categoryPrimaryId: string;
 	categorySecondaryId: string;
@@ -37,6 +40,7 @@ const reviewState: ReviewFilterState = {
 	search: "",
 	status: "new",
 	accountId: "",
+	merchantKey: "",
 	categoryPrimaryId: "",
 	categorySecondaryId: "",
 	dateFrom: "",
@@ -65,20 +69,96 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 	/** Selection is intentionally *not* module-scope: a stale selection surviving a data change could
 	 *  apply a bulk action to rows the user can no longer see. It resets on every mount. */
 	const selected = new Set<string>();
+	/**
+	 * Rows edited in place that no longer match the filters, kept where they sat.
+	 *
+	 * Filing a row while filtered to "no category" made it stop matching, so the re-render dropped it
+	 * out of the list and everything below shifted up — the row you had just decided vanished, and the
+	 * next thing you clicked was not the row you had aimed at. Working down a filtered queue is the
+	 * whole job of this page, so a filter must not eat the rows you act on while you are still in it.
+	 */
+	const stickyIds = new Set<string>();
+	/** Which of them are on screen only because of that — the bulk bar has to keep its count honest. */
+	let keptIds = new Set<string>();
+	/** The filters those sticky rows were kept under. Move any filter and they stop being kept: at that
+	 *  point you have asked a new question, and the answer should not carry the old one's leftovers. */
+	let stickyUnder = "";
+	/** The page of rows currently rendered, so an inline edit can tell which of them it changed. */
+	let visibleRows: Transaction[] = [];
 
 	function statusOf(tx: Transaction): ReviewStatus {
 		return tx.review ?? "new";
 	}
 
-	/** Rows matching every active filter, newest first — the "shown" cap is applied after this. */
+	function filterSignature(): string {
+		return [
+			reviewState.search,
+			reviewState.status,
+			reviewState.accountId,
+			reviewState.merchantKey,
+			reviewState.categoryPrimaryId,
+			reviewState.categorySecondaryId,
+			reviewState.dateFrom,
+			reviewState.dateTo,
+		].join("\u0000");
+	}
+
+	/** Rows matching every active filter, newest first — the "shown" cap is applied after this.
+	 *  Plus any row edited in place since the filters last moved, held in its old position. */
 	function filtered(): Transaction[] {
-		const needle = reviewState.search.trim().toLowerCase();
+		// One check rather than a stickyIds.clear() in every filter handler: there are a dozen of them
+		// across the controls, the two panels and the empty state, and the next one added would forget.
+		const signature = filterSignature();
+		if (signature !== stickyUnder) {
+			stickyIds.clear();
+			stickyUnder = signature;
+		}
+
+		const matched = applyFilters();
+		keptIds = new Set();
+		if (stickyIds.size === 0) return matched;
+
+		const present = new Set(matched.map((t) => t.id));
+		const kept = store.transactions.filter((t) => stickyIds.has(t.id) && !present.has(t.id));
+		if (kept.length === 0) return matched;
+
+		keptIds = new Set(kept.map((t) => t.id));
+		return [...matched, ...kept].sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
+	}
+
+	/**
+	 * The same rows the merchant filter is not applied to.
+	 *
+	 * The "By merchant" panel groups these, so that choosing a merchant narrows the list below without
+	 * reducing the panel to the single merchant you just chose from — which would leave nowhere to go
+	 * next but back.
+	 */
+	function filteredIgnoringMerchant(): Transaction[] {
+		return applyFilters({ merchant: false });
+	}
+
+	/** The same, for the "By category" panel — see filteredIgnoringMerchant for why. */
+	function filteredIgnoringCategory(): Transaction[] {
+		return applyFilters({ category: false });
+	}
+
+	/**
+	 * `ignoreStatus` and `ignoreSearch` exist for the empty state, which has to answer "where did they
+	 * go" — a question you can only answer by running the same filters with one of them lifted.
+	 */
+	function applyFilters(
+		opts: { merchant?: boolean; category?: boolean; ignoreStatus?: boolean; ignoreSearch?: boolean } = {}
+	): Transaction[] {
+		const withMerchant = opts.merchant !== false;
+		const withCategory = opts.category !== false;
+		const needle = opts.ignoreSearch ? "" : reviewState.search.trim().toLowerCase();
 		// The "hide approved" preference only applies to the broad filters. Asking explicitly for
 		// approved rows always shows them — a setting that could make a filter return nothing it names
 		// would just read as a bug.
 		const hideApproved = plugin.settings.reviewHideApproved !== false;
 		return store.transactions
 			.filter((t) => {
+				if (opts.ignoreStatus) return true;
 				switch (reviewState.status) {
 					case "all":
 						return !hideApproved || statusOf(t) !== "approved";
@@ -90,8 +170,9 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			})
 			.filter((t) => !needle || `${t.description} ${t.counterparty ?? ""} ${t.notes ?? ""}`.toLowerCase().includes(needle))
 			.filter((t) => !reviewState.accountId || t.accountId === reviewState.accountId)
+			.filter((t) => !withMerchant || !reviewState.merchantKey || merchantKey(t) === reviewState.merchantKey)
 			.filter((t) => {
-				const primary = reviewState.categoryPrimaryId;
+				const primary = withCategory ? reviewState.categoryPrimaryId : "";
 				if (!primary) return true;
 				if (primary === "__uncategorized") return !t.categoryId;
 				if (resolvePrimaryId(store.categories, t.categoryId) !== primary) return false;
@@ -314,21 +395,42 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		renderCounters();
 		renderControls();
 		const rows = filtered();
+		renderCategoryPanel();
+		renderMerchantPanel();
 		renderBulkBar(rows);
 		renderTable(rows);
 	}
 
 	function renderCounters(): void {
-		const all = store.transactions;
-		const counts = { new: 0, approved: 0, flagged: 0 };
-		let uncategorized = 0;
-		for (const tx of all) {
-			counts[statusOf(tx)]++;
-			if (!tx.categoryId) uncategorized++;
-		}
+		countersEl?.remove();
+		countersEl = container.createDiv();
+		// createDiv appends, which is right on the first pass and wrong on every later one: redrawing
+		// the counters after an account change left the stat tiles sitting *below* the filter row they
+		// belong above, and nothing put them back.
+		if (controlsEl?.parentElement === container) container.insertBefore(countersEl, controlsEl);
+		const host = countersEl;
+
+		// Scoped to the account being reviewed, not the whole ledger. Reading every account at once
+		// made "3,950 approved, 0 to review" the answer whichever account was selected, so the page
+		// reported the work finished while a freshly imported account sat untouched inside that number.
+		const scoped = reviewState.accountId
+			? store.transactions.filter((t) => t.accountId === reviewState.accountId)
+			: store.transactions;
+		const account = store.accounts.find((a) => a.id === reviewState.accountId);
+		const all = scoped;
+		const c = reviewCounts(scoped);
+		const counts = { new: c.toReview, approved: c.approved, flagged: c.flagged };
+		const uncategorized = c.uncategorized;
 		const done = all.length === 0 ? 0 : counts.approved / all.length;
 
-		const kpis = container.createDiv({ cls: "fp-stat-grid" });
+		if (account) {
+			host.createDiv({
+				cls: "fp-review-scope",
+				text: `Showing ${account.name} only — the figures below are this account's.`,
+			});
+		}
+
+		const kpis = host.createDiv({ cls: "fp-stat-grid" });
 		statTile(kpis, {
 			label: "To review",
 			value: String(counts.new),
@@ -354,20 +456,558 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			money: false,
 			sub: "regardless of review state",
 		});
+
+		renderAccountProgress(host);
+	}
+
+	/**
+	 * Per-account progress, so several accounts can be read at once rather than by cycling the filter.
+	 *
+	 * Only worth showing when there is more than one account: with a single one it would restate the
+	 * cards immediately above it.
+	 */
+	function renderAccountProgress(host: HTMLElement): void {
+		if (store.accounts.length < 2) return;
+		const progress = accountReviewProgress(store.transactions, store.accounts);
+
+		const wrap = host.createDiv({ cls: "fp-review-accounts" });
+		wrap.createDiv({ cls: "fp-form-section-label", text: "By account" });
+		const table = wrap.createEl("table", { cls: "fp-table" });
+		const headRow = table.createEl("thead").createEl("tr");
+		["Account", "To review", "Flagged", "Approved", "Uncategorized"].forEach((h, i) =>
+			headRow.createEl("th", { text: h, cls: i > 0 ? "fp-table-num" : "" })
+		);
+
+		const tbody = table.createEl("tbody");
+		for (const { account, counts } of progress) {
+			const outstanding = counts.toReview + counts.flagged;
+			const tr = tbody.createEl("tr", {
+				cls: "fp-table-row-clickable" + (account.id === reviewState.accountId ? " is-selected" : ""),
+			});
+			// Clicking sets the filter, which is the action the row makes you want to take.
+			tr.addEventListener("click", () => {
+				reviewState.accountId = reviewState.accountId === account.id ? "" : account.id;
+				reviewState.shown = PAGE_SIZE;
+				render();
+			});
+
+			const nameCell = tr.createEl("td");
+			nameCell.createSpan({ text: account.name });
+			if (counts.total === 0) badge(nameCell, "no transactions", "neutral");
+			else if (outstanding === 0) badge(nameCell, "done", "good");
+
+			tr.createEl("td", { cls: "fp-table-num", text: counts.toReview > 0 ? String(counts.toReview) : "—" });
+			tr.createEl("td", { cls: "fp-table-num", text: counts.flagged > 0 ? String(counts.flagged) : "—" });
+			tr.createEl("td", { cls: "fp-table-num", text: String(counts.approved) });
+			tr.createEl("td", { cls: "fp-table-num", text: counts.uncategorized > 0 ? String(counts.uncategorized) : "—" });
+		}
+	}
+
+	/** No category at all — its own group, because "what has nothing on it" is the other half of the
+	 *  question this panel answers. */
+	const NO_CATEGORY = "__none";
+
+	/**
+	 * The queue grouped by what it has already been filed as, with sign-off per group.
+	 *
+	 * Nothing in the review queue has been agreed to by a person — a category on an unapproved row was
+	 * put there by the import rules, by merchant memory, or by Claude. So the queue is mostly not a
+	 * list of decisions to make, it is a list of guesses to confirm, and confirming them one row at a
+	 * time is the slowest possible way to do it. Grouped, "everything the importer called Groceries"
+	 * is one look and one click.
+	 *
+	 * By leaf category, not by primary: "Entertainment" spanning concerts, subscriptions and cinema is
+	 * three different judgements wearing one name, and approving them together is exactly the mistake
+	 * this is meant to save you from.
+	 */
+	function renderCategoryPanel(): void {
+		// Grouped from the rows matching every filter *except* the category one, so picking a category
+		// narrows the list below without reducing the panel to the single row you picked from.
+		const scope = reviewState.categoryPrimaryId ? filteredIgnoringCategory() : filtered();
+		const groups = new Map<string, { count: number; merchants: Set<string>; ruled: number }>();
+		for (const tx of scope) {
+			const key = tx.categoryId || NO_CATEGORY;
+			let entry = groups.get(key);
+			if (!entry) {
+				entry = { count: 0, merchants: new Set<string>(), ruled: 0 };
+				groups.set(key, entry);
+			}
+			entry.count++;
+			const mk = merchantKey(tx);
+			if (mk) entry.merchants.add(mk);
+			if (tx.categoryRuleId) entry.ruled++;
+		}
+
+		const ranked = [...groups.entries()].sort((a, b) => b[1].count - a[1].count);
+		categoryPanelEl = undefined;
+		// One group is the whole queue restated; there is nothing to compare and nothing to choose.
+		if (ranked.length < 2) return;
+
+		const filed = ranked.filter(([id]) => id !== NO_CATEGORY);
+		const filedRows = filed.reduce((n, [, g]) => n + g.count, 0);
+		const collapsed = plugin.settings.reviewCategoryPanelCollapsed === true;
+		const card = container.createDiv({ cls: "fp-card fp-merchant-panel" + (collapsed ? " is-collapsed" : "") });
+		categoryPanelEl = card;
+		const head = card.createDiv({ cls: "fp-section-header" });
+
+		// A div with a role, not a button — see renderMerchantPanel.
+		const headText = head.createDiv({
+			cls: "fp-merchant-panel-toggle",
+			attr: { role: "button", tabindex: "0", "aria-expanded": String(!collapsed) },
+		});
+		const titleRow = headText.createDiv({ cls: "fp-merchant-panel-title" });
+		icon(titleRow, "chevron-right", "fp-merchant-panel-chevron");
+		titleRow.createEl("h3", { text: "By category" });
+		titleRow.createSpan({
+			cls: "fp-merchant-panel-summary",
+			text: `${filed.length} categor${filed.length === 1 ? "y" : "ies"} · ${filedRows} row${filedRows === 1 ? "" : "s"}`,
+		});
+		const toggle = (): void => {
+			plugin.settings.reviewCategoryPanelCollapsed = !collapsed;
+			void plugin.saveSettings();
+			render();
+		};
+		headText.addEventListener("click", toggle);
+		headText.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				toggle();
+			}
+		});
+
+		if (collapsed) return;
+
+		const uncategorized = groups.get(NO_CATEGORY)?.count ?? 0;
+		headText.createDiv({
+			cls: "fp-section-subtitle",
+			text:
+				`Where the ${filedRows} already-filed row${filedRows === 1 ? "" : "s"} here ended up — none of it agreed to by you yet, so this is the guesswork waiting to be confirmed.` +
+				(uncategorized > 0 ? ` ${uncategorized} more still ${uncategorized === 1 ? "has" : "have"} no category at all.` : ""),
+		});
+
+		if (reviewState.categoryPrimaryId) {
+			const clear = head.createEl("button", { cls: "fp-btn fp-btn-ghost" });
+			icon(clear, "x");
+			clear.createSpan({ text: "Show all categories" });
+			clear.addEventListener("click", () => {
+				reviewState.categoryPrimaryId = "";
+				reviewState.categorySecondaryId = "";
+				reviewState.shown = PAGE_SIZE;
+				render();
+			});
+		}
+
+		const shown = categoryPanelExpanded ? ranked : ranked.slice(0, MERCHANT_PANEL_LIMIT);
+		const list = card.createDiv({ cls: "fp-merchant-list" });
+		for (const [id, group] of shown) {
+			renderCategoryRow(list, id, group);
+		}
+
+		if (ranked.length > shown.length || categoryPanelExpanded) {
+			const more = card.createEl("button", { cls: "fp-btn fp-btn-ghost fp-merchant-more" });
+			more.createSpan({ text: categoryPanelExpanded ? "Show fewer" : `Show all ${ranked.length} groups` });
+			more.addEventListener("click", () => {
+				categoryPanelExpanded = !categoryPanelExpanded;
+				render();
+			});
+		}
+	}
+
+	function renderCategoryRow(list: HTMLElement, id: string, group: { count: number; merchants: Set<string>; ruled: number }): void {
+		const { count } = group;
+		const chain = id === NO_CATEGORY ? undefined : categoryChain(store.categories, id);
+		const isActive = reviewState.categorySecondaryId === id || (reviewState.categoryPrimaryId === "__uncategorized" && id === NO_CATEGORY);
+		const isOpen = expandedCategories.has(id);
+		const row = list.createDiv({ cls: "fp-merchant-row" + (isActive ? " is-active" : "") });
+
+		const expand = row.createDiv({
+			cls: "fp-merchant-expand" + (isOpen ? " is-open" : ""),
+			attr: { role: "button", tabindex: "0", "aria-expanded": String(isOpen), title: isOpen ? "Hide these rows" : `Show the ${count} rows` },
+		});
+		icon(expand, "chevron-right");
+		const toggleOpen = (): void => {
+			if (isOpen) expandedCategories.delete(id);
+			else expandedCategories.add(id);
+			render();
+		};
+		expand.addEventListener("click", toggleOpen);
+		expand.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				toggleOpen();
+			}
+		});
+
+		row.createDiv({ cls: "fp-merchant-count", text: String(count) });
+
+		const nameEl = row.createDiv({
+			cls: "fp-merchant-name",
+			attr: { role: "button", tabindex: "0", title: isActive ? "Showing only this category — click to show all" : "Show only this category" },
+		});
+		if (chain?.primary) categoryChainChip(nameEl, chain.primary, chain.secondary);
+		else nameEl.createSpan({ cls: "fp-budget-hint-text", text: "No category" });
+		// How many different shops are inside the number. One merchant filed 47 times is a safe
+		// approval; 40 merchants sharing a category is the case where the group is worth opening first.
+		const merchants = group.merchants.size;
+		if (merchants > 0) {
+			nameEl.createSpan({
+				cls: "fp-merchant-cat-meta",
+				text: `${merchants} merchant${merchants === 1 ? "" : "s"}` + (group.ruled > 0 ? ` · ${group.ruled} by a rule you wrote` : ""),
+			});
+		}
+		const toggleFilter = (): void => {
+			if (isActive) {
+				reviewState.categoryPrimaryId = "";
+				reviewState.categorySecondaryId = "";
+			} else if (id === NO_CATEGORY) {
+				reviewState.categoryPrimaryId = "__uncategorized";
+				reviewState.categorySecondaryId = "";
+			} else {
+				// The exact leaf, always — including when the leaf *is* the primary. Filtering to the
+				// primary alone would pull in its subcategories, and the queue would then disagree with
+				// the count on the row you just clicked.
+				reviewState.categoryPrimaryId = resolvePrimaryId(store.categories, id) ?? "";
+				reviewState.categorySecondaryId = id;
+			}
+			reviewState.shown = PAGE_SIZE;
+			render();
+		};
+		nameEl.addEventListener("click", toggleFilter);
+		nameEl.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				toggleFilter();
+			}
+		});
+
+		const actions = row.createDiv({ cls: "fp-merchant-actions" });
+
+		// Re-filing the whole group is the other half of reading it: a category that turns out to be
+		// wrong is wrong for every row under it, and fixing that one row at a time is the same trap
+		// approving one row at a time is.
+		let pending: string | undefined;
+		renderCategoryPicker(actions.createDiv({ cls: "fp-merchant-picker" }), {
+			categories: store.categories,
+			primaryPlaceholder: "Move to…",
+			onChange: ({ primaryId, secondaryId }) => {
+				pending = secondaryId ?? primaryId;
+				moveBtn.disabled = !pending;
+			},
+		});
+
+		const moveBtn = actions.createEl("button", { cls: "fp-btn fp-btn-secondary fp-merchant-apply" });
+		icon(moveBtn, "tag");
+		moveBtn.createSpan({ text: `Move ${count}` });
+		moveBtn.disabled = true;
+		moveBtn.addEventListener("click", () => {
+			if (!pending) return;
+			void categorizeAndApprove(categoryRows(id).map((t) => t.id), pending);
+		});
+
+		// The point of the panel. Disabled rather than absent for the uncategorized group: signing off a
+		// row while it still has no category files nothing, and would quietly empty the queue of the
+		// rows that most need a decision — but dropping the button also shortened that row's action
+		// block, which made every row's actions start 128px right of the one above it. Saying why it
+		// can't be clicked is better than a gap that says nothing.
+		const okBtn = actions.createEl("button", { cls: "fp-btn fp-btn-primary fp-merchant-apply" });
+		icon(okBtn, "check-check");
+		okBtn.createSpan({ text: `Approve ${count}` });
+		if (id === NO_CATEGORY) {
+			okBtn.disabled = true;
+			okBtn.addClass("is-muted");
+			okBtn.setAttribute("title", "These rows have no category yet — filing them is the decision, not approving them.");
+		} else {
+			okBtn.setAttribute("title", `Approve all ${count} rows as they are filed now`);
+			okBtn.addEventListener("click", () => void setStatus(categoryRows(id).map((t) => t.id), "approved"));
+		}
+
+		if (isOpen) renderCategoryRows(list, id);
+	}
+
+	/** Every row in this group in the current scope — not only the page on screen. */
+	function categoryRows(id: string): Transaction[] {
+		return filteredIgnoringCategory().filter((t) => (t.categoryId || NO_CATEGORY) === id);
+	}
+
+	/** The transactions behind a group's count — same reasoning as the merchant panel's. */
+	function renderCategoryRows(list: HTMLElement, id: string): void {
+		const rows = categoryRows(id);
+		const panel = list.createDiv({ cls: "fp-merchant-detail" });
+		const wrap = panel.createDiv({ cls: "fp-table-scroll" });
+		const table = wrap.createEl("table", { cls: "fp-table" });
+		const headRow = table.createEl("thead").createEl("tr");
+		["Date", "Description", "Account", "Amount"].forEach((h, i) => headRow.createEl("th", { text: h, cls: i === 3 ? "fp-table-num" : "" }));
+		const tbody = table.createEl("tbody");
+		for (const tx of rows.slice(0, MERCHANT_DETAIL_LIMIT)) {
+			const tr = tbody.createEl("tr", { cls: "fp-table-row-clickable" });
+			tr.addEventListener("click", () => new TransactionDetailModal(plugin.app, plugin, tx).open());
+			tr.createEl("td", { text: tx.date || "No date", cls: "fp-cell-date" });
+			const desc = tr.createEl("td", { cls: "fp-sensitive" });
+			desc.createDiv({ text: tx.description || "(no description)" });
+			if (tx.counterparty && tx.counterparty !== tx.description) {
+				desc.createDiv({ cls: "fp-merchant-detail-sub fp-sensitive", text: tx.counterparty });
+			}
+			tr.createEl("td", { text: store.accounts.find((a) => a.id === tx.accountId)?.name ?? "—" });
+			tr.createEl("td", {
+				cls: "fp-table-num fp-money " + (tx.amount < 0 ? "is-negative" : "is-positive"),
+				text: formatMoney(tx.amount, { currency: tx.currency || "EUR" }),
+			});
+		}
+		if (rows.length > MERCHANT_DETAIL_LIMIT) {
+			panel.createDiv({ cls: "fp-field-hint", text: `Showing ${MERCHANT_DETAIL_LIMIT} of ${rows.length}. Click the category to filter the queue to it and see them all.` });
+		}
+	}
+
+	/** How many merchants the panel lists before "show all" — enough to cover the bulk of a queue
+	 *  without becoming a second list to scroll past. */
+	const MERCHANT_PANEL_LIMIT = 12;
+
+	/** Enough rows to judge what a merchant is without turning the panel into the list below it. */
+	const MERCHANT_DETAIL_LIMIT = 12;
+
+	/**
+	 * The queue grouped by who was paid, with a category picker per merchant.
+	 *
+	 * A review queue is not a list of decisions, it is a list of *rows* — and the same decision is
+	 * spread across all of them. On this ledger 1,076 rows needing attention are 608 merchants, and
+	 * the twenty biggest account for 310 of those rows: VMware alone is 75, Hoofdweg 47, PayPal 41.
+	 * Filing those one row at a time is 310 identical judgements. Here it is twenty.
+	 *
+	 * It deliberately does not replace the row list. 468 of those merchants have a single row, and
+	 * nothing about grouping helps them — the panel takes the head of the distribution and leaves the
+	 * tail to the list below, which is what the list is good at.
+	 */
+	function renderMerchantPanel(): void {
+		// Grouped from the rows matching every filter *except* the merchant one, so picking a merchant
+		// narrows the list below without emptying the panel you picked it from.
+		const scope = reviewState.merchantKey ? filteredIgnoringMerchant() : filtered();
+		const groups = new Map<string, { count: number; name: string }>();
+		for (const tx of scope) {
+			const key = merchantKey(tx);
+			if (!key) continue;
+			const entry = groups.get(key) ?? { count: 0, name: merchantLabel(key) };
+			entry.count++;
+			groups.set(key, entry);
+		}
+		// One row per merchant is what the list below already does well; a panel of them is just the
+		// same list with fewer columns.
+		const ranked = [...groups.entries()].filter(([, g]) => g.count > 1).sort((a, b) => b[1].count - a[1].count);
+		merchantPanelEl = undefined;
+		if (ranked.length === 0) return;
+
+		const covered = ranked.reduce((n, [, g]) => n + g.count, 0);
+		const collapsed = plugin.settings.reviewMerchantPanelCollapsed === true;
+		const card = container.createDiv({ cls: "fp-card fp-merchant-panel" + (collapsed ? " is-collapsed" : "") });
+		merchantPanelEl = card;
+		const head = card.createDiv({ cls: "fp-section-header" });
+
+		// A div with a role, not a button: a theme that styles `button` wins over a plain class, which
+		// has already turned two headings in this branch into grey pills with centred text.
+		const headText = head.createDiv({
+			cls: "fp-merchant-panel-toggle",
+			attr: { role: "button", tabindex: "0", "aria-expanded": String(!collapsed) },
+		});
+		const titleRow = headText.createDiv({ cls: "fp-merchant-panel-title" });
+		icon(titleRow, "chevron-right", "fp-merchant-panel-chevron");
+		titleRow.createEl("h3", { text: "By merchant" });
+		// Collapsed, the header still has to say what is in there, or folding it away turns it into a
+		// heading with no reason to open it.
+		titleRow.createSpan({
+			cls: "fp-merchant-panel-summary",
+			text: `${ranked.length} merchant${ranked.length === 1 ? "" : "s"} · ${covered} row${covered === 1 ? "" : "s"}`,
+		});
+		const toggle = (): void => {
+			plugin.settings.reviewMerchantPanelCollapsed = !collapsed;
+			void plugin.saveSettings();
+			render();
+		};
+		headText.addEventListener("click", toggle);
+		headText.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				toggle();
+			}
+		});
+
+		// Collapsed is the title row and its counts, nothing else — the paragraph explaining the
+		// remainder is worth reading once, not every time the panel is folded away.
+		if (collapsed) return;
+		// The gap between `covered` and the queue is the whole reason this panel does not cover
+		// everything, so it says what the difference is made of rather than leaving the two numbers
+		// side by side inviting the question.
+		const singles = [...groups.values()].filter((g) => g.count === 1).length;
+		const unnamed = scope.length - covered - singles;
+		const remainder: string[] = [];
+		if (singles > 0) remainder.push(`${singles} merchant${singles === 1 ? "" : "s"} appearing once each`);
+		if (unnamed > 0) remainder.push(`${unnamed} with no merchant name`);
+		headText.createDiv({
+			cls: "fp-section-subtitle",
+			text:
+				`${ranked.length} merchant${ranked.length === 1 ? "" : "s"} with more than one row, covering ${covered} of the ${scope.length} here — filing one files all of them.` +
+				(remainder.length > 0
+					? ` The other ${scope.length - covered} are ${remainder.join(" and ")} — nothing to group, so they are in the list below.`
+					: ""),
+		});
+		if (reviewState.merchantKey) {
+			const clear = head.createEl("button", { cls: "fp-btn fp-btn-ghost" });
+			icon(clear, "x");
+			clear.createSpan({ text: "Show all merchants" });
+			clear.addEventListener("click", () => {
+				reviewState.merchantKey = "";
+				reviewState.shown = PAGE_SIZE;
+				render();
+			});
+		}
+
+		const shown = merchantPanelExpanded ? ranked : ranked.slice(0, MERCHANT_PANEL_LIMIT);
+		const list = card.createDiv({ cls: "fp-merchant-list" });
+		for (const [key, group] of shown) {
+			renderMerchantRow(list, key, group.name, group.count);
+		}
+
+		if (ranked.length > shown.length || merchantPanelExpanded) {
+			const more = card.createEl("button", { cls: "fp-btn fp-btn-ghost fp-merchant-more" });
+			more.createSpan({
+				text: merchantPanelExpanded ? "Show fewer" : `Show all ${ranked.length} merchants`,
+			});
+			more.addEventListener("click", () => {
+				merchantPanelExpanded = !merchantPanelExpanded;
+				render();
+			});
+		}
+	}
+
+	function renderMerchantRow(list: HTMLElement, key: string, name: string, count: number): void {
+		const isActive = reviewState.merchantKey === key;
+		const isOpen = expandedMerchants.has(key);
+		const row = list.createDiv({ cls: "fp-merchant-row" + (isActive ? " is-active" : "") });
+
+		// A div, not a button. A theme that styles `button` at all beats a plain class selector, and
+		// this row came out as a 693px grey pill with its text centred — the same way the sidebar's
+		// "Closed" heading did. Nothing here needs to be a button except the click.
+		const expand = row.createDiv({
+			cls: "fp-merchant-expand" + (isOpen ? " is-open" : ""),
+			attr: { role: "button", tabindex: "0", "aria-expanded": String(isOpen), title: isOpen ? "Hide these rows" : `Show the ${count} rows` },
+		});
+		icon(expand, "chevron-right");
+		const toggleOpen = (): void => {
+			if (isOpen) expandedMerchants.delete(key);
+			else expandedMerchants.add(key);
+			render();
+		};
+		expand.addEventListener("click", toggleOpen);
+		expand.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				toggleOpen();
+			}
+		});
+
+		row.createDiv({ cls: "fp-merchant-count", text: String(count) });
+
+		const nameEl = row.createDiv({
+			cls: "fp-merchant-name",
+			text: name,
+			attr: { role: "button", tabindex: "0", title: isActive ? "Showing only this merchant — click to show all" : `Show only ${name}` },
+		});
+		const toggleFilter = (): void => {
+			reviewState.merchantKey = isActive ? "" : key;
+			reviewState.shown = PAGE_SIZE;
+			render();
+		};
+		nameEl.addEventListener("click", toggleFilter);
+		nameEl.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				toggleFilter();
+			}
+		});
+
+		const actions = row.createDiv({ cls: "fp-merchant-actions" });
+		// Its own picker per row rather than one shared control: the whole point is deciding several
+		// merchants in a row without a selection step between each.
+		let pending: string | undefined;
+		renderCategoryPicker(actions.createDiv({ cls: "fp-merchant-picker" }), {
+			categories: store.categories,
+			primaryPlaceholder: "Set category…",
+			onChange: ({ primaryId, secondaryId }) => {
+				pending = secondaryId ?? primaryId;
+				applyBtn.disabled = !pending;
+			},
+		});
+
+		const applyBtn = actions.createEl("button", { cls: "fp-btn fp-btn-primary fp-merchant-apply" });
+		icon(applyBtn, "check-check");
+		applyBtn.createSpan({ text: `File ${count}` });
+		applyBtn.disabled = true;
+		applyBtn.addEventListener("click", () => {
+			if (!pending) return;
+			void categorizeAndApprove(merchantRows(key).map((t) => t.id), pending);
+		});
+
+		if (isOpen) renderMerchantRows(list, key);
+	}
+
+	/** Every row of this merchant in the current scope — not only the page on screen. */
+	function merchantRows(key: string): Transaction[] {
+		return filteredIgnoringMerchant().filter((t) => merchantKey(t) === key);
+	}
+
+	/**
+	 * The transactions behind a merchant's count.
+	 *
+	 * "File 75" is a large claim to accept on a name alone — especially where the name came from a
+	 * counterparty the ledger only half-recognises. This is the cheap way to check what is actually in
+	 * there before agreeing to it.
+	 */
+	function renderMerchantRows(list: HTMLElement, key: string): void {
+		const rows = merchantRows(key);
+		const panel = list.createDiv({ cls: "fp-merchant-detail" });
+		const wrap = panel.createDiv({ cls: "fp-table-scroll" });
+		const table = wrap.createEl("table", { cls: "fp-table" });
+		const headRow = table.createEl("thead").createEl("tr");
+		["Date", "Description", "Account", "Category", "Amount"].forEach((h, i) =>
+			headRow.createEl("th", { text: h, cls: i === 4 ? "fp-table-num" : "" })
+		);
+		const tbody = table.createEl("tbody");
+		for (const tx of rows.slice(0, MERCHANT_DETAIL_LIMIT)) {
+			const tr = tbody.createEl("tr", { cls: "fp-table-row-clickable" });
+			tr.addEventListener("click", () => new TransactionDetailModal(plugin.app, plugin, tx).open());
+			tr.createEl("td", { text: tx.date || "No date", cls: "fp-cell-date" });
+			const desc = tr.createEl("td", { cls: "fp-sensitive" });
+			desc.createDiv({ text: tx.description || "(no description)" });
+			if (tx.counterparty && tx.counterparty !== tx.description) {
+				desc.createDiv({ cls: "fp-merchant-detail-sub fp-sensitive", text: tx.counterparty });
+			}
+			tr.createEl("td", { text: store.accounts.find((a) => a.id === tx.accountId)?.name ?? "—" });
+			const catCell = tr.createEl("td");
+			const chain = categoryChain(store.categories, tx.categoryId);
+			if (chain.primary) categoryChainChip(catCell, chain.primary, chain.secondary);
+			else catCell.createSpan({ cls: "fp-budget-hint-text", text: "Uncategorized" });
+			tr.createEl("td", {
+				cls: "fp-table-num fp-money " + (tx.amount < 0 ? "is-negative" : "is-positive"),
+				text: formatMoney(tx.amount, { currency: tx.currency || "EUR" }),
+			});
+		}
+		if (rows.length > MERCHANT_DETAIL_LIMIT) {
+			panel.createDiv({
+				cls: "fp-field-hint",
+				text: `Showing ${MERCHANT_DETAIL_LIMIT} of ${rows.length}. Click the name to filter the queue to this merchant and see them all.`,
+			});
+		}
 	}
 
 	function renderControls(): void {
 		const controls = container.createDiv({ cls: "fp-ledger-controls" });
-		const search = controls.createEl("input", {
-			type: "text",
-			cls: "fp-search",
+		controlsEl = controls;
+		searchInput(controls, {
 			placeholder: "Search description, counterparty or notes…",
-		});
-		search.value = reviewState.search;
-		search.addEventListener("input", () => {
-			reviewState.search = search.value;
-			reviewState.shown = PAGE_SIZE;
-			redrawList();
+			value: reviewState.search,
+			onChange: (value) => {
+				reviewState.search = value;
+				reviewState.shown = PAGE_SIZE;
+				redrawList();
+			},
 		});
 
 		const filterRow = container.createDiv({ cls: "fp-ledger-filters" });
@@ -398,6 +1038,9 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		accountSelect.addEventListener("change", () => {
 			reviewState.accountId = accountSelect.value;
 			reviewState.shown = PAGE_SIZE;
+			// The counters are scoped to the account too, so they have to follow the filter rather than
+			// keep reporting whatever was true when the page was first drawn.
+			renderCounters();
 			redrawList();
 		});
 
@@ -419,6 +1062,15 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			const secondaries = primary ? secondaryCategoriesOf(store.categories, primary.id) : [];
 			secondarySelect.disabled = secondaries.length === 0;
 			secondarySelect.createEl("option", { text: primary ? `All ${primary.name}` : "All subcategories", value: "" });
+			// A row can be filed at the primary itself rather than in any of its subcategories, and until
+			// now there was no way to ask for exactly those: "All Travel & Vacation" swept in every
+			// subcategory too, so the "By category" panel could say 22 and the queue answer 28. Offered
+			// only when such rows actually exist, and judged against the whole ledger so the option
+			// doesn't flicker in and out as the other filters move.
+			if (primary && secondaries.length > 0 && store.transactions.some((t) => t.categoryId === primary.id)) {
+				const opt = secondarySelect.createEl("option", { text: `Directly in ${primary.name}`, value: primary.id });
+				if (primary.id === selectedId) opt.selected = true;
+			}
 			secondaries.forEach((c) => {
 				const opt = secondarySelect.createEl("option", { text: c.name, value: c.id });
 				if (c.id === selectedId) opt.selected = true;
@@ -452,10 +1104,36 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			redrawList();
 		});
 
+		// The merchant filter's only control used to live inside the "By merchant" panel — which hides
+		// itself the moment nothing in scope has more than one row. Approving a merchant's last rows
+		// therefore left the filter switched on, invisible, and clearable only by wiping every other
+		// filter with it. It belongs in the row with the filters it behaves like.
+		if (reviewState.merchantKey) {
+			const chip = filterRow.createDiv({
+				cls: "fp-filter-chip",
+				attr: { role: "button", tabindex: "0", title: "Stop filtering by this merchant" },
+			});
+			chip.createSpan({ cls: "fp-filter-chip-label", text: merchantLabel(reviewState.merchantKey) });
+			icon(chip, "x", "fp-filter-chip-x");
+			const drop = (): void => {
+				reviewState.merchantKey = "";
+				reviewState.shown = PAGE_SIZE;
+				render();
+			};
+			chip.addEventListener("click", drop);
+			chip.addEventListener("keydown", (ev) => {
+				if (ev.key === "Enter" || ev.key === " ") {
+					ev.preventDefault();
+					drop();
+				}
+			});
+		}
+
 		const clearBtn = filterRow.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Clear filters" });
 		clearBtn.addEventListener("click", () => {
 			reviewState.search = "";
 			reviewState.accountId = "";
+			reviewState.merchantKey = "";
 			reviewState.categoryPrimaryId = "";
 			reviewState.categorySecondaryId = "";
 			reviewState.dateFrom = "";
@@ -466,16 +1144,39 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		});
 	}
 
-	/** Re-runs the filter and redraws only the list + bulk bar, so typing in the search box doesn't
-	 *  rebuild (and steal focus from) the controls above it. */
+	/** Re-runs the filter and redraws the merchant panel, list and bulk bar, so typing in the search
+	 *  box doesn't rebuild (and steal focus from) the controls above it.
+	 *
+	 *  The panel used to be left standing here, which put two contradictory answers on one screen: a
+	 *  search that emptied the queue left "39 merchants · 142 rows" sitting above "0 transactions match
+	 *  these filters". Worse, the merchants it still listed were the pre-search ones, so clicking one
+	 *  set a merchant filter that could not intersect the search — silently, since the merchant filter
+	 *  has no control of its own in the filter row. */
 	function redrawList(): void {
 		const rows = filtered();
+		categoryPanelEl?.remove();
+		merchantPanelEl?.remove();
 		bulkBarEl?.remove();
 		tableEl?.remove();
+		renderCategoryPanel();
+		renderMerchantPanel();
 		renderBulkBar(rows);
 		renderTable(rows);
 	}
 
+	/** Rebuilt once per redraw — see uncategorizedByMerchant. */
+	let siblingCounts = new Map<string, number>();
+	let merchantPanelExpanded = false;
+	const expandedMerchants = new Set<string>();
+	let categoryPanelExpanded = false;
+	const expandedCategories = new Set<string>();
+	let countersEl: HTMLElement | undefined;
+	/** Anchor for the counters, which have to sit above the filters — see renderCounters. */
+	let controlsEl: HTMLElement | undefined;
+	/** One <tr> per rendered transaction, so a single row can be refreshed without rebuilding the table. */
+	let rowEls = new Map<string, HTMLElement>();
+	let categoryPanelEl: HTMLElement | undefined;
+	let merchantPanelEl: HTMLElement | undefined;
 	let bulkBarEl: HTMLElement | undefined;
 	let tableEl: HTMLElement | undefined;
 
@@ -494,13 +1195,22 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			else visible.forEach((t) => selected.delete(t.id));
 			redrawList();
 		});
+		// Counted without the kept rows: they are on screen because you just edited them, not because
+		// they match, and a count that included them would be wrong about the thing it names.
+		const matching = rows.length - keptIds.size;
 		left.createSpan({
 			cls: "fp-review-bulk-count",
 			text:
 				selected.size > 0
 					? `${selected.size} selected`
-					: `${rows.length} transaction${rows.length === 1 ? "" : "s"} match${rows.length === 1 ? "es" : ""} these filters`,
+					: `${matching} transaction${matching === 1 ? "" : "s"} match${matching === 1 ? "es" : ""} these filters`,
 		});
+		if (selected.size === 0 && keptIds.size > 0) {
+			left.createSpan({
+				cls: "fp-review-kept-note",
+				text: `· ${keptIds.size} just edited, held in place`,
+			});
+		}
 
 		if (selected.size === 0) {
 			bar.createSpan({ cls: "fp-review-bulk-hint", text: "Tick rows to categorize or approve them in bulk." });
@@ -566,7 +1276,102 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		});
 	}
 
+	/**
+	 * How many *other* uncategorized rows each merchant still has, counted once per redraw.
+	 *
+	 * The hint under each description used to call `siblingsOf(store.transactions, tx)`, which scans
+	 * the whole ledger and derives a merchant key for every row it passes. Called once per rendered
+	 * row that is 100 x 7,153 = 715,300 key derivations for a single keystroke in the search box, and
+	 * it cost 2.8 seconds each time. The counts are the same for every row in the batch, so they are
+	 * built in one pass and read as a lookup.
+	 */
+	function uncategorizedByMerchant(): Map<string, number> {
+		const counts = new Map<string, number>();
+		for (const tx of store.transactions) {
+			if (tx.categoryId) continue;
+			const key = merchantKey(tx);
+			if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+		}
+		return counts;
+	}
+
+	/**
+	 * Why the queue is empty, and the way back out of it.
+	 *
+	 * "Nothing left to review with these filters" is true and useless. Approving the last rows of a
+	 * search empties the list the instant you do it, and the page then looks identical to one where the
+	 * search never matched anything — so finishing a merchant reads as the review having vanished. The
+	 * two cases are only distinguishable by re-running the same filters with one lifted, which is
+	 * exactly what this does: it says which filter is holding the rows back, and offers to lift that
+	 * one rather than making "Clear filters" the only exit.
+	 */
+	function renderEmptyQueue(card: HTMLElement): void {
+		const searching = reviewState.search.trim();
+		const inScope = applyFilters({ ignoreStatus: true });
+		const reviewed = inScope.filter((t) => statusOf(t) !== "new");
+		const elsewhere = searching ? applyFilters({ ignoreSearch: true }).length : 0;
+
+		const lines: string[] = [];
+		if (reviewState.status === "new" && reviewed.length > 0 && reviewed.length === inScope.length) {
+			const approved = reviewed.filter((t) => statusOf(t) === "approved").length;
+			const flagged = reviewed.length - approved;
+			const parts = [approved > 0 ? `${approved} approved` : "", flagged > 0 ? `${flagged} flagged` : ""].filter(Boolean);
+			lines.push(
+				`Done here — all ${reviewed.length} transaction${reviewed.length === 1 ? "" : "s"} matching these filters ${
+					reviewed.length === 1 ? "has" : "have"
+				} been reviewed (${parts.join(", ")}). Nothing was lost.`
+			);
+		} else if (reviewState.status === "new") {
+			lines.push("Nothing left to review with these filters — everything here has been approved or flagged.");
+		} else {
+			lines.push("No transactions match these filters.");
+		}
+		if (searching && elsewhere > 0) {
+			lines.push(`${elsewhere} more still ${elsewhere === 1 ? "needs" : "need"} attention outside the search for "${searching}".`);
+		}
+		card.createEl("p", { cls: "fp-step-desc", text: lines.join(" ") });
+
+		const outs = card.createDiv({ cls: "fp-empty-actions" });
+		const escape = (label: string, iconName: string, act: () => void): void => {
+			const btn = outs.createEl("button", { cls: "fp-btn fp-btn-secondary" });
+			icon(btn, iconName);
+			btn.createSpan({ text: label });
+			btn.addEventListener("click", act);
+		};
+
+		if (searching && elsewhere > 0) {
+			escape("Clear the search", "x", () => {
+				reviewState.search = "";
+				reviewState.shown = PAGE_SIZE;
+				render();
+			});
+		}
+		if (reviewState.merchantKey) {
+			escape(`Stop filtering by ${merchantLabel(reviewState.merchantKey)}`, "users", () => {
+				reviewState.merchantKey = "";
+				reviewState.shown = PAGE_SIZE;
+				render();
+			});
+		}
+		// Named after the bucket it actually switches to, not "show the reviewed": the "everything except
+		// approved" filter would hide the approved ones again, so a button promising them would open on
+		// an empty list — the exact failure this whole block exists to undo.
+		if (reviewState.status === "new" && reviewed.length > 0) {
+			const approved = reviewed.filter((t) => statusOf(t) === "approved").length;
+			const flagged = reviewed.length - approved;
+			const target: StatusFilter = approved >= flagged ? "approved" : "flagged";
+			const n = approved >= flagged ? approved : flagged;
+			escape(`Show the ${n} ${target}`, target === "approved" ? "check-check" : "flag", () => {
+				reviewState.status = target;
+				reviewState.shown = PAGE_SIZE;
+				selected.clear();
+				render();
+			});
+		}
+	}
+
 	function renderTable(rows: Transaction[]): void {
+		siblingCounts = uncategorizedByMerchant();
 		// Its own class as well, so the column rules can key off the *pane's* width via a container
 		// query. A viewport media query is the wrong measure here: this view lives in a split pane, so
 		// a narrow pane in a wide window would keep every column and crush the description.
@@ -574,13 +1379,7 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		tableEl = card;
 
 		if (rows.length === 0) {
-			card.createEl("p", {
-				cls: "fp-step-desc",
-				text:
-					reviewState.status === "new"
-						? "Nothing left to review with these filters — everything here has been approved or flagged."
-						: "No transactions match these filters.",
-			});
+			renderEmptyQueue(card);
 			return;
 		}
 
@@ -603,6 +1402,8 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		const tbody = table.createEl("tbody");
 
 		const visible = rows.slice(0, reviewState.shown);
+		visibleRows = visible;
+		rowEls = new Map();
 		visible.forEach((tx) => renderRow(tbody, tx));
 
 		if (rows.length > visible.length) {
@@ -720,9 +1521,51 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		field.input.select();
 	}
 
+	/** Rebuilds one row in place, leaving every other row — and anything focused in them — untouched. */
+	function refreshRow(tx: Transaction): void {
+		const existing = rowEls.get(tx.id);
+		if (!existing?.parentElement) return;
+		const scratch = document.createElement("tbody");
+		renderRow(scratch, tx);
+		const fresh = scratch.lastElementChild;
+		if (fresh instanceof HTMLElement) {
+			existing.replaceWith(fresh);
+			rowEls.set(tx.id, fresh);
+		}
+	}
+
+	/**
+	 * Everything the section shows except the table.
+	 *
+	 * Setting a category from a row used to call render(), which rebuilds the whole section — including
+	 * the <select> your pointer is already on its way to. A full render is 52ms and replaces that node
+	 * outright, so choosing a primary category and then reaching for the subcategory beside it landed on
+	 * a dead element: the dropdown either refused to open or shut the instant the ledger write returned.
+	 *
+	 * The counters, panels and bulk bar all still have to move, so they are redrawn and put back in
+	 * front of the table rather than appended after it.
+	 */
+	function refreshKeepingTable(): void {
+		if (!tableEl?.parentElement) {
+			render();
+			return;
+		}
+		renderCounters();
+		categoryPanelEl?.remove();
+		merchantPanelEl?.remove();
+		bulkBarEl?.remove();
+		renderCategoryPanel();
+		renderMerchantPanel();
+		renderBulkBar(filtered());
+		for (const el of [categoryPanelEl, merchantPanelEl, bulkBarEl]) {
+			if (el) container.insertBefore(el, tableEl);
+		}
+	}
+
 	function renderRow(tbody: HTMLElement, tx: Transaction): void {
 		const status = statusOf(tx);
 		const tr = tbody.createEl("tr", { cls: `fp-review-row is-${status}` + (selected.has(tx.id) ? " is-selected" : "") });
+		rowEls.set(tx.id, tr);
 
 		const checkCell = tr.createEl("td", { cls: "fp-review-check-cell col-check" });
 		const check = checkCell.createEl("input", { type: "checkbox", cls: "fp-review-check" });
@@ -749,7 +1592,9 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		// How many other rows a decision here will settle — the reason one click is worth making.
 		const key = merchantKey(tx);
 		if (key) {
-			const others = siblingsOf(store.transactions, tx).filter((t) => !t.categoryId).length;
+			// This row's own uncategorized state is already counted in the map, so subtract it to keep
+			// the wording true: "more uncategorized" means besides this one.
+			const others = (siblingCounts.get(key) ?? 0) - (tx.categoryId ? 0 : 1);
 			if (others > 0) {
 				descCell.createDiv({
 					cls: "fp-review-merchant-hint",
@@ -766,6 +1611,13 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 		const amtCell = tr.createEl("td", { cls: "fp-cell-amount col-amount " + (tx.amount < 0 ? "is-negative" : "is-positive") });
 		renderAmount(amtCell, tx);
 
+		// Marked, not silently different: a row that no longer matches the filter it is sitting in has
+		// to say so, or the list quietly stops meaning what its heading claims.
+		if (keptIds.has(tx.id)) {
+			tr.addClass("is-kept");
+			tr.setAttribute("title", "Kept in place after you edited it — it no longer matches these filters, and will go when you next change them.");
+		}
+
 		const catCell = tr.createEl("td", { cls: "fp-review-cat-cell col-category" });
 		const chain = categoryChain(store.categories, tx.categoryId);
 		const chipHolder = catCell.createDiv({ cls: "fp-review-cat-chip" });
@@ -777,17 +1629,30 @@ export function renderReviewSection(container: HTMLElement, plugin: FinancePlugi
 			onChange: async ({ primaryId, secondaryId }) => {
 				if (!primaryId) return;
 				const categoryId = secondaryId ?? primaryId;
+				// Snapshotted against the live objects the store mutates in place, so this reads which
+				// rows on screen the edit actually touched rather than re-deriving the fan-out rules.
+				const before = visibleRows.map((row) => [row, row.categoryId] as const);
 				// Teaches merchant memory and fans the decision out to every other row from this shop,
 				// which is the whole point: categorize once, not once per occurrence.
 				const alsoTagged = await plugin.assignCategory(tx, categoryId);
+				// The edited row and every sibling the fan-out reached stay put. Without the siblings a
+				// single click could still empty half the visible list, which is the same surprise.
+				stickyIds.add(tx.id);
+				for (const [row, previous] of before) if (row.categoryId !== previous) stickyIds.add(row.id);
 				const newChain = categoryChain(store.categories, categoryId);
 				chipHolder.empty();
 				categoryChainChip(chipHolder, newChain.primary, newChain.secondary);
 				if (alsoTagged > 0) {
 					new Notice(`Also applied to ${alsoTagged} other transaction${alsoTagged === 1 ? "" : "s"} from this merchant.`);
 				}
-				plugin.refreshViews();
-				render();
+				// This row is left exactly as it is — replacing it is what broke the subcategory dropdown,
+				// and its chip has already been updated above. Every other row the fan-out reached is
+				// rebuilt on its own so its category can't go stale, and refreshViews is deliberately not
+				// called: it re-renders this view too, which is the same sledgehammer by another name.
+				for (const [row, previous] of before) {
+					if (row.id !== tx.id && row.categoryId !== previous) refreshRow(row);
+				}
+				refreshKeepingTable();
 			},
 		});
 

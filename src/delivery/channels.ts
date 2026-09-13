@@ -108,8 +108,30 @@ export async function sendEmail(
 			detail: `Sent to ${message.to.length} recipient${message.to.length === 1 ? "" : "s"} (${humanSize(size)} attached)`,
 		};
 	} catch (e) {
-		return { channel: "email", ok: false, detail: `Couldn't reach Resend: ${e instanceof Error ? e.message : String(e)}` };
+		const message = withoutSecrets(e instanceof Error ? e.message : String(e), apiKey);
+		return { channel: "email", ok: false, detail: `Couldn't reach Resend: ${message}` };
 	}
+}
+
+/**
+ * An error message with the credential taken out of it.
+ *
+ * Telegram's API carries the bot token in the URL path, and a network failure inside `requestUrl`
+ * produces an error whose message quotes the URL it was trying to reach. That message was passed
+ * straight back to the user as the failure detail, so a DNS hiccup was enough to print a live bot
+ * token on screen — into a Notice, a delivery log, or a screenshot. The key never appears in a
+ * *successful* response, only in the one path nobody looks at until it fires.
+ *
+ * Redacts by value rather than by pattern: the exact secret is known here, and matching on shape
+ * would keep missing whichever shape the next provider uses.
+ */
+function withoutSecrets(text: string, ...secrets: (string | undefined)[]): string {
+	let safe = text;
+	for (const secret of secrets) {
+		// A short or empty "secret" would redact half the message; below this it isn't a credential.
+		if (secret && secret.length >= 8) safe = safe.split(secret).join("[redacted]");
+	}
+	return safe;
 }
 
 function describeEmailError(status: number, text: string): string {
@@ -180,7 +202,8 @@ export async function sendTelegram(
 		const count = message.attachments.length;
 		return { channel: "telegram", ok: true, detail: count === 0 ? "Message sent" : `Sent with ${count} file${count === 1 ? "" : "s"}` };
 	} catch (e) {
-		return { channel: "telegram", ok: false, detail: `Couldn't reach Telegram: ${e instanceof Error ? e.message : String(e)}` };
+		const message = withoutSecrets(e instanceof Error ? e.message : String(e), token);
+		return { channel: "telegram", ok: false, detail: `Couldn't reach Telegram: ${message}` };
 	}
 }
 

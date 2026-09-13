@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { runBudgetForecast } from "../budgetForecast/engine";
 import type { BudgetForecastMethod, BudgetForecastRequest, BudgetForecastResult, BudgetScenarioKey, ConfidenceLabel } from "../budgetForecast/types";
 import { primaryCategories, secondaryCategoriesOf } from "../categories";
@@ -98,7 +99,7 @@ interface Row {
 	expanded: boolean;
 }
 
-export class SuggestBudgetModal extends Modal {
+export class SuggestBudgetModal extends FinanceModal {
 	private rows: Row[] = [];
 	private filter: Filter = "all";
 	private defaultPosture: BudgetScenarioKey = "p50";

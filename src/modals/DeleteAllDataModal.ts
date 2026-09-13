@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { buildBackup, serializeBackup, writeExport } from "../data/backup";
 import type FinancePlugin from "../main";
 import { icon } from "../ui/dom";
@@ -13,7 +14,7 @@ import { icon } from "../ui/dom";
  * go, and categories reset to the defaults so the portfolio is usable immediately afterwards rather
  * than being an empty shell that can't classify anything.
  */
-export class DeleteAllDataModal extends Modal {
+export class DeleteAllDataModal extends FinanceModal {
 	private typed = "";
 	private backupFirst = true;
 

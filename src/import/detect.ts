@@ -12,6 +12,7 @@ export type DetectedFormat =
 	| "revolut"
 	| "bunq"
 	| "n26"
+	| "knab"
 	/** Statement formats, decided from file content rather than a header row — see detectFileFormat. */
 	| "camt"
 	| "mt940"

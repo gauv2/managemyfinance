@@ -2023,16 +2023,19 @@ export class FinanceSettingTab extends PluginSettingTab {
 	 * (common, single-currency) case.
 	 */
 	private datesNeedingHistoricalRate(): string[] {
+		const isIsoDate = (d: string | undefined): boolean => !!d && /^\d{4}-\d{2}-\d{2}/.test(d);
 		const base = (this.plugin.settings.baseCurrency ?? BASE_CURRENCY).toUpperCase();
 		const dates = new Set<string>();
 		for (const tx of this.plugin.store.transactions) {
 			const code = (tx.currency || base).toUpperCase();
-			if (code !== base && tx.date) dates.add(tx.date.slice(0, 10));
+			// Only real dates: an unparsed date from a bank export is still sitting in this field as raw
+			// text, and it would otherwise be offered for backfill and stored as a rate key forever.
+			if (code !== base && isIsoDate(tx.date)) dates.add(tx.date.slice(0, 10));
 		}
 		const accountCurrency = new Map(this.plugin.store.accounts.map((a) => [a.id, (a.currency || base).toUpperCase()]));
 		for (const snap of this.plugin.store.snapshots) {
 			const code = accountCurrency.get(snap.accountId);
-			if (code && code !== base && snap.date) dates.add(snap.date.slice(0, 10));
+			if (code && code !== base && isIsoDate(snap.date)) dates.add(snap.date.slice(0, 10));
 		}
 		return Array.from(dates).sort();
 	}

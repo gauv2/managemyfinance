@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cardExpiresWithinMonths, cardExpiryDate, cardIsExpired, cardsForAccount, cardStyle, monthsUntil } from "./cards";
 import type { Card } from "./types";
 
@@ -59,6 +59,38 @@ describe("card expiry", () => {
 		lastMonth.setMonth(lastMonth.getMonth() - 2);
 		const past = card({ expiryMonth: lastMonth.getMonth() + 1, expiryYear: lastMonth.getFullYear() });
 		expect(cardIsExpired(past)).toBe(true);
+	});
+
+	// The instant-comparison bug this guards only ever showed itself on the last day of a month, so
+	// the relative-date tests above sailed past it on 30 days out of 31. Pin the clock instead.
+	describe("on the last day of the printed expiry month", () => {
+		afterEach(() => vi.useRealTimers());
+
+		it("is still valid at one second past midnight", () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date(2026, 7, 31, 0, 0, 1));
+			expect(cardIsExpired(card({ expiryMonth: 8, expiryYear: 2026 }))).toBe(false);
+		});
+
+		it("is still valid at the last second of that day", () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date(2026, 7, 31, 23, 59, 59));
+			expect(cardIsExpired(card({ expiryMonth: 8, expiryYear: 2026 }))).toBe(false);
+		});
+
+		it("is expired once the next month starts", () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date(2026, 8, 1, 0, 0, 0));
+			expect(cardIsExpired(card({ expiryMonth: 8, expiryYear: 2026 }))).toBe(true);
+		});
+
+		it("treats a December expiry as valid through 31 December", () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date(2026, 11, 31, 12, 0, 0));
+			expect(cardIsExpired(card({ expiryMonth: 12, expiryYear: 2026 }))).toBe(false);
+			vi.setSystemTime(new Date(2027, 0, 1, 0, 0, 0));
+			expect(cardIsExpired(card({ expiryMonth: 12, expiryYear: 2026 }))).toBe(true);
+		});
 	});
 
 	it("is not expired for the current or a future month", () => {

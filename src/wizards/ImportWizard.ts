@@ -28,6 +28,7 @@ const FORMAT_LABEL: Record<DetectedFormat, string> = {
 	revolut: "Revolut",
 	bunq: "bunq",
 	n26: "N26",
+	knab: "KNAB",
 	camt: "CAMT.053 statement",
 	mt940: "MT940 statement",
 	ofx: "OFX / QFX",
@@ -36,7 +37,7 @@ const FORMAT_LABEL: Record<DetectedFormat, string> = {
 };
 
 /** Every format the wizard can name, in the order the preview lists them. */
-const KNOWN_FORMATS: DetectedFormat[] = ["ing", "trade-republic", "revolut", "bunq", "n26", "camt", "mt940", "ofx", "qif"];
+const KNOWN_FORMATS: DetectedFormat[] = ["ing", "trade-republic", "revolut", "bunq", "n26", "knab", "camt", "mt940", "ofx", "qif"];
 
 /** A detected format is also the transaction's source, except for the formats that share the flat
  *  generic reader without being a named bank ("unknown" is a file whose columns you mapped by hand). */
@@ -144,7 +145,14 @@ export function openImportWizard(plugin: FinancePlugin): void {
 		loadError = null;
 		try {
 			setTables(name, await extractTransactionTables(data));
-			mapping = guessColumnMapping(mappableHeaders());
+			// The same profile lookup the CSV path does. Without it a bank's workbook fell back to the
+			// generic name-similarity guess, which is close enough to look right and wrong where it
+			// matters: KNAB's "Tegenrekening" (the payee's account number) was guessed as the
+			// counterparty over "Tegenpartij" (their name), and the Af/Bij column went unmapped
+			// entirely, so every amount would have imported as money coming in.
+			const headers = mappableHeaders();
+			const profile = matchBankProfile(headers);
+			mapping = profile ? profile.mapping(headers) : guessColumnMapping(headers);
 		} catch (err) {
 			setTables(name, []);
 			loadError = err instanceof Error ? err.message : String(err);

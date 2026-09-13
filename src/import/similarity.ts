@@ -1,5 +1,5 @@
 import type { Transaction } from "../types";
-import { merchantDisplayName, merchantKey } from "./merchantKey";
+import { merchantDisplayName, merchantSourceText, merchantKey } from "./merchantKey";
 
 /**
  * "Which other rows are this same payment, more or less?" — the question behind approving one row and
@@ -62,9 +62,18 @@ function normalize(text: string): string {
 		.replace(/\s+/g, " ");
 }
 
-/** The cleaned, lowercased merchant text a comparison actually runs on. */
+/**
+ * The cleaned, lowercased merchant text a comparison actually runs on.
+ *
+ * Read from the same field the merchant key comes from, not from the description regardless. For a
+ * card payment the description is the terminal's location and timestamp — "CAPELLE AAN D 18-07-2019
+ * 07:30 Pas: 4333" — so comparing descriptions scored every card payment made in one town, on one
+ * card, as "100% alike". Sixty unrelated shops arrived pre-ticked under a fuel transaction, and
+ * approving them would have filed the lot as Fuel: the amounts alone gave it away, €3.50 and €5.90
+ * beside €76 of diesel. "Similar" has to mean a similar payee, or it is worse than no suggestion.
+ */
 export function comparableText(tx: Pick<Transaction, "description" | "counterparty">): string {
-	return normalize(merchantDisplayName(tx.description || tx.counterparty || ""));
+	return normalize(merchantDisplayName(merchantSourceText(tx)));
 }
 
 /** Words worth comparing. One-character leftovers carry no identity and inflate every score. */

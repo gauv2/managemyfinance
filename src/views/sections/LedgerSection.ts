@@ -1,13 +1,15 @@
-import { Notice } from "obsidian";
+import { Menu, Notice } from "obsidian";
 import { categoryChain, primaryCategories, resolvePrimaryId, secondaryCategoriesOf } from "../../categories";
+import { CreateCategoryRuleModal } from "../../modals/CreateCategoryRuleModal";
 import { TransactionEditModal } from "../../modals/TransactionEditModal";
 import { TransactionDetailModal } from "../../modals/TransactionDetailModal";
 import { formatMoney } from "../../money";
 import type { PeriodSelection } from "../../period";
 import type FinancePlugin from "../../main";
 import type { ReviewStatus, Transaction } from "../../types";
+import { describeRuleScope } from "../../rules";
 import { renderAttachmentControl } from "../../ui/attachment";
-import { categoryChainChip, emptyState, icon, renderCategoryPicker, type CategoryPickerValue } from "../../ui/dom";
+import { categoryChainChip, emptyState, icon, renderCategoryPicker, searchInput, type CategoryPickerValue } from "../../ui/dom";
 import { openImportWizard } from "../../wizards/ImportWizard";
 import { openInvoiceMatchWizard } from "../../wizards/InvoiceMatchWizard";
 
@@ -128,12 +130,13 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 	// control beside it narrows. Adding a transaction and editing rules are page-level actions and live
 	// in the page's own headers — repeating them here only made two places to look.
 	const filterRow = container.createDiv({ cls: "fp-ledger-filters" });
-	const search = filterRow.createEl("input", {
-		type: "text",
+	// The element is still returned and read by `draw()`, which reads every control's value in one
+	// place rather than tracking each one's changes separately.
+	const search = searchInput(filterRow, {
 		placeholder: "Search description or counterparty…",
-		cls: "fp-search",
+		value: filterState.search,
+		onChange: () => redrawFromFirstPage(),
 	});
-	search.value = filterState.search;
 
 	let accountSelect: HTMLSelectElement | undefined;
 	if (showAccountColumn) {
@@ -367,10 +370,66 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		}
 	}
 
+	/**
+	 * Why this row is filed where it is, when a rule decided it. The rule is looked up rather than
+	 * trusted: delete a rule and its rows keep their category but stop claiming to be governed, which
+	 * is the truth — nothing is enforcing them any more.
+	 */
+	/** Rule conditions are stored per-amount without a currency; the ledger's own base is the only
+	 *  sensible way to read them back. */
+	const ruleMoney = (v: number): string => formatMoney(v, { currency: "EUR" });
+
+	function renderRuleBadge(parent: HTMLElement, t: Transaction): void {
+		if (!t.categoryRuleId) return;
+		const rule = store.rules.find((r) => r.id === t.categoryRuleId);
+		if (!rule) return;
+		// A word rather than a lone icon: a wand at 13px is unreadable, and the one thing worse than a
+		// marker nobody understands is one that gets misread as a question mark.
+		const mark = parent.createEl("button", { cls: "fp-rule-mark" });
+		icon(mark, "wand-2");
+		mark.createSpan({ text: "RULE" });
+		mark.setAttribute("title", `Filed by the rule "${rule.pattern}" (${describeRuleScope(rule, ruleMoney)}). Click to edit it.`);
+		mark.setAttribute("aria-label", `Edit the rule that filed this transaction`);
+		mark.addEventListener("click", (ev) => {
+			// Without this the click reaches the row underneath and opens the transaction instead — which
+			// is exactly what a marker with no handler of its own used to do.
+			ev.stopPropagation();
+			new CreateCategoryRuleModal(plugin.app, plugin, { rule, onDone: () => draw() }).open();
+		});
+	}
+
+	function openRowMenu(ev: MouseEvent, t: Transaction): void {
+		const menu = new Menu();
+		menu.addItem((item) =>
+			item
+				.setTitle("Create category rule from this merchant…")
+				.setIcon("wand-2")
+				.onClick(() => new CreateCategoryRuleModal(plugin.app, plugin, { tx: t, onDone: () => draw() }).open())
+		);
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle("Open details")
+				.setIcon("receipt")
+				.onClick(() => new TransactionDetailModal(plugin.app, plugin, t).open())
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Edit transaction…")
+				.setIcon("pencil")
+				.onClick(() => new TransactionEditModal(plugin.app, plugin, { transaction: t, onSaved: () => draw() }).open())
+		);
+		menu.showAtMouseEvent(ev);
+	}
+
 	function appendRow(t: Transaction): void {
 		const status = t.review ?? "new";
 		const tr = tbody.createEl("tr", { cls: `fp-ledger-row fp-review-${status}` + (selectedIds.has(t.id) ? " is-selected" : "") });
 		tr.addEventListener("click", () => new TransactionDetailModal(plugin.app, plugin, t).open());
+		tr.addEventListener("contextmenu", (ev) => {
+			ev.preventDefault();
+			openRowMenu(ev, t);
+		});
 
 		const selectCell = tr.createEl("td", { cls: "fp-ledger-td-select" });
 		const checkbox = selectCell.createEl("input", { type: "checkbox" });
@@ -396,6 +455,7 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 		const catCell = tr.createEl("td");
 		const chain = categoryChain(store.categories, t.categoryId);
 		categoryChainChip(catCell, chain.primary, chain.secondary);
+		renderRuleBadge(catCell, t);
 		const amtCell = tr.createEl("td", { cls: "fp-cell-amount fp-money " + (t.amount < 0 ? "is-negative" : "is-positive") });
 		amtCell.setText(formatMoney(t.amount, { currency: t.currency || "EUR" }));
 
@@ -529,7 +589,6 @@ export function renderLedger(container: HTMLElement, plugin: FinancePlugin, opts
 	}
 
 	draw();
-	search.addEventListener("input", redrawFromFirstPage);
 	accountSelect?.addEventListener("change", redrawFromFirstPage);
 	primarySelect.addEventListener("change", () => {
 		populateSecondaryFilter(primarySelect.value, "");

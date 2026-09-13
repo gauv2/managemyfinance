@@ -1,9 +1,19 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { categoryChain } from "../categories";
-import { applyRules } from "../import/categorize";
+import { applyRules, resolveRuleMatch } from "../import/categorize";
+import { describeAmountCondition } from "../rules";
+import { CreateCategoryRuleModal } from "./CreateCategoryRuleModal";
 import type FinancePlugin from "../main";
-import type { CategoryRule } from "../types";
+import type { CategoryRule, CategoryRuleMatch } from "../types";
 import { categoryChainChip, icon, renderCategoryPicker, type CategoryPickerValue } from "../ui/dom";
+
+const RULE_MATCH_BADGE: Record<CategoryRuleMatch, string> = {
+	contains: "CONTAINS",
+	exact: "EXACT",
+	"starts-with": "STARTS WITH",
+	regex: "REGEX",
+};
 
 /**
  * "IF description/counterparty contains X THEN category = Y" — the same CategoryRule model the
@@ -11,7 +21,7 @@ import { categoryChainChip, icon, renderCategoryPicker, type CategoryPickerValue
  * Rules are tried top to bottom (first match wins, same as applyRules), so reordering matters —
  * hence the up/down buttons rather than a plain list.
  */
-export class ManageRulesModal extends Modal {
+export class ManageRulesModal extends FinanceModal {
 	private newPattern = "";
 	private newIsRegex = false;
 	private newCategoryValue: CategoryPickerValue = {};
@@ -138,7 +148,15 @@ export class ManageRulesModal extends Modal {
 				const row = list.createDiv({ cls: "fp-rule-row" });
 				const patternCol = row.createDiv({ cls: "fp-rule-row-pattern" });
 				patternCol.createEl("code", { text: rule.pattern });
-				if (rule.isRegex) patternCol.createSpan({ cls: "fp-badge fp-tone-neutral", text: "REGEX" });
+				// Not just REGEX any more: an "exact" rule and a "contains" rule with the same pattern
+				// behave very differently, and a list that showed them identically would be lying.
+				const mode = resolveRuleMatch(rule);
+				if (mode !== "contains") {
+					patternCol.createSpan({ cls: "fp-badge fp-tone-neutral", text: RULE_MATCH_BADGE[mode] });
+				}
+				// An amount condition changes which rows a rule reaches every bit as much as the pattern
+				// does, so a list that showed only the pattern would misrepresent the rule.
+				if (rule.amount) patternCol.createSpan({ cls: "fp-badge fp-tone-neutral", text: describeAmountCondition(rule.amount, (v) => v.toFixed(2)) });
 
 				icon(row, "arrow-right", "fp-rule-row-arrow");
 
@@ -155,6 +173,21 @@ export class ManageRulesModal extends Modal {
 				icon(downBtn, "chevron-down");
 				if (idx === store.rules.length - 1) downBtn.setAttr("disabled", "true");
 				downBtn.addEventListener("click", () => void this.move(idx, 1));
+
+				// The same dialog the rule was written in, so a rule's match mode and amount condition are
+				// editable by the controls that created them rather than by a second, lesser form.
+				const editBtn = actions.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
+				icon(editBtn, "pencil");
+				editBtn.setAttribute("aria-label", `Edit rule "${rule.pattern}"`);
+				editBtn.addEventListener("click", () => {
+					new CreateCategoryRuleModal(this.app, this.plugin, {
+						rule,
+						onDone: () => {
+							this.render();
+							this.onChange?.();
+						},
+					}).open();
+				});
 
 				const deleteBtn = actions.createEl("button", { cls: "fp-btn fp-btn-ghost fp-btn-icon" });
 				icon(deleteBtn, "trash-2");

@@ -4,7 +4,7 @@ import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
 import { describeRange, monthsInRange, type DateRange } from "../../../period";
 import type { Account } from "../../../types";
 import { statTile } from "../../../ui/dom";
-import { deltaRow, formatEUR, formatPct, metricRow, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
+import { deltaRow, formatEUR, formatPct, metricRow, metricsTable, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
 import { renderSpendingByCategoryCard } from "./SpendingByCategoryCard";
 
 /**
@@ -52,7 +52,7 @@ export function renderCheckingDashboard(container: HTMLElement, plugin: FinanceP
 	if (years.length > 0) {
 		const historyCard = container.createDiv({ cls: "fp-card" });
 		historyCard.createEl("h3", { text: "Historical performance" });
-		const table = historyCard.createEl("table", { cls: "fp-table fp-table-metrics" });
+		const table = metricsTable(historyCard);
 		yearHeaderRow(table, years.map((y) => y.year), {
 			onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year, account.name, account.id).open(),
 			labelFor: yearLabeller(years),

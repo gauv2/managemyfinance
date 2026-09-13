@@ -2,7 +2,7 @@ import { investingActivityByYear, investingHoldings, investingRealizedPnLAsOf, n
 import type FinancePlugin from "../../../main";
 import type { Account } from "../../../types";
 import { emptyState, icon, statTile } from "../../../ui/dom";
-import { formatEUR, metricRow, yearHeaderRow } from "../../../ui/metricsTable";
+import { formatEUR, metricRow, metricsTable, yearHeaderRow } from "../../../ui/metricsTable";
 
 /**
  * Crypto used to fall through to the investing dashboard, which is close but wrong in the one way
@@ -101,7 +101,7 @@ export function renderCryptoDashboard(container: HTMLElement, plugin: FinancePlu
 	if (activity.length > 0) {
 		const activityCard = container.createDiv({ cls: "fp-card" });
 		activityCard.createEl("h3", { text: "Activity by year" });
-		const table = activityCard.createEl("table", { cls: "fp-table fp-table-metrics" });
+		const table = metricsTable(activityCard);
 		yearHeaderRow(table, activity.map((y) => y.year));
 		const tbody = table.createEl("tbody");
 		metricRow(tbody, "Deposits", activity.map((y) => y.deposits), formatEUR, { heat: "normal" });

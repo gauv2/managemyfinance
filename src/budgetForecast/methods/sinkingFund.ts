@@ -89,7 +89,14 @@ export function forecastSinkingFund(store: ForecastStore, request: BudgetForecas
 	const includedTotals = included.map((o) => o.normalizedValue);
 	const userExcluded = observations.filter((o) => !included.includes(o));
 
-	const usable = observations.length >= MIN_USABLE_YEARS && includedTotals.length > 0;
+	// §33 asks whether there are enough data points to read a spread from, so the count that gates it
+	// has to be years that actually carry spending. `annualObservations` admits a year on *ledger*
+	// coverage alone, so a category charged once in seven years still arrived here with seven
+	// "observations" — six of them €0 — and sailed past a bar meant to stop exactly that. The amount
+	// still uses every year, zeros included: "six years of nothing" is real evidence for how small a
+	// reserve needs to be. It just isn't seven observations' worth of confidence.
+	const observationsWithSpend = observations.filter((o) => o.amount > 0).length;
+	const usable = observationsWithSpend >= MIN_USABLE_YEARS && includedTotals.length > 0;
 
 	let p25Variable: number;
 	let p50Variable: number;
@@ -118,9 +125,15 @@ export function forecastSinkingFund(store: ForecastStore, request: BudgetForecas
 
 	const relIqr = usable ? relativeIqr(includedTotals) : 0;
 	const sparseMonthRatio = history.filter((h) => h.economicExpense === 0).length / history.length;
+	// `recentDataScore` is asking whether there is enough recent evidence to trust a spending level,
+	// and an empty month is not evidence of one — feeding it the tracked-month count awarded full
+	// marks to a category charged once in seven years. `comparableObservations` deliberately stays the
+	// full annual count: the quantiles above really are computed over all seven annual totals, zeros
+	// included, so that is the honest sample size for the statistic being scored.
+	const monthsWithSpend = history.filter((h) => h.economicExpense > 0).length;
 	const confidenceInputs: ConfidenceInputs = {
 		comparableObservations: observations.length,
-		recentCompleteMonths: Math.min(history.length, 24),
+		recentCompleteMonths: Math.min(monthsWithSpend, 24),
 		coverageRatio: Math.min(observations.length / MAX_LOOKBACK_YEARS, 1),
 		relativeIqr: relIqr,
 		outlierRatio: observations.length > 0 ? outliers.length / observations.length : 0,

@@ -6,7 +6,7 @@ import { describeRange, type DateRange } from "../../../period";
 import type { Account } from "../../../types";
 import { badge, statTile } from "../../../ui/dom";
 import { renderMeter } from "../../../ui/kpiCard";
-import { deltaRow, formatEUR, metricRow, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
+import { deltaRow, formatEUR, metricRow, metricsTable, partialYearsNote, yearHeaderRow, yearLabeller } from "../../../ui/metricsTable";
 import { renderSpendingByCategoryCard } from "./SpendingByCategoryCard";
 
 /**
@@ -157,7 +157,7 @@ export function renderCreditDashboard(container: HTMLElement, plugin: FinancePlu
 	if (years.length > 0) {
 		const historyCard = container.createDiv({ cls: "fp-card" });
 		historyCard.createEl("h3", { text: "Historical activity" });
-		const table = historyCard.createEl("table", { cls: "fp-table fp-table-metrics" });
+		const table = metricsTable(historyCard);
 		yearHeaderRow(table, years.map((y) => y.year), {
 			onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year, account.name, account.id).open(),
 			labelFor: yearLabeller(years),

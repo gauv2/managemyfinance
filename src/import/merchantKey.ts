@@ -101,9 +101,41 @@ const LEADING_STOPWORDS = new Set([
 	"the",
 ]);
 
+/**
+ * The words a bank writes around a reference number rather than around a payee.
+ *
+ * Dutch bank descriptions are frequently nothing but these: "Kenmerk 8002227925600011 Omschrijving
+ * Klantnummer" is an invoice reference and says nothing about who was paid — Eneco is in the next
+ * column. Left in, they formed keys made entirely of admin vocabulary, and those keys then merged
+ * *different companies*: six payees, among them XS4ALL and A.T.O. Electro, all filed together under
+ * "factuurnummer" because that is the word their descriptions happened to open with.
+ *
+ * Only words that are purely administrative, never part of a trading name.
+ */
+const REFERENCE_WORDS = new Set([
+	"kenmerk",
+	"betalingskenmerk",
+	"factuurnummer",
+	"factuur",
+	"klantnummer",
+	"relatienummer",
+	"relnr",
+	"rel",
+	"nr",
+	"nummer",
+	"referentie",
+	"omschrijving",
+	"periode",
+	"termijn",
+	"btw",
+	"iban",
+	"bic",
+]);
+
 /** A token that's mostly digits, or a known reference marker, carries no merchant identity. */
 function isNoiseToken(token: string): boolean {
 	if (!token) return true;
+	if (REFERENCE_WORDS.has(token)) return true;
 	// Pure numbers: branch numbers, till ids, reference numbers.
 	if (/^\d+$/.test(token)) return true;
 	// Dates and times in any of the shapes a bank export uses.
@@ -136,12 +168,77 @@ function isNoiseToken(token: string): boolean {
 const MAX_TOKENS = 5;
 
 /**
+ * A card-terminal receipt line: where and when the card was used, not who was paid.
+ *
+ * Dutch banks write these as a place, a timestamp and the card's last digits — "BUNNIK 08-11-2014
+ * 16:20 Pas: 4333". The shop's name is nowhere in it; it is in the counterparty column beside it.
+ */
+const TERMINAL_LINE = /\bpas\s*:|\bcard\s*:|\b\d{2}[-/.]\d{2}[-/.]\d{2,4}\b.*\b\d{1,2}:\d{2}\b/i;
+
+/** An account number rather than a name — no use as a merchant identity, and what banks like ING put
+ *  in the counterparty column. */
+const ACCOUNT_LIKE = /^[a-z]{0,2}[\s\d]*$|^[a-z]{2}\d{2}[a-z0-9]{10,}$/i;
+
+/**
+ * Which of the two fields actually names the payee.
+ *
+ * Description first is right for the banks whose description *is* the merchant, and was the only
+ * rule here. It is exactly backwards for a card payment, where the description is the terminal's
+ * location and the merchant sits in the counterparty: keying on it collapsed 595 unrelated
+ * transactions across one city into a single merchant called "rotterdam pas", which no rule could
+ * categorise and no amount of asking a model could rescue — it was being asked what category a city
+ * belongs to.
+ *
+ * So a description that reads as a terminal line defers to the counterparty, unless that is itself
+ * an account number, which is what banks that put an IBAN there would offer instead. A description
+ * that names nobody at all — a bare reference like "2014-0051" — defers to it too, rather than
+ * leaving the row with no merchant identity while the company sits in the next column.
+ *
+ * Exported because the *label* has to come from the same field as the key. Choosing them separately
+ * is how a row ends up correctly grouped under "CCV*Huffels Horeca" while still being shown, and sent
+ * to a model, as "UTRECHT 08-11-2014 15:08 Pas: 4333".
+ */
+export function merchantSourceText(tx: Pick<Transaction, "description" | "counterparty">): string {
+	const description = `${tx.description ?? ""}`.trim();
+	const counterparty = `${tx.counterparty ?? ""}`.trim();
+	const namedCounterparty = counterparty && !ACCOUNT_LIKE.test(counterparty) ? counterparty : "";
+	if (namedCounterparty && TERMINAL_LINE.test(description)) return namedCounterparty;
+	if (description && keyFrom(description)) return description;
+	return namedCounterparty || description || counterparty;
+}
+
+/**
  * The stable key for a transaction's merchant, or undefined when the description carries no
  * recognizable name at all (a bare reference number, an empty row). Undefined means "don't group
  * this" — never group everything unrecognizable together under one key.
  */
+/**
+ * Cached by the two strings it reads, not by transaction identity.
+ *
+ * `merchantKey` is pure but not cheap — lowercasing, a dozen regex replaces, tokenising — and it is
+ * called from everywhere: the review list, similarity matching, the unknown-merchant scan, account
+ * stats. A ledger has far fewer distinct descriptions than rows, so the same handful of strings are
+ * re-derived thousands of times over.
+ *
+ * Keyed on the inputs rather than the object because a transaction's description is editable; an
+ * identity cache would keep answering with the old name after a row was corrected.
+ */
+const keyCache = new Map<string, string | undefined>();
+/** Bounded so a very large import can't grow this without limit; far above any real vault's count of
+ *  distinct descriptions, and clearing wholesale is cheaper than tracking recency. */
+const KEY_CACHE_LIMIT = 20000;
+
 export function merchantKey(tx: Pick<Transaction, "description" | "counterparty">): string | undefined {
-	const raw = `${tx.description ?? ""}`.trim() || `${tx.counterparty ?? ""}`.trim();
+	const cacheKey = `${tx.description ?? ""}\u0000${tx.counterparty ?? ""}`;
+	const hit = keyCache.get(cacheKey);
+	if (hit !== undefined || keyCache.has(cacheKey)) return hit;
+	const key = keyFrom(merchantSourceText(tx));
+	if (keyCache.size >= KEY_CACHE_LIMIT) keyCache.clear();
+	keyCache.set(cacheKey, key);
+	return key;
+}
+
+function keyFrom(raw: string): string | undefined {
 	if (!raw) return undefined;
 
 	let s = raw.toLowerCase();

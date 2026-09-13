@@ -1,7 +1,8 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { aiFindMatches, buildCandidatePool, describeMatchResult, type AiMatch } from "../ai/matcher";
 import { categoryChain } from "../categories";
-import { merchantDisplayName, merchantKey } from "../import/merchantKey";
+import { merchantDisplayName, merchantKey, merchantSourceText } from "../import/merchantKey";
 import { findMatches, hasMatches, type MatchGroups } from "../import/similarity";
 import type FinancePlugin from "../main";
 import { formatMoney } from "../money";
@@ -33,7 +34,25 @@ import { categoryChainChip, icon, renderCategoryPicker, type CategoryPickerValue
  */
 const CONFIDENT_MATCH = 0.85;
 
-export class BulkMatchModal extends Modal {
+/**
+ * What to call a transaction on screen: the payee, with the bank's own line kept underneath.
+ *
+ * Showing `description` alone made this dialog unreviewable for card payments, where that field is
+ * the terminal's location and timestamp and the shop is in the counterparty. Every row read
+ * "CAPELLE AAN D <date> Pas: 4333" and nothing said which shop it was — while the whole question the
+ * dialog asks is whether these are the same merchant.
+ */
+function payeeName(tx: Pick<Transaction, "description" | "counterparty">): string {
+	return merchantDisplayName(merchantSourceText(tx)) || tx.description || tx.counterparty || "(no description)";
+}
+
+/** The raw bank line, shown only when it says something the payee name doesn't. */
+function bankLine(tx: Pick<Transaction, "description" | "counterparty">): string {
+	const raw = (tx.description ?? "").trim();
+	return raw && raw !== payeeName(tx) ? raw : "";
+}
+
+export class BulkMatchModal extends FinanceModal {
 	private groups: MatchGroups;
 	private selected = new Set<string>();
 	private category: CategoryPickerValue = {};
@@ -131,7 +150,7 @@ export class BulkMatchModal extends Modal {
 		 */
 		const exact = this.groups.sameMerchant.length;
 		const similar = this.groups.similar.length;
-		const subjectName = this.subject.description || "(no description)";
+		const subjectName = payeeName(this.subject);
 
 		c.createEl("h3", {
 			text: exact > 0 ? `${this.statusVerb} the rest of these too?` : similar > 0 ? `${similar} possible match${similar === 1 ? "" : "es"}` : "No obvious matches",
@@ -163,7 +182,9 @@ export class BulkMatchModal extends Modal {
 		const card = c.createDiv({ cls: "fp-match-subject" });
 		icon(card, "corner-down-right", "fp-match-subject-icon");
 		const text = card.createDiv({ cls: "fp-match-subject-text" });
-		text.createDiv({ cls: "fp-match-subject-desc fp-sensitive", text: this.subject.description || "(no description)" });
+		text.createDiv({ cls: "fp-match-subject-desc fp-sensitive", text: payeeName(this.subject) });
+		const subjectLine = bankLine(this.subject);
+		if (subjectLine) text.createDiv({ cls: "fp-match-row-line fp-sensitive", text: subjectLine });
 		const meta = text.createDiv({ cls: "fp-match-subject-meta" });
 		meta.createSpan({ text: this.subject.date });
 		meta.createSpan({ cls: "fp-money", text: formatMoney(this.subject.amount, { currency: this.subject.currency || "EUR" }) });
@@ -274,7 +295,7 @@ export class BulkMatchModal extends Modal {
 		const ai = this.plugin.settings.ai;
 		// Nothing to ask about. Offering the button anyway would spend a request to be told what
 		// merchantDisplayName already established locally: this row carries no payee name at all.
-		if (!merchantDisplayName(this.subject.description || this.subject.counterparty || "")) return;
+		if (!merchantDisplayName(merchantSourceText(this.subject))) return;
 
 		const section = c.createDiv({ cls: "fp-match-section fp-match-section-ai" });
 		const head = section.createDiv({ cls: "fp-match-section-head" });
@@ -393,7 +414,7 @@ export class BulkMatchModal extends Modal {
 			const row = list.createDiv({ cls: "fp-match-row" });
 			const check = row.createEl("input", { type: "checkbox", cls: "fp-review-check" });
 			check.checked = this.selected.has(tx.id);
-			check.setAttribute("aria-label", `Include ${tx.description}`);
+			check.setAttribute("aria-label", `Include ${payeeName(tx)}`);
 			check.addEventListener("change", () => {
 				if (check.checked) this.selected.add(tx.id);
 				else this.selected.delete(tx.id);
@@ -403,7 +424,9 @@ export class BulkMatchModal extends Modal {
 			row.toggleClass("is-selected", check.checked);
 
 			const main = row.createDiv({ cls: "fp-match-row-main" });
-			main.createDiv({ cls: "fp-match-row-desc fp-sensitive", text: tx.description || "(no description)" });
+			main.createDiv({ cls: "fp-match-row-desc fp-sensitive", text: payeeName(tx) });
+			const line = bankLine(tx);
+			if (line) main.createDiv({ cls: "fp-match-row-line fp-sensitive", text: line });
 			const meta = main.createDiv({ cls: "fp-match-row-meta" });
 			meta.createSpan({ text: tx.date });
 			meta.createSpan({ text: store.accounts.find((a) => a.id === tx.accountId)?.name ?? "—" });

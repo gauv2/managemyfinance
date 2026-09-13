@@ -1,5 +1,5 @@
 import type { Category, Transaction } from "../types";
-import { merchantDisplayName, merchantKey } from "./merchantKey";
+import { merchantDisplayName, merchantKey, merchantSourceText } from "./merchantKey";
 
 /**
  * What the app has learned about one merchant. Stored per portfolio in data/merchants.json — plain,
@@ -259,9 +259,14 @@ export function unknownMerchants(transactions: Transaction[], map: MerchantMap):
 		const entry = map[key];
 		if (entry?.categoryId || entry?.suggestion || entry?.dismissedAt) continue;
 		counts.set(key, (counts.get(key) ?? 0) + 1);
-		// Keep the longest cleaned description: "Koninklijke PostNL B.V." carries more for a classifier
-		// than "PostNL", and the extra words cost nothing at this scale.
-		const candidate = merchantDisplayName(tx.description || tx.counterparty || "");
+		// From the same field the key came from. Preferring the description here regardless meant a card
+		// payment was grouped correctly under its shop and then labelled — and sent to the model — as
+		// the terminal line, "CAPELLE AAN Pas: 4333". The classifier was still being asked what category
+		// a city belongs to, long after the grouping had been fixed.
+		//
+		// Longest wins among candidates: "Koninklijke PostNL B.V." carries more for a classifier than
+		// "PostNL", and the extra words cost nothing at this scale.
+		const candidate = merchantDisplayName(merchantSourceText(tx));
 		if (candidate && candidate.length > (names.get(key) ?? "").length) names.set(key, candidate);
 	}
 	return Array.from(counts.entries())

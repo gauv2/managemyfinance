@@ -1,4 +1,5 @@
 import { descendantIds, resolvePrimaryId } from "./categories";
+import { tracksBalance } from "./accounts";
 import { convert, type FxContext } from "./currency";
 import { classifyTransaction, isEconomicallyNeutral, type ClassifiedTransaction } from "./finance/semantics";
 import { inRange, lastCompleteMonthKey, monthKeysBetween, monthsInRange, shiftMonthKey, transactionYears, type DateRange } from "./period";
@@ -463,6 +464,9 @@ export function netWorthAsOf(store: KpiStore, asOf: string, accountId?: string):
 	let total = 0;
 	for (const account of store.accounts) {
 		if (accountId && account.id !== accountId) continue;
+		// A register-only account has no balance to contribute. Counting it as zero would be a claim
+		// that it holds nothing, which is a different and false statement — see Account.trackBalance.
+		if (!tracksBalance(account)) continue;
 		if (HOLDS_POSITIONS_TYPES.has(account.type)) {
 			total += investingTotalValueAsOf(store, account, asOf, byAccount.get(account.id) ?? []);
 		} else {

@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import {
 	aiRecheckCategories,
 	buildRecheckTargets,
@@ -25,7 +26,7 @@ import { categoryChainChip, icon, renderCategoryPicker, type CategoryPickerValue
  * Accepting and rejecting are both decisions and both are recorded. Rejecting isn't "do nothing" —
  * it marks the merchant confirmed, so the next recheck leaves it alone instead of raising it again.
  */
-export class RecheckModal extends Modal {
+export class RecheckModal extends FinanceModal {
 	private phase: "intro" | "running" | "done" = "intro";
 	private result?: RecheckResult;
 	/** Proposal keys the user wants applied. Starts empty: nothing is accepted by default. */

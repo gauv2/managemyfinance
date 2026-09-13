@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { oneOffBudgetStatus } from "../budgets";
 import { primaryCategories } from "../categories";
 import type FinancePlugin from "../main";
@@ -13,7 +14,7 @@ import { icon, moneyInput } from "../ui/dom";
  * flights, hotels, restaurants and a few taxis — and a renovation isn't either. Restricting to a set
  * of categories is what makes the pot measurable without needing a category invented per project.
  */
-export class OneOffBudgetModal extends Modal {
+export class OneOffBudgetModal extends FinanceModal {
 	private name: string;
 	private startDate: string;
 	private endDate: string;

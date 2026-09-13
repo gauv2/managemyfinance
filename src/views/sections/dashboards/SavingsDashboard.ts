@@ -4,7 +4,7 @@ import { MonthDrilldownModal } from "../../../modals/MonthDrilldownModal";
 import { describeRange, type DateRange } from "../../../period";
 import type { Account } from "../../../types";
 import { statTile } from "../../../ui/dom";
-import { deltaRow, formatEUR, metricRow, partialYearsNote, yearHeaderRow, yearLabeller, yoy } from "../../../ui/metricsTable";
+import { deltaRow, formatEUR, metricRow, metricsTable, partialYearsNote, yearHeaderRow, yearLabeller, yoy } from "../../../ui/metricsTable";
 
 /**
  * A savings account's job is to hold a buffer and grow — so its KPIs center on balance growth and
@@ -51,7 +51,7 @@ export function renderSavingsDashboard(container: HTMLElement, plugin: FinancePl
 	if (years.length > 0) {
 		const card = container.createDiv({ cls: "fp-card" });
 		card.createEl("h3", { text: "Balance history" });
-		const table = card.createEl("table", { cls: "fp-table fp-table-metrics" });
+		const table = metricsTable(card);
 		yearHeaderRow(table, years.map((y) => y.year), {
 			onClick: (year) => new MonthDrilldownModal(plugin.app, plugin, year, account.name, account.id).open(),
 			labelFor: yearLabeller(years),

@@ -1,4 +1,5 @@
-import { App, Modal } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { icon } from "../ui/dom";
 
 /** Handed to a step's render() so it can tell the shell that its validity has changed. */
@@ -29,7 +30,19 @@ export interface WizardStep {
  * Used for focused, self-contained tasks like importing a file. First-run setup lives in SetupView
  * instead, since that's a full-tab experience rather than a dialog.
  */
-export class WizardModal extends Modal {
+export class WizardModal extends FinanceModal {
+	/**
+	 * The one wizard allowed on screen at a time.
+	 *
+	 * A wizard holds several steps of work — a parsed file, a column mapping, a set of answers from a
+	 * model — and running the command again opened a second one on top of the first. Since the
+	 * backdrop stopped swallowing clicks so a dialog could survive a tab switch, that became easy to do
+	 * by accident, and the failure looks like the tool losing your work: finishing the import closed
+	 * the top wizard and revealed the untouched one underneath, which reads exactly like being sent
+	 * back to step one with nothing imported.
+	 */
+	private static current?: WizardModal;
+
 	private stepIndex = 0;
 	private steps: WizardStep[];
 	private stepsEl!: HTMLElement;
@@ -40,6 +53,18 @@ export class WizardModal extends Modal {
 	private wizIcon: string;
 
 	private buildStamp?: string;
+
+	open(): void {
+		const existing = WizardModal.current;
+		if (existing && existing !== this) {
+			// Returned to rather than replaced: the one already open is the one with the work in it.
+			new Notice("That wizard is already open.");
+			existing.containerEl.removeClass("fp-modal-away");
+			return;
+		}
+		WizardModal.current = this;
+		super.open();
+	}
 
 	constructor(
 		app: App,
@@ -82,6 +107,7 @@ export class WizardModal extends Modal {
 	}
 
 	onClose(): void {
+		if (WizardModal.current === this) WizardModal.current = undefined;
 		this.contentEl.empty();
 	}
 

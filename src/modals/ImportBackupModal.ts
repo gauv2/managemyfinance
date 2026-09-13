@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { applyBackup, backupCounts, parseBackup, type FinanceBackup, type RestoreMode } from "../data/backup";
 import type FinancePlugin from "../main";
 import { badge, icon } from "../ui/dom";
@@ -19,7 +20,7 @@ const COUNT_LABEL: { key: keyof ReturnType<typeof backupCounts>; label: string }
  * The choice is deliberately made *after* the file is read and summarized, not before — "replace"
  * is destructive and shouldn't be picked blind.
  */
-export class ImportBackupModal extends Modal {
+export class ImportBackupModal extends FinanceModal {
 	private backup: FinanceBackup | null = null;
 	private fileName = "";
 	private error: string | null = null;

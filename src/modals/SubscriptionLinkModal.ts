@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { merchantKey } from "../import/merchantKey";
 import type FinancePlugin from "../main";
 import { formatMoney } from "../money";
@@ -42,7 +43,7 @@ async function linkTransaction(plugin: FinancePlugin, tx: Transaction, sub: Subs
 }
 
 /** Starts from a transaction: pick the subscription it belongs to, or create one prefilled from it. */
-export class LinkSubscriptionModal extends Modal {
+export class LinkSubscriptionModal extends FinanceModal {
 	private query = "";
 
 	constructor(app: App, private plugin: FinancePlugin, private tx: Transaction, private onDone?: () => void) {
@@ -202,7 +203,7 @@ function nameMatches(sub: Subscription, tx: Transaction): boolean {
  * payments are mapped, "€11.99/mo" can be checked against the €13.99 that actually left the account
  * in March — which is exactly how a quiet price rise gets noticed.
  */
-export class SubscriptionPaymentsModal extends Modal {
+export class SubscriptionPaymentsModal extends FinanceModal {
 	constructor(app: App, private plugin: FinancePlugin, private sub: Subscription, private onDone?: () => void) {
 		super(app);
 	}
@@ -354,7 +355,7 @@ export class SubscriptionPaymentsModal extends Modal {
 }
 
 /** Recurring charges in the ledger that aren't tracked yet — offered as ready-made subscriptions. */
-export class DetectedSubscriptionsModal extends Modal {
+export class DetectedSubscriptionsModal extends FinanceModal {
 	constructor(app: App, private plugin: FinancePlugin, private onDone?: () => void) {
 		super(app);
 	}

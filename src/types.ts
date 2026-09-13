@@ -95,6 +95,31 @@ export interface Account {
 	apr?: number;
 	/** Credit accounts: minimum payment as a fraction of the statement balance (0.02 = 2%). */
 	minPaymentPct?: number;
+	/**
+	 * A closed/cancelled account whose history you still want. Presentation only, deliberately: every
+	 * transaction, balance, snapshot, report and net-worth figure counts exactly as before, so ticking
+	 * this can never move a number. It moves the account into the sidebar's "Closed" group and takes
+	 * it out of the pickers that file *new* activity, which is the whole point — an account you can no
+	 * longer spend from shouldn't be offered as a destination, but the eight years it was open are
+	 * still real. Mirrors `Category.archived` and `Subscription.archived`.
+	 */
+	archived?: boolean;
+	/**
+	 * `false` means this account keeps no running balance: a register of what happened, not a
+	 * reconciled book.
+	 *
+	 * Plenty of real use is like that — years of a closed account imported for the history, a cash
+	 * wallet nobody counts, a shared account you only record your own side of. For those a balance is
+	 * not merely unknown, it is meaningless, and a tool that insists on one turns every import into an
+	 * exercise in making a number come out right.
+	 *
+	 * Untracked accounts are left out of every net-worth total rather than counted as zero: an unknown
+	 * balance and a zero balance are different claims and only one of them is true here. Their
+	 * transactions still count everywhere else — spending, budgets, categories and reports are about
+	 * what happened, which is exactly what a register knows. Absent means tracked, so nothing that
+	 * exists today changes.
+	 */
+	trackBalance?: boolean;
 }
 
 /**
@@ -180,10 +205,54 @@ export interface OneOffBudget {
 	archived?: boolean;
 }
 
+/**
+ * How a rule's pattern is compared against a transaction.
+ *
+ * "contains" is the original behaviour and stays the fallback for every rule written before this
+ * existed. The other two non-regex modes exist because a substring can't express "this merchant and
+ * not the one whose name starts the same way": a ledger holding both "Apple" and "Apple Store" — two
+ * merchants, two categories — has no substring that catches the first without the second.
+ */
+export type CategoryRuleMatch = "contains" | "exact" | "starts-with" | "regex";
+
+export type RuleAmountOp = "exactly" | "any-of" | "between" | "at-most" | "at-least";
+
+/**
+ * An optional amount test on top of a rule's text match.
+ *
+ * Some merchants bill everything under one description. 201 rows described only "Apple" hold a
+ * €9.99/month subscription, a €5.99/month one that ended, and a long tail of one-off app purchases —
+ * no text can tell them apart, because there is no text. The amount is the only thing left.
+ *
+ * Compared on the *absolute* amount, in the transaction's own currency: people think in "the €9.99
+ * charge", not "-9.99", and a refund of a subscription belongs with the subscription rather than
+ * outside it. No FX conversion — a rule about €9.99 should not start matching a different sum because
+ * a rate moved.
+ */
+export interface RuleAmountCondition {
+	op: RuleAmountOp;
+	value: number;
+	/** Upper bound, "between" only. */
+	value2?: number;
+	/**
+	 * "any-of" only: the set of amounts to accept. A merchant that bills one description at several
+	 * price points needs several of them in one rule — the €9.99 and €2.99 and €6.99 subscriptions
+	 * belong in one category, and three separate rules over the same pattern would be three things to
+	 * keep in step, in an order where the first match wins.
+	 */
+	values?: number[];
+}
+
 export interface CategoryRule {
 	id: string;
 	pattern: string;
+	/** Narrows the text match further; unset means "any amount". */
+	amount?: RuleAmountCondition;
+	/** Superseded by `match`, kept so rules written before it keep working (and so does anything else
+	 *  still reading this flag). `match: "regex"` is written alongside it, never instead of it. */
 	isRegex?: boolean;
+	/** Unset means "contains", or "regex" when `isRegex` is set — see `resolveRuleMatch`. */
+	match?: CategoryRuleMatch;
 	categoryId: string;
 }
 
@@ -257,6 +326,43 @@ export interface Card {
  * per year inside it, so a source is a durable partition of the data rather than a label.
  * "manual" is the one that isn't an importer — it's a row you typed yourself.
  */
+/** Which way a debt points. "owe" is money you owe someone; "owed" is money owed to you. */
+export type DebtDirection = "owe" | "owed";
+
+export type DebtCounterpartyKind = "person" | "company" | "bank" | "other";
+
+/**
+ * One debt between you and someone else — a bank, a company, or a person.
+ *
+ * Deliberately a register and nothing more. It records who, how much, since when, when it is due and
+ * whether it is settled, and it touches no other figure in the plugin: net worth, budgets and every
+ * report are exactly as they were with or without it. That is the whole point. A forgotten €20 to a
+ * friend has no business quietly reshaping a headline number, and the alternative — asking every debt
+ * to be reconciled before it can be written down — is how a note-to-self becomes bookkeeping.
+ *
+ * Distinct from the debt-carrying *accounts* the Strategy page plans a payoff for. Those are real
+ * accounts with balances and APRs. These are the ones that live on a scrap of paper.
+ */
+export interface Debt {
+	id: string;
+	/** Who the debt is with. Free text: a bank, a shop, a person. */
+	counterparty: string;
+	kind?: DebtCounterpartyKind;
+	direction: DebtDirection;
+	/** The original amount, always positive — `direction` carries which way it points. */
+	amount: number;
+	currency: string;
+	/** Repaid so far, positive. Absent means nothing yet. */
+	paid?: number;
+	/** When the debt started, ISO. */
+	date: string;
+	dueDate?: string;
+	settledDate?: string;
+	notes?: string;
+	/** Optionally the account it relates to — a reference only, never a balance adjustment. */
+	accountId?: string;
+}
+
 export type TransactionSource =
 	| "ing"
 	| "trade-republic"
@@ -265,6 +371,7 @@ export type TransactionSource =
 	| "revolut"
 	| "bunq"
 	| "n26"
+	| "knab"
 	| "camt"
 	| "mt940"
 	| "ofx"
@@ -318,6 +425,14 @@ export interface Transaction {
 	transferGroupId?: string;
 	/** The import run that created this row — see ImportBatch. Absent on manually entered transactions. */
 	importBatchId?: string;
+	/**
+	 * The `CategoryRule` that decided this row's category, when one did. Provenance, not a second
+	 * source of truth: `categoryId` above is still the only thing anything reads to know the category.
+	 * This exists so the ledger can say *why* a row is filed where it is — a rule you wrote once and
+	 * forgot is otherwise indistinguishable from a category you chose deliberately. Cleared the moment
+	 * the category is set by any other means (by hand, by merchant memory, by a later rule).
+	 */
+	categoryRuleId?: string;
 	/** The subscription this payment is an instance of, once linked. Drives "what have I actually paid
 	 *  for Netflix" and price-increase detection. */
 	subscriptionId?: string;

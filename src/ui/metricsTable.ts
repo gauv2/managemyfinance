@@ -128,3 +128,20 @@ export function yearHeaderRow(
 		}
 	});
 }
+
+/**
+ * A year-by-year metrics table, inside something that can scroll.
+ *
+ * These tables grow a column every January, so any pane narrower than the years it holds eventually
+ * clips the newest ones — the columns you actually came to read. Measured on a real vault, the
+ * all-accounts history was 1,177px inside a 1,045px panel with `overflow-x: visible` on every
+ * ancestor, so 2025 and 2026 were simply cut off with no way to reach them.
+ *
+ * A `<table>` cannot be its own scroll container without `display: block`, which would break its
+ * column sizing, so the wrapper is the fix. Created here rather than at each call site because six of
+ * the seven dashboards had forgotten it, and the seventh dashboard added later would have too.
+ */
+export function metricsTable(parent: HTMLElement): HTMLTableElement {
+	const wrap = parent.createDiv({ cls: "fp-table-scroll" });
+	return wrap.createEl("table", { cls: "fp-table fp-table-metrics" });
+}

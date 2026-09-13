@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import type FinancePlugin from "../main";
 import { describeOutcome, runSchedule } from "../reports/scheduleRunner";
 import {
@@ -22,7 +23,7 @@ import { icon } from "../ui/dom";
  * The form is deliberately the same shape as the Reports tab's query builder, minus the dates — the
  * period supplies those. Anyone who has built a report on that page already knows this dialog.
  */
-export class ScheduleEditModal extends Modal {
+export class ScheduleEditModal extends FinanceModal {
 	private draft: ReportSchedule;
 	private readonly isNew: boolean;
 

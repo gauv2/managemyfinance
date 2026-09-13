@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { merchantKey } from "./merchantKey";
 import {
 	applyMemory,
 	dismissSuggestion,
@@ -253,5 +254,48 @@ describe("remember() and a human's confirmation", () => {
 	it("does not invent one for a merchant nobody has confirmed", () => {
 		const map = remember({}, "new-shop", "food", "rule");
 		expect(map["new-shop"].reviewedAt).toBeUndefined();
+	});
+});
+
+describe("the name offered to a classifier", () => {
+	function card(description: string, counterparty: string): Transaction {
+		return {
+			id: `t-${description}`,
+			date: "2026-01-01",
+			accountId: "acc",
+			description,
+			counterparty,
+			amount: -10,
+			currency: "EUR",
+			source: "manual",
+		};
+	}
+
+	it("names the shop, not the terminal the card was used at", () => {
+		// The key was already the shop; the label was taken from the description regardless, so a row
+		// grouped correctly under its shop was still *shown* — and sent to the model — as a city.
+		const rows = [card("CAPELLE AAN D 16-01-2015 16:30 Pas: 4333", "Albert Heijn 1204")];
+		// The branch number is stripped by merchantDisplayName, which is the right thing to hand a
+		// classifier — what matters is that it says the shop rather than the city.
+		expect(unknownMerchants(rows, {})[0].name).toContain("Albert Heijn");
+		expect(unknownMerchants(rows, {})[0].name.toLowerCase()).not.toContain("capelle");
+	});
+
+	it("keeps the label and the key on the same field", () => {
+		// The invariant that matters: whatever grouped these rows is what the label describes.
+		const rows = [card("UTRECHT 08-11-2014 15:08 Pas: 4333", "CCV*Huffels Horeca B.V")];
+		const [merchant] = unknownMerchants(rows, {});
+		expect(merchantKey(rows[0])).toBe(merchant.key);
+		expect(merchant.name.toLowerCase()).toContain("huffels");
+	});
+
+	it("names the company when the description is a bare reference", () => {
+		const rows = [card("2014-0051", "Snowcone B.V.")];
+		expect(unknownMerchants(rows, {})[0].name).toBe("Snowcone B.V.");
+	});
+
+	it("still prefers the description where that is the merchant", () => {
+		const rows = [card("Koninklijke PostNL B.V.", "")];
+		expect(unknownMerchants(rows, {})[0].name).toContain("PostNL");
 	});
 });

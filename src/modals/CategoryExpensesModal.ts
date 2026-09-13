@@ -1,4 +1,5 @@
-import { App, Modal } from "obsidian";
+import { App } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { categoryChain, secondaryCategoriesOf } from "../categories";
 import { categoryTransactions } from "../kpi";
 import type FinancePlugin from "../main";
@@ -17,7 +18,7 @@ function formatEUR(n: number): string {
  *  blindly. `period` is whatever the Budgets page is currently keyed by (a calendar "YYYY-MM" or a
  *  pay-cycle's own DateRange — see payCycle.ts); `periodLabel` is how that reads to a person, decided
  *  by the caller rather than derived here, since a pay-cycle key isn't a month name to parse. */
-export class CategoryExpensesModal extends Modal {
+export class CategoryExpensesModal extends FinanceModal {
 	constructor(
 		app: App,
 		private plugin: FinancePlugin,

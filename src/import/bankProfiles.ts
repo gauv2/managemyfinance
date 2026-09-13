@@ -39,6 +39,28 @@ function pick(headers: string[], ...candidates: string[]): string {
 
 export const BANK_PROFILES: BankProfile[] = [
 	{
+		id: "knab",
+		label: "KNAB",
+		// These headers are supplied by `knabSheet.ts` — the export itself has none. Matching them here
+		// keeps KNAB on exactly the same path as every other recognised bank rather than giving it a
+		// parser of its own.
+		signature: ["datum", "af bij", "bedrag", "tegenpartij"],
+		note: "Amounts are unsigned; the Af/Bij column decides the direction.",
+		mapping: (headers) =>
+			mappingOf({
+				date: pick(headers, "Datum"),
+				description: pick(headers, "Omschrijving"),
+				// The payee's name, not "Tegenrekening" — that column holds their account number, and
+				// filing an IBAN as the counterparty makes every merchant look like a different one.
+				counterparty: pick(headers, "Tegenpartij"),
+				amount: pick(headers, "Bedrag"),
+				debitCredit: pick(headers, "Af Bij"),
+				debitValue: "Af",
+				type: pick(headers, "Soort"),
+				code: pick(headers, "Transactienummer"),
+			}),
+	},
+	{
 		id: "revolut",
 		label: "Revolut",
 		signature: ["type", "product", "completed date", "amount", "currency"],

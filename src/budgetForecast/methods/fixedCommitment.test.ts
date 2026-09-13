@@ -69,9 +69,11 @@ describe("forecastFixedCommitment — fallback rungs", () => {
 		expect(result.diagnostics.explanation[0]).toContain("most recent payment");
 	});
 
-	it("falls back to a historical average when the category has tracked months but no non-zero spend of its own", () => {
+	it("is not forecastable when the ledger has tracked months but this category was never charged", () => {
 		// The ledger is tracked (via an unrelated category's own transactions), but Rent itself was
-		// never actually charged in any of those months — the deepest rung of the cascade.
+		// never actually charged in any of those months. Averaging an all-zero series answered €0 and
+		// then cited the empty month buckets as if they were payments; a fixed cost nobody has ever
+		// paid is missing evidence, not a €0 budget.
 		const OTHER = "cat-other";
 		const s: ForecastStore = {
 			accounts: [CHECKING],
@@ -79,8 +81,28 @@ describe("forecastFixedCommitment — fallback rungs", () => {
 			transactions: [tx("2024-06-15", -10, OTHER, "Shop"), tx("2024-07-15", -10, OTHER, "Shop")],
 		};
 		const result = forecastFixedCommitment(s, { categoryId: RENT, target: { from: "2025-01-01", to: "2025-01-31", label: "January 2025" }, scope: "leaf" });
-		expect(result.p50?.amount).toBe(0);
-		expect(result.diagnostics.explanation[0]).toContain("historical average");
+		expect(result.forecastable).toBe(false);
+		expect(result.p50).toBeUndefined();
+		expect(result.reason).toMatch(/no payments recorded/i);
+	});
+
+	it("never reports empty month buckets as historical payments", () => {
+		// The regression this guards: 79 tracked-but-empty months were counted as "79 historical
+		// payments back this estimate" for a category with none of them.
+		const OTHER = "cat-other";
+		const transactions = Array.from({ length: 79 }, (_, i) => {
+			const month = String((i % 12) + 1).padStart(2, "0");
+			const year = 2018 + Math.floor(i / 12);
+			return tx(`${year}-${month}-15`, -10, OTHER, "Shop");
+		});
+		const s: ForecastStore = {
+			accounts: [CHECKING],
+			categories: [...CATEGORIES, { id: OTHER, name: "Other", color: "#000", icon: "tag", aliases: [] }],
+			transactions,
+		};
+		const result = forecastFixedCommitment(s, { categoryId: RENT, target: { from: "2025-01-01", to: "2025-01-31", label: "January 2025" }, scope: "leaf" });
+		expect(result.forecastable).toBe(false);
+		expect(result.diagnostics.explanation.join(" ")).not.toMatch(/historical payment/i);
 	});
 
 	it("is not forecastable at all with no history whatsoever", () => {

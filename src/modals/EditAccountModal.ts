@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { ACCOUNT_TYPE_META, ACCOUNT_TYPE_ORDER, CURRENCIES } from "../constants";
 import { accountBalanceParts, type AccountBalanceParts } from "../kpi";
 import type FinancePlugin from "../main";
@@ -39,7 +40,7 @@ function fraction(raw: string): number | undefined {
  * Changing the type is a pure relabel: it changes which dashboard the account gets and how it's
  * treated in transfer detection, and touches no transaction.
  */
-export class EditAccountModal extends Modal {
+export class EditAccountModal extends FinanceModal {
 	private name: string;
 	private type: AccountType;
 	private currency: string;
@@ -58,6 +59,8 @@ export class EditAccountModal extends Modal {
 		this.type = account.type;
 		this.currency = account.currency || "EUR";
 		this.iban = account.iban ?? "";
+		this.archived = !!account.archived;
+		this.trackBalance = account.trackBalance !== false;
 		this.openingBalance = account.openingBalance ?? 0;
 		this.creditLimit = account.creditLimit;
 		this.statementDay = account.statementDay !== undefined ? String(account.statementDay) : "";
@@ -155,9 +158,43 @@ export class EditAccountModal extends Modal {
 		ibanInput.addClass("fp-iban");
 		ibanInput.addEventListener("input", () => (this.iban = ibanInput.value));
 
-		form.createDiv({ cls: "fp-form-section-label", text: "Balance" });
+		const statusRow = form.createDiv({ cls: "fp-form-row" });
+		statusRow.createEl("label", { text: "Status" });
+		const statusControl = statusRow.createDiv({ cls: "fp-field-control" });
+		const archivedLabel = statusControl.createEl("label", { cls: "fp-checkbox-row" });
+		const archivedInput = archivedLabel.createEl("input", { type: "checkbox" });
+		archivedInput.checked = this.archived;
+		archivedLabel.createSpan({ text: "Closed / cancelled" });
+		archivedInput.addEventListener("change", () => (this.archived = archivedInput.checked));
+		statusControl.createDiv({
+			cls: "fp-field-hint",
+			text: "Moves the account into a \u201cClosed\u201d group in the sidebar and stops offering it when filing new activity. Every transaction, balance and report stays exactly as it is — ticking this never changes a number.",
+		});
 
-		const openingRow = form.createDiv({ cls: "fp-form-row" });
+		const balanceHeader = form.createDiv({ cls: "fp-form-section-label", text: "Balance" });
+		const trackLabel = form.createEl("label", { cls: "fp-checkbox-row fp-form-inline-check" });
+		const trackInput = trackLabel.createEl("input", { type: "checkbox" });
+		trackInput.checked = !this.trackBalance;
+		trackLabel.createSpan({ text: "Don\u2019t track a balance \u2014 register only" });
+		const trackHint = form.createDiv({
+			cls: "fp-field-hint",
+			text: "For an account you keep for its history rather than its balance. It stops counting toward net worth \u2014 left out, not counted as zero \u2014 while its transactions go on feeding spending, budgets, categories and reports exactly as before.",
+		});
+		// The balance fields are meaningless once the account isn't reconciled, so they go rather than
+		// sitting there greyed out inviting you to wonder what they would have done.
+		const balanceFields = form.createDiv({ cls: "fp-form-balance-fields" });
+		const syncTracking = (): void => {
+			balanceFields.toggle(this.trackBalance);
+			balanceHeader.setText(this.trackBalance ? "Balance" : "Balance \u2014 not tracked");
+		};
+		trackInput.addEventListener("change", () => {
+			this.trackBalance = !trackInput.checked;
+			syncTracking();
+		});
+		void trackHint;
+		syncTracking();
+
+		const openingRow = balanceFields.createDiv({ cls: "fp-form-row" });
 		openingRow.createEl("label", { text: "Opening balance" });
 		this.openingField = moneyInput(openingRow, {
 			value: this.openingBalance,
@@ -181,7 +218,7 @@ export class EditAccountModal extends Modal {
 		});
 
 		const anchoredTo = this.balanceParts.snapshot;
-		const currentRow = form.createDiv({ cls: "fp-form-row" });
+		const currentRow = balanceFields.createDiv({ cls: "fp-form-row" });
 		currentRow.createEl("label", { text: "Current balance" });
 		this.currentField = moneyInput(currentRow, {
 			value: this.balanceAnchor + this.transactionsTotal,
@@ -207,7 +244,7 @@ export class EditAccountModal extends Modal {
 				: "Type the figure your bank shows — the opening balance above is adjusted to match.",
 		});
 
-		this.summaryEl = form.createDiv({ cls: "fp-form-balance-summary" });
+		this.summaryEl = balanceFields.createDiv({ cls: "fp-form-balance-summary" });
 		this.renderBalanceSummary();
 
 		// Credit terms live on the account because they're facts about the card, not about any
@@ -217,7 +254,7 @@ export class EditAccountModal extends Modal {
 		this.renderCreditTerms();
 		typeSelect.addEventListener("change", () => this.renderCreditTerms());
 
-		const snapshotRow = form.createDiv({ cls: "fp-form-row" });
+		const snapshotRow = balanceFields.createDiv({ cls: "fp-form-row" });
 		snapshotRow.createEl("label", { text: "Recorded balances" });
 		const snapshotControl = snapshotRow.createDiv({ cls: "fp-field-control" });
 		const snapshotCount = this.plugin.store.snapshots.filter((sn) => sn.accountId === this.account.id).length;
@@ -254,6 +291,8 @@ export class EditAccountModal extends Modal {
 	private paymentDueDay = "";
 	private apr = "";
 	private minPaymentPct = "";
+	private archived = false;
+	private trackBalance = true;
 
 	/** Credit-card terms — rendered only for a credit account, and re-rendered if the type changes. */
 	private renderCreditTerms(): void {
@@ -346,6 +385,8 @@ export class EditAccountModal extends Modal {
 		account.type = this.type;
 		account.currency = this.currency;
 		account.iban = this.iban.trim() || undefined;
+		account.archived = this.archived || undefined;
+		account.trackBalance = this.trackBalance ? undefined : false;
 		account.openingBalance = this.openingBalance ?? 0;
 
 		// Card terms are only meaningful on a credit account; switching an account away from credit

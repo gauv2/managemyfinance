@@ -138,3 +138,41 @@ describe("forecastSinkingFund — edge cases", () => {
 		expect(result.p50?.amount).toBe(0);
 	});
 });
+
+describe("evidence, not window size, drives sinking-fund confidence", () => {
+	const TARGET = { from: "2026-01-01", to: "2026-01-31", label: "January 2026" };
+
+	it("does not call a category charged once in eight years a confident forecast", () => {
+		// The regression: `annualObservations` admits a year on ledger coverage alone, so this
+		// category arrived with eight "observations" — seven of them €0 — cleared §33's three-year
+		// bar, and scored 80/high off a single €19 charge. Confidence ran inverse to evidence.
+		const s = store([tx("2021-06-14", -19.3, MEDICAL, "Notary")]);
+		const result = forecastSinkingFund(s, { categoryId: MEDICAL, target: TARGET, scope: "leaf" });
+		expect(result.forecastable).toBe(true);
+		expect(result.p50!.confidenceLabel).toBe("low");
+	});
+
+	it("leaves a genuinely lumpy category with real history at its own confidence", () => {
+		// What a sinking fund is *for* (§21–24): spending that clusters, across four of the eight
+		// tracked years and plenty of months. It must not be swept up by the fix above.
+		const rows: Transaction[] = [];
+		for (const year of [2019, 2021, 2023, 2025]) {
+			for (const month of [3, 4, 7, 9, 11]) {
+				rows.push(tx(`${year}-${String(month).padStart(2, "0")}-12`, -300, REPAIRS, "Builder"));
+			}
+		}
+		const result = forecastSinkingFund(store(rows), { categoryId: REPAIRS, target: TARGET, scope: "leaf" });
+		expect(result.forecastable).toBe(true);
+		expect(result.p50!.confidenceLabel).not.toBe("low");
+		expect(result.p50!.amount).toBeGreaterThan(0);
+	});
+
+	it("counts spending years, not tracked years, at the §33 usability bar", () => {
+		// Two years carrying spend is below MIN_USABLE_YEARS however many years the ledger covers,
+		// so this drops to the flat-average rung and inherits its forced-low confidence.
+		const s = store([tx("2020-05-10", -80, MEDICAL, "Clinic"), tx("2024-08-03", -120, MEDICAL, "Clinic")]);
+		const result = forecastSinkingFund(s, { categoryId: MEDICAL, target: TARGET, scope: "leaf" });
+		expect(result.p50!.confidenceScore).toBeLessThanOrEqual(49);
+		expect(result.p50!.confidenceLabel).toBe("low");
+	});
+});

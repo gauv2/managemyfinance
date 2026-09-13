@@ -43,3 +43,42 @@ describe("detectDateOrder", () => {
 		expect(detectDateOrder(["20260101", "2026-01-01", "08/18/2026"])).toBe("mdy");
 	});
 });
+
+describe("dates with separators other than slash", () => {
+	it("reads a dash-separated European date day-first", () => {
+		// KNAB writes 28-10-2014. This used to fall through to `new Date`, which cannot read it at all,
+		// so the raw string was handed to the ledger as if it were a date.
+		expect(parseFlexibleDate("28-10-2014", "dmy")).toBe("2014-10-28");
+		expect(parseFlexibleDate("07-12-2019", "dmy")).toBe("2019-12-07");
+	});
+
+	it("does not transpose a dash date that `new Date` would read month-first", () => {
+		// The dangerous half: 12-08-2019 is 12 August, but `new Date` calls it 8 December and then
+		// `toISOString` moved it back a day to 2019-12-07 — wrong month and wrong day, looking valid.
+		expect(parseFlexibleDate("12-08-2019", "dmy")).toBe("2019-08-12");
+	});
+
+	it("reads dot-separated dates too", () => {
+		expect(parseFlexibleDate("28.10.2014", "dmy")).toBe("2014-10-28");
+	});
+
+	it("still honours month-first when the batch says so", () => {
+		expect(parseFlexibleDate("12-08-2019", "mdy")).toBe("2019-12-08");
+	});
+
+	it("passes an ISO date through untouched, whatever the timezone", () => {
+		expect(parseFlexibleDate("2019-08-12")).toBe("2019-08-12");
+		expect(parseFlexibleDate("2019-08-12T09:30:00Z")).toBe("2019-08-12");
+	});
+
+	it("detects the order from dash-separated dates as well as slashes", () => {
+		expect(detectDateOrder(["05-06-2019", "28-10-2014"])).toBe("dmy");
+		expect(detectDateOrder(["05-06-2019", "10-28-2014"])).toBe("mdy");
+		expect(detectDateOrder(["05.06.2019", "28.10.2014"])).toBe("dmy");
+	});
+
+	it("leaves something that is not a date alone", () => {
+		expect(parseFlexibleDate("not a date")).toBe("not a date");
+		expect(parseFlexibleDate("")).toBe("");
+	});
+});

@@ -1390,3 +1390,49 @@ describe("money coming in against an expense category", () => {
 		expect(march.expenses).toBe(60);
 	});
 });
+
+describe("register-only accounts and net worth", () => {
+	it("leaves an untracked account out instead of counting it as zero", () => {
+		// Zero is a claim that the account holds nothing. "Not tracked" is a claim that nobody knows,
+		// and the two must not produce the same total.
+		const tracked: Account = { id: "acc-t", name: "Tracked", type: "debit", currency: "EUR", openingBalance: 100 };
+		const register: Account = {
+			id: "acc-r",
+			name: "Register only",
+			type: "debit",
+			currency: "EUR",
+			openingBalance: 5000,
+			trackBalance: false,
+		};
+		const store = {
+			accounts: [tracked, register],
+			categories: [],
+			transactions: [
+				{ id: "t1", date: "2026-01-05", accountId: "acc-t", description: "Shop", amount: -10, currency: "EUR", source: "manual" },
+				{ id: "t2", date: "2026-01-06", accountId: "acc-r", description: "Shop", amount: -900, currency: "EUR", source: "manual" },
+			],
+			snapshots: [],
+		} as unknown as Parameters<typeof netWorthAsOf>[0];
+
+		// Only the tracked account: 100 opening less 10 spent.
+		expect(netWorthAsOf(store, "2026-12-31")).toBe(90);
+	});
+
+	it("reports zero for an untracked account asked about by name", () => {
+		const register: Account = { id: "acc-r", name: "R", type: "debit", currency: "EUR", openingBalance: 5000, trackBalance: false };
+		const store = { accounts: [register], categories: [], transactions: [], snapshots: [] } as unknown as Parameters<
+			typeof netWorthAsOf
+		>[0];
+		// Callers that want to say "N/A" rather than "€0.00" read the flag; this only guarantees the
+		// figure never leaks into a total.
+		expect(netWorthAsOf(store, "2026-12-31", "acc-r")).toBe(0);
+	});
+
+	it("still counts a tracked account exactly as before", () => {
+		const tracked: Account = { id: "acc-t", name: "T", type: "debit", currency: "EUR", openingBalance: 250 };
+		const store = { accounts: [tracked], categories: [], transactions: [], snapshots: [] } as unknown as Parameters<
+			typeof netWorthAsOf
+		>[0];
+		expect(netWorthAsOf(store, "2026-12-31")).toBe(250);
+	});
+});

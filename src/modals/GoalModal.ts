@@ -1,4 +1,6 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
+import { activeAccounts } from "../accounts";
 import type FinancePlugin from "../main";
 import { formatMoney } from "../money";
 import { goalCurrentAmount } from "../strategy";
@@ -12,7 +14,7 @@ import { icon, moneyInput } from "../ui/dom";
  * rather than typed by hand. Opening one of those here still allows editing its name/target/deadline/
  * priority; its tracking mode simply isn't offered as a choice.
  */
-export class GoalModal extends Modal {
+export class GoalModal extends FinanceModal {
 	private name: string;
 	private deadline: string;
 	private priority: number;
@@ -100,7 +102,7 @@ export class GoalModal extends Modal {
 				accountRow.createEl("label", { text: "Account" });
 				const accountSelect = accountRow.createEl("select");
 				accountSelect.createEl("option", { text: "Choose an account…", value: "" });
-				store.accounts.forEach((a) => accountSelect.createEl("option", { text: a.name, value: a.id }));
+				activeAccounts(store.accounts, this.linkedAccountId).forEach((a) => accountSelect.createEl("option", { text: a.name, value: a.id }));
 				accountSelect.value = this.linkedAccountId;
 				accountSelect.addEventListener("change", () => (this.linkedAccountId = accountSelect.value));
 			} else {

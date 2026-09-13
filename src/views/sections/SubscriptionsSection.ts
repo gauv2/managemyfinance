@@ -32,7 +32,20 @@ import { barChart, stackedShareBar } from "../../ui/charts";
 import { badge, emptyState, icon, initialsAvatar, statTile } from "../../ui/dom";
 import { openSubscriptionWizard } from "../../wizards/SubscriptionWizard";
 
-const CAT_COLORS = ["var(--fp-cat-1)", "var(--fp-cat-2)", "var(--fp-cat-3)", "var(--fp-cat-4)", "var(--fp-cat-5)"];
+/** Ten slots, not the palette's first five: there are twelve subscription categories, and a legend
+ *  that shows six of them cannot say which band is which if two share a colour. */
+const CAT_COLORS = [
+	"var(--fp-cat-1)",
+	"var(--fp-cat-2)",
+	"var(--fp-cat-3)",
+	"var(--fp-cat-4)",
+	"var(--fp-cat-5)",
+	"var(--fp-cat-6)",
+	"var(--fp-cat-7)",
+	"var(--fp-cat-8)",
+	"var(--fp-cat-9)",
+	"var(--fp-cat-10)",
+];
 const DUE_SOON_DAYS = 7;
 
 function formatEUR(n: number): string {
@@ -51,9 +64,68 @@ function formatRelativeDays(days: number): string {
 	return `in ${days}d`;
 }
 
+/**
+ * A category's colour, stable for the life of the category name.
+ *
+ * Anything the list doesn't recognise used to fall to index 0 and come out as the same blue as "AI".
+ * Older labels survive in saved data — a subscription filed under "Cloud" before the option became
+ * "Cloud & Storage" keeps the string it was saved with — so one legend could show "AI", "Cloud" and
+ * "Other" as three identical dots with no way to tell which band was which. Hashing the name puts an
+ * unknown category on its own slot instead of borrowing the first one.
+ */
 function categoryColor(category: string): string {
+	return CAT_COLORS[categorySlot(category)];
+}
+
+function categorySlot(category: string): number {
 	const idx = SUBSCRIPTION_CATEGORIES.indexOf(category);
-	return CAT_COLORS[(idx < 0 ? 0 : idx) % CAT_COLORS.length];
+	return (idx < 0 ? hashSlot(category) : idx) % CAT_COLORS.length;
+}
+
+function hashSlot(text: string): number {
+	let h = 0;
+	for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) >>> 0;
+	return h;
+}
+
+/**
+ * Colours for one legend, guaranteed distinct.
+ *
+ * categoryColor is stable per name, which is what the avatars and the top-subscriptions bars need so
+ * a category looks the same everywhere. Stability on its own doesn't stop two categories in the *same*
+ * legend landing on one slot, though — twelve categories over ten slots means some pair always can —
+ * and a chart showing "Streaming" and "Other" in identical orange cannot be read at all. Each keeps
+ * its own colour where the slot is free and takes the next free one where it isn't, so the common
+ * case is unchanged and the unreadable case cannot happen.
+ */
+function distinctCategoryColors(labels: string[]): (label: string) => string {
+	const used = new Set<number>();
+	const chosen = new Map<string, string>();
+	const displaced: string[] = [];
+
+	// Two passes, so only the category that actually collides moves. Assigning in one pass let a
+	// displaced label take the next slot along and evict whichever category that slot belonged to:
+	// "Other" pushed off "Streaming"'s orange landed on green, and "Software" — which owns green —
+	// was shunted to pink. Everyone keeps their own colour first; the leftovers fill the gaps after.
+	for (const label of labels) {
+		const slot = categorySlot(label);
+		if (used.has(slot)) {
+			displaced.push(label);
+			continue;
+		}
+		used.add(slot);
+		chosen.set(label, CAT_COLORS[slot]);
+	}
+	for (const label of displaced) {
+		const preferred = categorySlot(label);
+		let slot = preferred;
+		for (let step = 1; step <= CAT_COLORS.length && used.has(slot); step++) {
+			slot = (preferred + step) % CAT_COLORS.length;
+		}
+		used.add(slot);
+		chosen.set(label, CAT_COLORS[slot]);
+	}
+	return (label) => chosen.get(label) ?? categoryColor(label);
 }
 
 /** "MONTHLY SPEND" / "YEARLY SPEND" — the caption every chart and group total carries so a figure is
@@ -184,7 +256,8 @@ export function renderSubscriptionsSection(container: HTMLElement, plugin: Finan
 			});
 		} else {
 			const breakdown = container.createDiv({ cls: "fp-sub-breakdown-grid" });
-			renderShareCard(breakdown, "By category", totalsByCategory(subs, rates, today), basis, categoryColor);
+			const categoryTotals = totalsByCategory(subs, rates, today);
+			renderShareCard(breakdown, "By category", categoryTotals, basis, distinctCategoryColors(categoryTotals.map((r) => r.label)));
 			renderShareCard(breakdown, "By billing cycle", totalsByBillingCycle(subs, rates, today), basis);
 			renderShareCard(breakdown, "Private vs business", totalsByPaidVia(subs, rates, today), basis);
 

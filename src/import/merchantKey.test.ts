@@ -161,3 +161,77 @@ describe("merchantKey — distinct payees must not merge", () => {
 		expect(key("Albert Heijn 1423")).toBe(key("Albert Heijn 5566"));
 	});
 });
+
+describe("which field names the payee", () => {
+	it("reads the shop off the counterparty when the description is a card-terminal line", () => {
+		// KNAB writes "BUNNIK 08-11-2014 16:20 Pas: 4333" as the description and the shop beside it.
+		// Keying on the description put 595 unrelated transactions under one merchant called
+		// "rotterdam pas" — a city, which no rule and no model could ever categorise.
+		expect(merchantKey({ description: "BUNNIK 08-11-2014 16:20 Pas: 4333", counterparty: "Albert Heijn Bunnik" })).toBe(
+			"albert heijn bunnik"
+		);
+		expect(merchantKey({ description: "ROTTERDAM 10-01-2015 19:13 Pas: 4333", counterparty: "Eetcafe P.Alexander" })).toBe(
+			"eetcafe alexander"
+		);
+	});
+
+	it("keeps two shops in the same city apart", () => {
+		const a = merchantKey({ description: "ROTTERDAM 10-01-2015 19:13 Pas: 4333", counterparty: "Jumbo Rotterdam" });
+		const b = merchantKey({ description: "ROTTERDAM 11-01-2015 09:02 Pas: 4333", counterparty: "Kruidvat 0272" });
+		expect(a).not.toBe(b);
+	});
+
+	it("still prefers the description where that is the merchant", () => {
+		// The banks this was written for put the merchant in the description and nothing useful beside it.
+		expect(merchantKey({ description: "ALBERT HEIJN 1423 DEN HAAG" })).toBe(
+			merchantKey({ description: "ALBERT HEIJN 1423 DEN HAAG", counterparty: "" })
+		);
+	});
+
+	it("ignores a counterparty that is an account number rather than a name", () => {
+		// Banks like ING put an IBAN there; keying on it would file the same shop differently every
+		// time it billed from another account.
+		const key = merchantKey({ description: "UTRECHT 08-11-2014 15:08 Pas: 4333", counterparty: "NL04RABO0356343936" });
+		expect(key).not.toBe("nl04rabo0356343936");
+	});
+
+	it("falls back to the counterparty when the description names nobody", () => {
+		// "2014-0051" is a reference, not a merchant. Giving up here left 232 rows of one import with
+		// no merchant identity at all, so they reached neither the rules nor the model.
+		expect(merchantKey({ description: "2014-0051", counterparty: "Snowcone B.V." })).toBe("snowcone");
+	});
+
+	it("is still undefined when neither field names anyone", () => {
+		expect(merchantKey({ description: "2014-0051", counterparty: "" })).toBeUndefined();
+		expect(merchantKey({ description: "", counterparty: "" })).toBeUndefined();
+	});
+});
+
+describe("administrative words are not a merchant", () => {
+	it("does not build a key out of reference vocabulary", () => {
+		// "Kenmerk … Omschrijving Klantnummer" is an invoice reference; Eneco is in the next column.
+		expect(merchantKey({ description: "Kenmerk  8002227925600011 Omschrijving  Klantnummer", counterparty: "ENECO SERVICES" })).toBe(
+			"eneco services"
+		);
+		expect(merchantKey({ description: "kenmerk 3021601156831408 Rel.nr. 436815672 Periode 0", counterparty: "CZ Groep Zorgverzekeraar" })).toBe(
+			"cz groep zorgverzekeraar"
+		);
+	});
+
+	it("stops different companies merging under the word their description opened with", () => {
+		// Six payees, XS4ALL and A.T.O. Electro among them, were all filed under "factuurnummer".
+		const a = merchantKey({ description: "Factuurnummer 201623896", counterparty: "XS4ALL" });
+		const b = merchantKey({ description: "Factuurnummer 900012345", counterparty: "A.T.O. Electro B.V." });
+		expect(a).not.toBe(b);
+		expect(a).toBe("xs4all");
+	});
+
+	it("leaves a real name that merely contains a reference word alone", () => {
+		// Only whole tokens are dropped, so a trading name survives intact.
+		expect(merchantKey({ description: "Nummer Vijf Cafe" })).toContain("vijf");
+	});
+
+	it("still returns nothing when the description is only admin words and there is no counterparty", () => {
+		expect(merchantKey({ description: "Factuurnummer 201623896", counterparty: "" })).toBeUndefined();
+	});
+});

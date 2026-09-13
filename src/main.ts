@@ -11,6 +11,8 @@ import { DetectedSubscriptionsModal, dueSoon } from "./modals/SubscriptionLinkMo
 import { TransactionEditModal } from "./modals/TransactionEditModal";
 import { TransferMatchModal } from "./modals/TransferMatchModal";
 import { formatMoney, setNumberFormatPreference } from "./money";
+import { reviewMilestone } from "./review";
+import { celebrate } from "./ui/celebrate";
 import { registerFinanceCodeBlock } from "./reports/codeblock";
 import { buildMonthlyReport, buildNetWorthReport, buildYearlyReport, type ReportContext } from "./reports/markdown";
 import { runDueSchedules } from "./reports/scheduleRunner";
@@ -52,6 +54,7 @@ export default class FinancePlugin extends Plugin {
 		await this.ensureDefaultPortfolio();
 		this.store = new FinanceStore(this.app, this.settings);
 		await this.store.load();
+		this.watchReviewMilestones();
 
 		this.registerView(VIEW_TYPE_FINANCE, (leaf: WorkspaceLeaf) => new FinanceView(leaf, this));
 		this.settingTab = new FinanceSettingTab(this.app, this);
@@ -258,6 +261,21 @@ export default class FinancePlugin extends Plugin {
 		const leaf = this.app.workspace.getLeaf("tab");
 		await leaf.setViewState({ type: VIEW_TYPE_FINANCE, active: true });
 		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * Confetti when a write finishes off the review queue or the flagged pile.
+	 *
+	 * Installed on the store rather than on the review page, because the page is only two of the
+	 * fifteen places in this app that write a transaction — clearing your last flagged rows through
+	 * the "approve the rest of these too?" sheet finished the whole review and threw nothing. What
+	 * counts as a milestone is decided by reviewMilestone(), from the tallies alone.
+	 */
+	private watchReviewMilestones(): void {
+		this.store.onReviewChange = (before, after) => {
+			const milestone = reviewMilestone(before, after);
+			if (milestone) celebrate(milestone);
+		};
 	}
 
 	refreshViews(): void {

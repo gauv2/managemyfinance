@@ -1,4 +1,5 @@
-import { App, Modal } from "obsidian";
+import { App } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { categoryChain, descendantIds, secondaryCategoriesOf } from "../categories";
 import { convert } from "../currency";
 import type FinancePlugin from "../main";
@@ -18,7 +19,7 @@ import { TransactionDetailModal } from "./TransactionDetailModal";
  * each of which opens its own detail view. The scope you drilled from (a year, one account, or all of
  * them) is carried through, so the numbers here always add up to the bar you clicked.
  */
-export class CategoryDrilldownModal extends Modal {
+export class CategoryDrilldownModal extends FinanceModal {
 	/** Set when a subcategory is chosen, narrowing the transaction list below. */
 	private secondaryId?: string;
 

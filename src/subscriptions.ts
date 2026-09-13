@@ -13,6 +13,7 @@ export const SUBSCRIPTION_CATEGORIES = [
 	"Health & Fitness",
 	"Finance",
 	"Utilities",
+	"Entertainment",
 	"Other",
 ];
 

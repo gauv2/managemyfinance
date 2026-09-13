@@ -291,3 +291,42 @@ export function emptyState(
 	}
 	return wrap;
 }
+
+/**
+ * A search box with a clear button, shown only once there is something to clear.
+ *
+ * A search that can only be emptied by selecting its text and deleting it is a search people leave
+ * filled by accident, and on a filtered list that reads as missing data rather than an active filter.
+ *
+ * The button deliberately does not take focus (`mousedown` prevented): clicking it should leave the
+ * cursor in the field, ready to type the next search, not park it on a button that has just
+ * disappeared. `onChange` fires on clear exactly as it does on typing, so the caller needs no
+ * separate path for "emptied".
+ */
+export function searchInput(
+	parent: HTMLElement,
+	opts: { placeholder: string; value?: string; onChange: (value: string) => void }
+): HTMLInputElement {
+	const wrap = parent.createDiv({ cls: "fp-search-wrap" });
+	const input = wrap.createEl("input", { type: "text", cls: "fp-search", placeholder: opts.placeholder });
+	input.value = opts.value ?? "";
+
+	const clear = wrap.createEl("button", { cls: "fp-search-clear", attr: { "aria-label": "Clear search", type: "button" } });
+	icon(clear, "x");
+	const sync = (): void => clear.toggleClass("is-visible", input.value.length > 0);
+
+	input.addEventListener("input", () => {
+		sync();
+		opts.onChange(input.value);
+	});
+	clear.addEventListener("mousedown", (ev) => ev.preventDefault());
+	clear.addEventListener("click", () => {
+		if (!input.value) return;
+		input.value = "";
+		sync();
+		opts.onChange("");
+		input.focus();
+	});
+	sync();
+	return input;
+}

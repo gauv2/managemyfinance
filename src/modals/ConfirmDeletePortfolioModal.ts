@@ -1,8 +1,9 @@
-import { App, Modal } from "obsidian";
+import { App } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { icon } from "../ui/dom";
 
 /** Asks whether a removed portfolio's vault folder should be kept (just unlisted) or deleted (moved to trash) along with it. */
-export class ConfirmDeletePortfolioModal extends Modal {
+export class ConfirmDeletePortfolioModal extends FinanceModal {
 	constructor(app: App, private portfolioName: string, private folder: string, private onChoice: (deleteData: boolean) => void) {
 		super(app);
 	}

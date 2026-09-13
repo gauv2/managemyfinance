@@ -37,8 +37,16 @@ export async function fetchLatestRates(): Promise<Record<string, number>> {
  * history could mean dozens of distinct dates to fetch.
  */
 export async function fetchHistoricalRates(date: string): Promise<Record<string, number>> {
+	// The date is interpolated straight into the URL *path*, and it arrives from a transaction's own
+	// `date` field, which is not guaranteed to be a date at all: `parseFlexibleDate` hands back
+	// whatever it was given when it cannot read it, so a bank export with an unrecognised format
+	// leaves raw text in there. Unchecked, that text becomes part of the request path — and a key in
+	// the saved rate table, which then never matches anything again.
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+		throw new Error(`"${date}" isn't a date I can ask for a rate on — expected YYYY-MM-DD.`);
+	}
 	const symbols = CURRENCIES.filter((c) => c !== "EUR").join(",");
-	const res = await requestUrl({ url: `${FRANKFURTER_BASE}/${date}?base=EUR&symbols=${symbols}` });
+	const res = await requestUrl({ url: `${FRANKFURTER_BASE}/${encodeURIComponent(date)}?base=EUR&symbols=${symbols}` });
 	const rates = res.json?.rates as Record<string, number> | undefined;
 	if (!rates) throw new Error(`Unexpected response from the exchange-rate API for ${date}.`);
 	return invertRates(rates);

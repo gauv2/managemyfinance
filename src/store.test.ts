@@ -439,3 +439,79 @@ describe("FinanceStore — collections", () => {
 		expect(store.fx).toEqual({ baseCurrency: "USD", rates: { USD: 0.9 } });
 	});
 });
+
+describe("FinanceStore — category-rule provenance", () => {
+	it("keeps the stamp when the rule engine sets the category and the stamp together", async () => {
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+
+		await store.updateTransactions(new Map([["a", { categoryId: "cat-food", categoryRuleId: "rule-1" }]]));
+
+		expect(store.transactions.find((t) => t.id === "a")?.categoryRuleId).toBe("rule-1");
+	});
+
+	it("drops the stamp when the category is later set by hand", async () => {
+		// A row you re-filed yourself is no longer the rule's doing, and a badge still claiming it is
+		// would be a lie told by the UI about work the user did.
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+		await store.updateTransactions(new Map([["a", { categoryId: "cat-food", categoryRuleId: "rule-1" }]]));
+
+		await store.updateTransaction("a", { categoryId: "cat-travel" });
+
+		const row = store.transactions.find((t) => t.id === "a");
+		expect(row?.categoryId).toBe("cat-travel");
+		expect(row?.categoryRuleId).toBeUndefined();
+	});
+
+	it("drops the stamp through editTransaction too", async () => {
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+		await store.updateTransactions(new Map([["a", { categoryId: "cat-food", categoryRuleId: "rule-1" }]]));
+
+		await store.editTransaction("a", { categoryId: "cat-travel" });
+
+		expect(store.transactions.find((t) => t.id === "a")?.categoryRuleId).toBeUndefined();
+	});
+
+	it("drops the stamp even when the category is re-set to the same value", async () => {
+		// The early-out in updateTransactions compares the whole patch, so this must not slip through
+		// as a no-op and leave the row still claiming a rule owns it.
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+		await store.updateTransactions(new Map([["a", { categoryId: "cat-food", categoryRuleId: "rule-1" }]]));
+
+		await store.updateTransactions(new Map([["a", { categoryId: "cat-food" }]]));
+
+		expect(store.transactions.find((t) => t.id === "a")?.categoryRuleId).toBeUndefined();
+	});
+
+	it("leaves the stamp alone on a patch that isn't about the category at all", async () => {
+		const { store } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+		await store.updateTransactions(new Map([["a", { categoryId: "cat-food", categoryRuleId: "rule-1" }]]));
+
+		await store.updateTransactions(new Map([["a", { review: "approved" as const }]]));
+
+		expect(store.transactions.find((t) => t.id === "a")?.categoryRuleId).toBe("rule-1");
+	});
+
+	it("round-trips the stamp through the ledger CSV", async () => {
+		// categoryRuleId was appended to TX_COLUMNS; if the column were missing the value would
+		// silently vanish on the next load and every badge with it.
+		const { store, app } = newStore();
+		await store.load();
+		await store.importTransactions([tx({ id: "a" })]);
+		await store.updateTransactions(new Map([["a", { categoryId: "cat-food", categoryRuleId: "rule-1" }]]));
+
+		const reloaded = new FinanceStore(app as never, { ...DEFAULT_SETTINGS, dataFolder: FOLDER });
+		await reloaded.load();
+
+		expect(reloaded.transactions.find((t) => t.id === "a")?.categoryRuleId).toBe("rule-1");
+	});
+});

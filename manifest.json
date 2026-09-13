@@ -1,7 +1,7 @@
 {
 	"id": "managemyfinance",
 	"name": "Manage My Finance",
-	"version": "1.2.11",
+	"version": "1.2.12",
 	"minAppVersion": "1.5.0",
 	"description": "A personal finance dashboard, ledger, budgeting, and import pipeline for Obsidian.",
 	"author": "Gaurav Mahadew",

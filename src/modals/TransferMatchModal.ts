@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import type FinancePlugin from "../main";
 import { formatMoney } from "../money";
 import { findTransferMatches, transferPatches, type TransferPair } from "../transfers";
@@ -12,7 +13,7 @@ import { icon } from "../ui/dom";
  * silently removes two real transactions from income and expenses, which is a hard error to ever
  * notice again. So it proposes, you confirm, and every pair shows enough to judge it on.
  */
-export class TransferMatchModal extends Modal {
+export class TransferMatchModal extends FinanceModal {
 	private pairs: TransferPair[] = [];
 	private rejected = new Set<string>();
 

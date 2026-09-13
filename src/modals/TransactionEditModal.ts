@@ -1,4 +1,5 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Notice } from "obsidian";
+import { FinanceModal } from "../ui/modalStaysOpen";
 import { categoryChain } from "../categories";
 import { CURRENCIES } from "../constants";
 import { stableHash } from "../hash";
@@ -18,7 +19,7 @@ import { formatMoneyRounded } from "../money";
  * someone to type "-12.50" for a coffee is asking them to remember an internal convention; the sign
  * is a fact about the transaction, so the form asks about the fact.
  */
-export class TransactionEditModal extends Modal {
+export class TransactionEditModal extends FinanceModal {
 	private amountField?: MoneyInputHandle;
 	private category: CategoryPickerValue;
 	private direction: "out" | "in";
@@ -360,7 +361,7 @@ export class TransactionEditModal extends Modal {
 }
 
 /** Deleting a ledger row is not recoverable from inside the app, so it asks first — every time. */
-export class ConfirmDeleteTransactionModal extends Modal {
+export class ConfirmDeleteTransactionModal extends FinanceModal {
 	constructor(app: App, private tx: Transaction, private onConfirm: () => Promise<void>) {
 		super(app);
 	}

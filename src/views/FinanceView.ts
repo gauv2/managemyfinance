@@ -1,7 +1,11 @@
-import { ItemView, Menu, Platform, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, Platform, WorkspaceLeaf } from "obsidian";
 import { ACCOUNT_TYPE_META, ACCOUNT_TYPE_ORDER, VIEW_TYPE_FINANCE } from "../constants";
 import type FinancePlugin from "../main";
+import { tracksBalance } from "../accounts";
+import { AccountStatsModal } from "../modals/AccountStatsModal";
+import { BalanceSnapshotModal } from "../modals/BalanceSnapshotModal";
 import { CreateAccountModal } from "../modals/CreateAccountModal";
+import { EditAccountModal } from "../modals/EditAccountModal";
 import { ManageAccountsModal } from "../modals/ManageAccountsModal";
 import { ManagePortfoliosModal } from "../modals/ManagePortfoliosModal";
 import type { FinanceViewId } from "../store";
@@ -13,6 +17,7 @@ import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { renderAccountPage } from "./sections/AccountPage";
 import { renderBudgetsSection } from "./sections/BudgetsSection";
 import { renderCardsSection } from "./sections/CardsSection";
+import { renderDebtsSection } from "./sections/DebtsSection";
 import { renderCategoriesSection } from "./sections/CategoriesSection";
 import { renderCompareSection } from "./sections/CompareSection";
 import { renderReportsSection } from "./sections/ReportsSection";
@@ -36,7 +41,7 @@ interface NavTabDef {
 	badgeCount?: number;
 }
 
-const DEFAULT_NAV_ORDER = ["all-accounts", "strategy", "budgets", "categories", "subscriptions", "cards", "review", "reports", "compare"];
+const DEFAULT_NAV_ORDER = ["all-accounts", "strategy", "budgets", "categories", "subscriptions", "debts", "cards", "review", "reports", "compare"];
 
 function possessive(name: string): string {
 	const trimmed = name.trim();
@@ -358,6 +363,13 @@ export class FinanceView extends ItemView {
 				isActive: activeView === "subscriptions",
 				onClick: () => void this.selectView("subscriptions"),
 			},
+			debts: {
+				id: "debts",
+				label: "Debts",
+				icon: "handshake",
+				isActive: activeView === "debts",
+				onClick: () => void this.selectView("debts"),
+			},
 			cards: {
 				id: "cards",
 				label: "Cards",
@@ -401,41 +413,191 @@ export class FinanceView extends ItemView {
 		const accounts = this.accountOrder()
 			.map((id) => accountById.get(id))
 			.filter((a): a is Account => !!a);
-		if (accounts.length > 0) {
-			this.navItemsEl.createDiv({ cls: "fp-nav-section-label", text: "Accounts" });
-		}
-		accounts.forEach((acc) => {
+		// A closed account keeps all of its history and its place in the order — it just stops competing
+		// for attention with the accounts you actually use.
+		//
+		// Including the one you happen to be looking at. Keeping the active account in the open group
+		// was meant to stop it vanishing under you; what it actually did was make "Mark as closed" look
+		// broken, because the account you had just closed stayed exactly where it was. The group
+		// auto-opens when the active account is inside it, which keeps it in view without pretending it
+		// is still open.
+		const open = accounts.filter((a) => !a.archived);
+		const closed = accounts.filter((a) => a.archived);
+		const activeIsClosed = closed.some((a) => a.id === activeAccountId);
+		// `??`, not `||`: viewing a closed account only decides the *default*. Forcing it open whenever
+		// one was selected meant the group could never be collapsed while you were looking at it, and
+		// the chevron sat there doing nothing — a control that ignores clicks reads as broken, which is
+		// worse than the disorientation it was guarding against.
+		const closedExpanded = this.plugin.settings.closedAccountsExpanded ?? activeIsClosed;
+
+		const renderAccount = (acc: Account): void => {
 			const item = this.navItemsEl.createDiv({
-				cls: "fp-nav-item fp-nav-item-draggable" + (!activeView && activeAccountId === acc.id ? " is-active" : ""),
+				cls:
+					"fp-nav-item fp-nav-item-draggable" +
+					(!activeView && activeAccountId === acc.id ? " is-active" : "") +
+					(acc.archived ? " is-archived" : ""),
 				attr: { draggable: "true" },
 			});
 			icon(item, ACCOUNT_TYPE_META[acc.type].icon, "fp-nav-icon");
 			const textCol = item.createDiv({ cls: "fp-nav-item-text" });
 			textCol.createDiv({ cls: "fp-nav-label", text: acc.name });
-			textCol.createDiv({ cls: "fp-nav-item-type", text: ACCOUNT_TYPE_META[acc.type].label });
+			// Both facts belong on this line: "closed" is about whether you still use it, "no balance" is
+			// about whether its number means anything, and an account can easily be one without the other.
+			const marks = [acc.archived ? "Closed" : "", tracksBalance(acc) ? "" : "No balance"].filter(Boolean);
+			const typeLabel = [ACCOUNT_TYPE_META[acc.type].label, ...marks].join(" · ");
+			textCol.createDiv({ cls: "fp-nav-item-type", text: typeLabel });
+			// The account number is what actually tells two same-type accounts apart, so it gets its own
+			// line rather than being squeezed onto the type row. `fp-sensitive` puts it behind the same
+			// privacy toggle every other identifying figure sits behind, and the full value is on hover
+			// since the sidebar will always be too narrow for a full IBAN.
+			if (acc.iban) {
+				const ibanEl = textCol.createDiv({ cls: "fp-nav-item-iban fp-sensitive", text: acc.iban });
+				ibanEl.setAttribute("title", acc.iban);
+			}
 			icon(item, "grip-vertical", "fp-nav-drag-handle");
 			item.addEventListener("click", () => void this.selectAccount(acc.id));
+			item.addEventListener("contextmenu", (ev) => {
+				ev.preventDefault();
+				this.openAccountMenu(ev, acc);
+			});
 			this.wireDrag(item, acc.id, (draggedId, targetId) => void this.reorderAccounts(draggedId, targetId));
-		});
+		};
 
-		this.navItemsEl.createDiv({ cls: "fp-nav-divider" });
+		// The header carries the two actions that used to be full-width rows of their own. Adding and
+		// managing accounts are things you do once and then rarely, and they were costing as much
+		// vertical space as a real account each — in the one list where the accounts are the point.
+		const header = this.navItemsEl.createDiv({ cls: "fp-nav-section-header" });
+		header.createSpan({ cls: "fp-nav-section-label", text: "Accounts" });
+		const headerActions = header.createDiv({ cls: "fp-nav-section-actions" });
 
-		const addItem = this.navItemsEl.createDiv({ cls: "fp-nav-item fp-nav-item-ghost" });
-		icon(addItem, "plus", "fp-nav-icon");
-		addItem.createSpan({ cls: "fp-nav-label", text: "Add account" });
-		addItem.addEventListener("click", () => {
+		const addBtn = headerActions.createEl("button", { cls: "fp-nav-section-btn" });
+		icon(addBtn, "plus");
+		addBtn.setAttribute("aria-label", "Add account");
+		addBtn.setAttribute("title", "Add an account");
+		addBtn.addEventListener("click", () => {
 			new CreateAccountModal(this.app, this.plugin, (account) => void this.selectAccount(account.id)).open();
 		});
 
-		const manageItem = this.navItemsEl.createDiv({ cls: "fp-nav-item fp-nav-item-ghost" });
-		icon(manageItem, "settings", "fp-nav-icon");
-		manageItem.createSpan({ cls: "fp-nav-label", text: "Manage accounts…" });
-		manageItem.addEventListener("click", () => {
-			new ManageAccountsModal(this.app, this.plugin, () => {
+		const statsBtn = headerActions.createEl("button", { cls: "fp-nav-section-btn" });
+		icon(statsBtn, "bar-chart-3");
+		statsBtn.setAttribute("aria-label", "Data coverage");
+		statsBtn.setAttribute("title", "What each account holds\u2026");
+		statsBtn.addEventListener("click", () => new AccountStatsModal(this.app, this.plugin).open());
+
+		const manageBtn = headerActions.createEl("button", { cls: "fp-nav-section-btn" });
+		icon(manageBtn, "settings-2");
+		manageBtn.setAttribute("aria-label", "Manage accounts");
+		manageBtn.setAttribute("title", "Manage accounts\u2026");
+		manageBtn.addEventListener("click", () => this.openManageAccounts());
+
+		open.forEach(renderAccount);
+
+		if (closed.length > 0) {
+			const closedHeader = this.navItemsEl.createDiv({
+				cls: "fp-nav-section-header fp-nav-closed-header" + (closedExpanded ? " is-expanded" : ""),
+			});
+			// A div, not a button: a theme that styles `button` at all beats a plain class selector, and
+			// this one came out as a grey pill with centred text sitting where a quiet section label
+			// belongs. Nothing here needs to be a button except the click, which a role and a tabindex
+			// give it without inheriting a single visual opinion.
+			const toggle = closedHeader.createDiv({
+				cls: "fp-nav-closed-toggle",
+				attr: { role: "button", tabindex: "0" },
+			});
+			// Label first, chevron at the far right: it puts "Closed" on the exact left edge as "Accounts"
+			// instead of 15px in, and it mirrors the Accounts row, whose controls sit on the right too.
+			toggle.createSpan({ cls: "fp-nav-section-label", text: `Closed (${closed.length})` });
+			icon(toggle, "chevron-right", "fp-nav-closed-chevron");
+			toggle.setAttribute("aria-expanded", String(closedExpanded));
+			// Collapsing while viewing a closed account is allowed: the page you are on does not change,
+			// the row just stops being listed, and expanding brings it straight back.
+			if (activeIsClosed && closedExpanded) {
+				toggle.setAttribute("title", "Open because you're viewing a closed account — collapse to hide it");
+			}
+			const flip = (): void => {
+				this.plugin.settings.closedAccountsExpanded = !closedExpanded;
+				void this.plugin.saveSettings();
 				this.renderNav();
-				this.renderBody();
-			}).open();
-		});
+			};
+			toggle.addEventListener("click", flip);
+			toggle.addEventListener("keydown", (ev) => {
+				if (ev.key === "Enter" || ev.key === " ") {
+					ev.preventDefault();
+					flip();
+				}
+			});
+			if (closedExpanded) closed.forEach(renderAccount);
+		}
+	}
+
+	private openManageAccounts(): void {
+		new ManageAccountsModal(this.app, this.plugin, () => {
+			this.renderNav();
+			this.renderBody();
+		}).open();
+	}
+
+	/**
+	 * Per-account actions, on the account itself.
+	 *
+	 * Everything here is reversible. Deleting an account stays in "Manage accounts…", where it takes a
+	 * deliberate trip to reach: it removes the account without touching the transactions filed against
+	 * it, so putting it one right-click from the sidebar would make an orphaning edit far too easy to
+	 * hit by accident.
+	 */
+	private openAccountMenu(ev: MouseEvent, account: Account): void {
+		const menu = new Menu();
+		menu.addItem((item) =>
+			item
+				.setTitle("Edit account\u2026")
+				.setIcon("pencil")
+				.onClick(() => {
+					new EditAccountModal(this.app, this.plugin, account, () => {
+						this.renderNav();
+						this.renderBody();
+					}).open();
+				})
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Record balance\u2026")
+				.setIcon("scale")
+				.onClick(() => {
+					new BalanceSnapshotModal(this.app, this.plugin, {
+						accountId: account.id,
+						onSaved: () => {
+							this.renderNav();
+							this.renderBody();
+						},
+					}).open();
+				})
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle(account.archived ? "Reopen account" : "Mark as closed")
+				.setIcon(account.archived ? "rotate-ccw" : "archive")
+				.onClick(() => void this.toggleAccountArchived(account.id))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Account stats\u2026")
+				.setIcon("bar-chart-3")
+				.onClick(() => new AccountStatsModal(this.app, this.plugin, account.id).open())
+		);
+		menu.addSeparator();
+		menu.addItem((item) => item.setTitle("Manage accounts\u2026").setIcon("settings-2").onClick(() => this.openManageAccounts()));
+		menu.showAtMouseEvent(ev);
+	}
+
+	/** Presentation only — see `Account.archived`. No figure moves either way. */
+	private async toggleAccountArchived(accountId: string): Promise<void> {
+		const account = this.plugin.store.accounts.find((a) => a.id === accountId);
+		if (!account) return;
+		account.archived = account.archived ? undefined : true;
+		await this.plugin.store.saveAccounts();
+		new Notice(account.archived ? `"${account.name}" marked as closed.` : `"${account.name}" reopened.`);
+		this.renderNav();
+		this.renderBody();
 	}
 
 	/** Pinned below the scrollable nav list: a "set a budget" nudge (shown until at least one category
@@ -559,6 +721,9 @@ export class FinanceView extends ItemView {
 				break;
 			case "subscriptions":
 				renderSubscriptionsSection(this.bodyEl, this.plugin);
+				break;
+			case "debts":
+				renderDebtsSection(this.bodyEl, this.plugin);
 				break;
 			case "cards":
 				renderCardsSection(this.bodyEl, this.plugin);

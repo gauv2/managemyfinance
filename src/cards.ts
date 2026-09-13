@@ -149,9 +149,18 @@ export function cardExpiryDate(card: Pick<Card, "expiryMonth" | "expiryYear">): 
 	return new Date(card.expiryYear, card.expiryMonth, 0);
 }
 
+/**
+ * A card is expired only once its printed month has fully passed.
+ *
+ * Compared per calendar month, not per instant: `cardExpiryDate` returns *midnight* on the last day
+ * of the month, so a `Date.now()` comparison declared a card expired for the whole of its final day —
+ * a card printed 08/26 read as dead from 00:00 on 31 August, while it is in fact still good.
+ */
 export function cardIsExpired(card: Pick<Card, "expiryMonth" | "expiryYear">): boolean {
-	const d = cardExpiryDate(card);
-	return d !== undefined && d.getTime() < Date.now();
+	if (!card.expiryMonth || !card.expiryYear) return false;
+	const now = new Date();
+	// `expiryMonth` is 1-based as printed on the card; `getMonth()` is 0-based.
+	return card.expiryYear * 12 + (card.expiryMonth - 1) < now.getFullYear() * 12 + now.getMonth();
 }
 
 /** Whole calendar months from now to `date`, rounded down — 0 means "this month". */

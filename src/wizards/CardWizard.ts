@@ -1,4 +1,5 @@
 import { Notice } from "obsidian";
+import { activeAccounts } from "../accounts";
 import { CARD_NETWORK_LABEL, CARD_NETWORKS, CARD_TYPE_LABEL, CARD_TYPES } from "../cards";
 import type FinancePlugin from "../main";
 import type { Card, CardNetwork, CardType } from "../types";
@@ -68,7 +69,7 @@ export function openCardWizard(
 				const accountField = formSelectField(
 					grid,
 					"Linked account",
-					store.accounts.map((a) => ({ value: a.id, label: a.name }))
+					activeAccounts(store.accounts, accountId).map((a) => ({ value: a.id, label: a.name }))
 				);
 				accountField.select.value = accountId;
 				accountField.select.addEventListener("change", () => {
