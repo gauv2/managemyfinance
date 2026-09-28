@@ -17,6 +17,7 @@ import { openCreatePortfolioWizard } from "../wizards/PortfolioWizard";
 import { renderAccountPage } from "./sections/AccountPage";
 import { renderBudgetsSection } from "./sections/BudgetsSection";
 import { renderCardsSection } from "./sections/CardsSection";
+import { renderCashFlowSection } from "./sections/CashFlowSection";
 import { renderDebtsSection } from "./sections/DebtsSection";
 import { renderCategoriesSection } from "./sections/CategoriesSection";
 import { renderCompareSection } from "./sections/CompareSection";
@@ -41,7 +42,7 @@ interface NavTabDef {
 	badgeCount?: number;
 }
 
-const DEFAULT_NAV_ORDER = ["all-accounts", "strategy", "budgets", "categories", "subscriptions", "debts", "cards", "review", "reports", "compare"];
+const DEFAULT_NAV_ORDER = ["all-accounts", "cashflow", "strategy", "budgets", "categories", "subscriptions", "debts", "cards", "review", "reports", "compare"];
 
 function possessive(name: string): string {
 	const trimmed = name.trim();
@@ -341,6 +342,13 @@ export class FinanceView extends ItemView {
 				icon: "layers",
 				isActive: !activeAccountId && !activeView,
 				onClick: () => void this.selectAccount(undefined),
+			},
+			cashflow: {
+				id: "cashflow",
+				label: "Cash flow",
+				icon: "arrow-down-up",
+				isActive: activeView === "cashflow",
+				onClick: () => void this.selectView("cashflow"),
 			},
 			strategy: {
 				id: "strategy",
@@ -713,6 +721,9 @@ export class FinanceView extends ItemView {
 	private renderBody(): void {
 		this.bodyEl.empty();
 		switch (this.plugin.settings.activeView) {
+			case "cashflow":
+				renderCashFlowSection(this.bodyEl, this.plugin);
+				break;
 			case "strategy":
 				renderStrategySection(this.bodyEl, this.plugin);
 				break;

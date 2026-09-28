@@ -8139,3 +8139,193 @@
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
 }
+
+/* ==========================================================================
+   Cash flow — "where the money went" Sankey / profit & loss, and the two
+   breakdown cards under it.
+   ========================================================================== */
+
+.fp-cashflow-head {
+	flex-wrap: wrap;
+}
+.fp-cashflow-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.fp-cashflow-summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 28px;
+	margin-bottom: 16px;
+}
+.fp-cashflow-stat-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-cashflow-stat-value {
+	font-size: var(--font-ui-large);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+.fp-cashflow-stat.is-good .fp-cashflow-stat-value {
+	color: var(--fp-good);
+}
+.fp-cashflow-stat.is-bad .fp-cashflow-stat-value {
+	color: var(--fp-bad);
+}
+
+/* The chart keeps a readable minimum width and scrolls sideways on a narrow pane rather than
+   shrinking its labels to nothing. */
+.fp-sankey-wrap {
+	overflow-x: auto;
+}
+.fp-sankey {
+	display: block;
+	height: auto;
+}
+.fp-sankey-link {
+	fill-opacity: 0.28;
+	transition: fill-opacity 0.12s ease;
+}
+.fp-sankey-link:hover,
+.fp-sankey-link.is-lit {
+	fill-opacity: 0.55;
+}
+.fp-sankey.is-focused .fp-sankey-link:not(.is-lit) {
+	fill-opacity: 0.1;
+}
+.fp-sankey-node {
+	cursor: default;
+}
+.fp-sankey-label {
+	font-size: 12px;
+	font-weight: 600;
+	fill: var(--text-normal);
+	paint-order: stroke;
+	stroke: var(--background-primary-alt, var(--background-secondary));
+	stroke-width: 3px;
+	stroke-linejoin: round;
+}
+.fp-sankey-value {
+	font-size: 11px;
+	fill: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	paint-order: stroke;
+	stroke: var(--background-primary-alt, var(--background-secondary));
+	stroke-width: 3px;
+	stroke-linejoin: round;
+}
+
+/* Profit & loss */
+.fp-pnl {
+	width: 100%;
+}
+.fp-pnl-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.fp-pnl-chevron,
+.fp-pnl-chevron-spacer {
+	width: 14px;
+	flex: none;
+	color: var(--text-faint);
+}
+.fp-pnl-chevron svg {
+	width: 14px;
+	height: 14px;
+}
+.fp-pnl-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 2px;
+	flex: none;
+}
+.fp-pnl tr.is-expandable {
+	cursor: pointer;
+}
+.fp-pnl-section td {
+	font-weight: 700;
+	background: var(--background-secondary);
+}
+.fp-pnl-child .fp-pnl-name {
+	padding-left: 22px;
+}
+.fp-pnl-grandchild .fp-pnl-name {
+	padding-left: 44px;
+	color: var(--text-muted);
+}
+.fp-pnl-share {
+	color: var(--text-muted);
+}
+.fp-pnl-total td {
+	font-weight: 700;
+	border-top: 2px solid var(--background-modifier-border);
+}
+.fp-pnl-total.is-good td:last-child {
+	color: var(--fp-good);
+}
+.fp-pnl-total.is-bad td:last-child {
+	color: var(--fp-bad);
+}
+
+/* Breakdown cards */
+.fp-cashflow-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+	align-items: start;
+	gap: 20px;
+}
+.fp-cashflow-grid > .fp-card {
+	margin-bottom: 0;
+	min-width: 0;
+}
+.fp-cashflow-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.fp-cashflow-row.is-clickable {
+	cursor: pointer;
+}
+.fp-cashflow-row.is-clickable:hover .fp-cashflow-row-name {
+	color: var(--text-accent);
+}
+.fp-cashflow-row-top {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: var(--font-ui-small);
+}
+.fp-cashflow-row-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-cashflow-row-amount {
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+.fp-cashflow-row-share {
+	width: 48px;
+	text-align: right;
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+}
+.fp-cashflow-bar {
+	margin-top: 5px;
+	height: 5px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+}
+.fp-cashflow-bar-fill {
+	height: 100%;
+	border-radius: 999px;
+}
+.fp-mobile .fp-cashflow-grid {
+	grid-template-columns: 1fr;
+}

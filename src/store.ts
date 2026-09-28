@@ -27,6 +27,7 @@ import type {
 
 /** The workspace pages that aren't scoped to a single account. */
 export type FinanceViewId =
+	| "cashflow"
 	| "budgets"
 	| "categories"
 	| "subscriptions"
