@@ -22,6 +22,8 @@ import { DEFAULT_SETTINGS, FinanceSettings, FinanceStore } from "./store";
 import type { Portfolio, Transaction } from "./types";
 import { FinanceView } from "./views/FinanceView";
 import { openImportWizard } from "./wizards/ImportWizard";
+import { privacyPin, revealNeedsPin } from "./censor";
+import { PinPadModal } from "./modals/PinPadModal";
 
 function sanitizeFolderName(name: string): string {
 	return name.trim().replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim() || "Portfolio";
@@ -314,6 +316,15 @@ export default class FinancePlugin extends Plugin {
 		this.refreshViews();
 	}
 
+	/** Switches the workspace to one account's page — what clicking it in the sidebar does. */
+	async openAccount(accountId: string): Promise<void> {
+		this.settings.activeAccountId = accountId;
+		this.settings.activeView = undefined;
+		await this.saveSettings();
+		await this.activateView();
+		this.refreshViews();
+	}
+
 	openTransactionEditor(defaultAccountId?: string): void {
 		new TransactionEditModal(this.app, this, { defaultAccountId }).open();
 	}
@@ -332,9 +343,23 @@ export default class FinancePlugin extends Plugin {
 
 	/** Flips privacy mode (the eye button) and repaints everything showing an amount. */
 	async togglePrivacyMode(): Promise<void> {
-		this.settings.privacyMode = !this.settings.privacyMode;
-		await this.saveSettings();
-		this.refreshViews();
+		await this.setPrivacyMode(!this.settings.privacyMode);
+	}
+
+	/**
+	 * Hiding is always immediate; showing again goes through Censor mode's PIN pad when a PIN is set
+	 * (1234 unless changed). `onDone` runs only once the change has actually happened, so a caller
+	 * can redraw its own toggle without guessing whether the PIN was entered or cancelled.
+	 */
+	async setPrivacyMode(on: boolean, onDone?: () => void): Promise<void> {
+		const apply = async (): Promise<void> => {
+			this.settings.privacyMode = on;
+			await this.saveSettings();
+			this.refreshViews();
+			onDone?.();
+		};
+		if (on || !this.settings.privacyMode || !revealNeedsPin(this.settings)) return apply();
+		new PinPadModal(this.app, privacyPin(this.settings), () => void apply()).open();
 	}
 
 	/**

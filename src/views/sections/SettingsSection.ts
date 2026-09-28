@@ -1,5 +1,7 @@
 import { Notice, Platform } from "obsidian";
+import { isValidPin, PIN_LENGTH, privacyPin, revealNeedsPin } from "../../censor";
 import type FinancePlugin from "../../main";
+import { PinPadModal } from "../../modals/PinPadModal";
 import { formatMoney, NUMBER_FORMAT_LABEL, setNumberFormatPreference, type NumberFormatPreference } from "../../money";
 import { icon } from "../../ui/dom";
 
@@ -137,12 +139,50 @@ export function renderSettingsSection(container: HTMLElement, plugin: FinancePlu
 		const privacyControl = settingRow(
 			appearance,
 			"Hide amounts",
-			"Blurs every amount, IBAN and card number until you hover it. For working with the vault open, screen-sharing, or demoing the plugin."
+			"Blurs every amount, IBAN and card number. For working with the vault open, screen-sharing, or demoing the plugin. Hiding is instant; showing them again asks for the censor PIN below."
 		);
-		toggle(privacyControl, !!settings.privacyMode, (next) => {
-			settings.privacyMode = next;
-			void save();
+		toggle(privacyControl, !!settings.privacyMode, (next) => void plugin.setPrivacyMode(next));
+
+		const pinSet = revealNeedsPin(settings);
+		const pinControl = settingRow(
+			appearance,
+			"Censor PIN",
+			pinSet
+				? `Four digits asked for before amounts are shown again${settings.privacyPin === undefined ? " — still the default, 1234" : ""}. It keeps a passer-by from clicking the eye; it isn't encryption, and anyone with the vault can read the ledger itself.`
+				: "Off — the eye button shows amounts again straight away. Set four digits to ask for them first."
+		);
+		const pinInput = pinControl.createEl("input", {
+			cls: "fp-pin-input",
+			attr: { type: "password", inputmode: "numeric", maxlength: String(PIN_LENGTH), placeholder: "New PIN", autocomplete: "off" },
 		});
+		const pinSave = pinControl.createEl("button", { cls: "fp-btn fp-btn-secondary", text: "Set PIN" });
+		// Changing or removing the PIN while amounts are hidden would be a way round it, so that asks
+		// for the current one first.
+		const withCurrentPin = (run: () => void): void => {
+			if (settings.privacyMode && pinSet) new PinPadModal(plugin.app, privacyPin(settings), run, "Enter current PIN").open();
+			else run();
+		};
+		pinSave.addEventListener("click", () => {
+			const next = pinInput.value.trim();
+			if (!isValidPin(next)) {
+				new Notice(`The PIN has to be exactly ${PIN_LENGTH} digits.`);
+				return;
+			}
+			withCurrentPin(() => {
+				settings.privacyPin = next;
+				new Notice("Censor PIN updated.");
+				void save();
+			});
+		});
+		if (pinSet) {
+			const pinOff = pinControl.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "Turn off" });
+			pinOff.addEventListener("click", () =>
+				withCurrentPin(() => {
+					settings.privacyPin = "";
+					void save();
+				})
+			);
+		}
 
 		const layoutControl = settingRow(
 			appearance,

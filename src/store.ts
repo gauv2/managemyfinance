@@ -28,6 +28,7 @@ import type {
 /** The workspace pages that aren't scoped to a single account. */
 export type FinanceViewId =
 	| "cashflow"
+	| "networth"
 	| "budgets"
 	| "categories"
 	| "subscriptions"
@@ -60,6 +61,9 @@ export interface FinanceSettings {
 	closedAccountsExpanded?: boolean;
 	/** Blurs every displayed amount (hover to reveal) — for demoing the plugin without exposing real numbers. */
 	privacyMode?: boolean;
+	/** Censor mode's four-digit PIN for showing amounts again. Unset means the default (1234); an empty
+	 *  string turns the prompt off. See censor.ts for what this does and doesn't protect. */
+	privacyPin?: string;
 	/** Every portfolio the vault knows about — each is a fully separate set of accounts/transactions/subscriptions. */
 	portfolios?: Portfolio[];
 	activePortfolioId?: string;

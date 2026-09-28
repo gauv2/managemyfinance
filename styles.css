@@ -7,6 +7,7 @@
 .fp-workspace,
 .fp-settings,
 .fp-wizard-modal,
+.fp-pin-modal,
 .fp-celebrate {
 	--fp-good: #22c55e;
 	--fp-good-bg: rgba(34, 197, 94, 0.12);
@@ -8328,4 +8329,543 @@
 }
 .fp-mobile .fp-cashflow-grid {
 	grid-template-columns: 1fr;
+}
+
+/* ==========================================================================
+   Censor mode — the PIN pad that stands between privacy mode and the amounts.
+   ========================================================================== */
+
+.fp-pin-modal {
+	width: 300px;
+	max-width: calc(100vw - 32px);
+	padding: 22px 24px 16px;
+	border-radius: 18px;
+	border: 1px solid color-mix(in srgb, var(--fp-good) 45%, var(--background-modifier-border));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fp-good) 12%, transparent), 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+/* Cancel is the way out; Obsidian's own close control (named differently across versions) would be a
+   second one sitting on top of the dots. */
+.fp-pin-modal .modal-close-button,
+.fp-pin-modal .modal-header-button,
+.fp-pin-modal .modal-header {
+	display: none;
+}
+.fp-pin-modal.is-wrong {
+	animation: fp-pin-shake 0.35s ease;
+}
+@keyframes fp-pin-shake {
+	0%, 100% { transform: translateX(0); }
+	20% { transform: translateX(-8px); }
+	40% { transform: translateX(8px); }
+	60% { transform: translateX(-5px); }
+	80% { transform: translateX(5px); }
+}
+.fp-pin-title {
+	text-align: center;
+	color: var(--text-muted);
+	font-size: var(--font-ui-medium);
+}
+.fp-pin-dots {
+	display: flex;
+	justify-content: center;
+	gap: 14px;
+	margin: 12px 0 18px;
+}
+.fp-pin-dot {
+	width: 13px;
+	height: 13px;
+	border-radius: 50%;
+	border: 1.5px solid var(--text-muted);
+	transition: background 0.1s ease, border-color 0.1s ease;
+}
+.fp-pin-dot.is-filled {
+	background: var(--fp-good);
+	border-color: var(--fp-good);
+}
+.fp-pin-modal.is-wrong .fp-pin-dot.is-filled {
+	background: var(--fp-bad);
+	border-color: var(--fp-bad);
+}
+.fp-pin-pad {
+	display: grid;
+	grid-template-columns: repeat(3, 64px);
+	justify-content: center;
+	gap: 12px 16px;
+}
+.fp-pin-key {
+	width: 64px;
+	height: 64px;
+	border-radius: 50%;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	font-size: 22px;
+	box-shadow: none;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.fp-pin-key:hover {
+	background: var(--background-modifier-hover);
+}
+.fp-pin-key:active {
+	background: var(--fp-good-bg);
+	border-color: var(--fp-good);
+}
+.fp-pin-key-fn {
+	font-size: 17px;
+}
+.fp-pin-key svg {
+	width: 22px;
+	height: 22px;
+}
+.fp-pin-cancel {
+	display: block;
+	margin: 14px auto 0;
+	background: none;
+	border: none;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.fp-pin-cancel:hover {
+	color: var(--text-normal);
+}
+.fp-pin-input {
+	width: 96px;
+	letter-spacing: 0.3em;
+	text-align: center;
+}
+
+/* ==========================================================================
+   Area chart — a line over time without per-point dots (net worth, balances).
+   ========================================================================== */
+
+.fp-area-chart {
+	position: relative;
+}
+.fp-area-svg {
+	display: block;
+	overflow: visible;
+}
+.fp-area-line {
+	fill: none;
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+.fp-area-cross {
+	stroke: var(--text-faint);
+	stroke-dasharray: 3 3;
+	pointer-events: none;
+}
+.fp-area-today {
+	stroke: var(--text-accent);
+	stroke-dasharray: 3 4;
+}
+.fp-area-today-label {
+	font-size: 10px;
+	fill: var(--text-accent);
+}
+.fp-area-marker {
+	stroke-width: 2;
+	fill: var(--background-primary);
+}
+.fp-area-marker.is-good {
+	stroke: var(--fp-good);
+}
+.fp-area-marker.is-bad {
+	stroke: var(--fp-bad);
+}
+.fp-area-marker-stem {
+	stroke-width: 1;
+}
+.fp-area-marker-stem.is-good {
+	stroke: var(--fp-good);
+}
+.fp-area-marker-stem.is-bad {
+	stroke: var(--fp-bad);
+}
+.fp-area-marker-label {
+	font-size: 11px;
+	font-weight: 700;
+}
+.fp-area-marker-label.is-good {
+	fill: var(--fp-good);
+}
+.fp-area-marker-label.is-bad {
+	fill: var(--fp-bad);
+}
+
+/* ==========================================================================
+   Net worth
+   ========================================================================== */
+
+.fp-worth-hero {
+	margin-bottom: 20px;
+}
+.fp-worth-hero-top {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+.fp-worth-total-line {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 14px;
+}
+.fp-worth-total {
+	font-size: 2.6em;
+	font-weight: 800;
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.1;
+}
+.fp-worth-delta {
+	padding: 4px 12px;
+	border-radius: 999px;
+	font-weight: 700;
+	font-size: var(--font-ui-small);
+	font-variant-numeric: tabular-nums;
+}
+.fp-worth-delta.is-good {
+	color: var(--fp-good);
+	background: var(--fp-good-bg);
+}
+.fp-worth-delta.is-bad {
+	color: var(--fp-bad);
+	background: var(--fp-bad-bg);
+}
+.fp-worth-delta-note {
+	font-weight: 500;
+	color: var(--text-muted);
+}
+.fp-worth-ranges {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.fp-worth-range {
+	min-width: 44px;
+	padding: 6px 10px;
+	border-radius: var(--fp-radius-md);
+	border: none;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-weight: 600;
+	box-shadow: none;
+	cursor: pointer;
+}
+.fp-worth-range:hover {
+	color: var(--text-normal);
+}
+.fp-worth-range.is-active {
+	background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+	color: var(--text-normal);
+}
+.fp-worth-bar {
+	display: flex;
+	gap: 3px;
+	height: 10px;
+	margin-top: 16px;
+	border-radius: 999px;
+	overflow: hidden;
+}
+.fp-worth-bar-seg {
+	min-width: 4px;
+}
+.fp-worth-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 22px;
+	margin-top: 10px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+.fp-worth-legend-item {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+}
+.fp-worth-legend-value {
+	color: var(--text-normal);
+	font-weight: 700;
+}
+.fp-worth-groups {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+	gap: 20px;
+	align-items: start;
+}
+.fp-worth-group {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.fp-worth-group-label {
+	margin-bottom: 2px;
+}
+.fp-worth-account {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--fp-radius-lg);
+	background: var(--background-primary-alt, var(--background-secondary));
+	cursor: pointer;
+	transition: border-color 0.12s ease;
+}
+.fp-worth-account:hover,
+.fp-worth-account:focus-visible {
+	border-color: var(--interactive-accent);
+}
+.fp-worth-avatar {
+	width: 38px;
+	height: 38px;
+	flex: none;
+	border-radius: 10px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	font-weight: 800;
+	font-size: 16px;
+}
+.fp-worth-account-text {
+	flex: 1;
+	min-width: 0;
+}
+.fp-worth-account-name {
+	font-weight: 700;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-worth-account-sub {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-worth-account-nums {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+.fp-worth-account-value {
+	font-weight: 700;
+}
+.fp-worth-account-delta {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.fp-worth-account-delta.is-good {
+	color: var(--fp-good);
+}
+.fp-worth-account-delta.is-bad {
+	color: var(--fp-bad);
+}
+
+/* ==========================================================================
+   Cash flow — the month: bills timeline, "where it went" donut, card balance.
+   ========================================================================== */
+
+.fp-cashflow-month-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 28px 0 14px;
+}
+.fp-cashflow-month-nav {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.fp-cashflow-month-nav h3 {
+	margin: 0;
+	min-width: 150px;
+	text-align: center;
+}
+.fp-cashflow-month-btn {
+	padding: 4px 6px;
+}
+.fp-cashflow-month-head + .fp-bills-card,
+.fp-cashflow-grid + .fp-cashflow-month-head {
+	margin-top: 20px;
+}
+
+.fp-bills-wrap {
+	overflow-x: auto;
+}
+.fp-bills-svg {
+	display: block;
+	height: auto;
+	overflow: visible;
+}
+.fp-bills-grid {
+	stroke: var(--fp-chart-grid);
+	stroke-width: 1;
+}
+.fp-bills-axis {
+	stroke: var(--fp-chart-baseline);
+	stroke-width: 1.5;
+}
+.fp-bills-today {
+	stroke: var(--text-accent);
+	stroke-width: 1.5;
+}
+.fp-bills-today-label {
+	font-size: 11px;
+	font-weight: 600;
+	fill: var(--text-accent);
+}
+.fp-bills-income circle {
+	fill: none;
+	stroke: var(--fp-good);
+	stroke-width: 2;
+}
+.fp-bills-income.is-paid circle {
+	fill: var(--fp-good);
+}
+.fp-bills-income-label {
+	font-size: 11px;
+	font-weight: 600;
+	fill: var(--fp-good);
+}
+.fp-bills-stem {
+	stroke: var(--fp-pin-color);
+	stroke-width: 2;
+	stroke-opacity: 0.55;
+}
+.fp-bills-bubble {
+	fill: var(--background-primary);
+	stroke: var(--fp-pin-color);
+	stroke-width: 2.5;
+}
+.fp-bills-pin.is-expected .fp-bills-bubble {
+	stroke-dasharray: 4 3;
+}
+.fp-bills-pin.is-expected {
+	opacity: 0.75;
+}
+.fp-bills-initial {
+	font-size: 14px;
+	font-weight: 800;
+	fill: var(--text-normal);
+}
+.fp-bills-amount {
+	font-size: 12px;
+	font-weight: 700;
+	fill: var(--text-normal);
+	paint-order: stroke;
+	stroke: var(--background-primary-alt, var(--background-secondary));
+	stroke-width: 3px;
+	stroke-linejoin: round;
+}
+.fp-bills-pin:hover {
+	opacity: 1;
+}
+.fp-bills-pin:hover .fp-bills-bubble {
+	stroke-width: 3.5;
+}
+.fp-bills-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 12px;
+}
+.fp-bills-chip {
+	display: inline-flex;
+	gap: 6px;
+	padding: 5px 12px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+}
+.fp-bills-chip-name {
+	font-weight: 600;
+}
+.fp-bills-chip-amount {
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.fp-donut-body {
+	display: flex;
+	align-items: center;
+	gap: 22px;
+	flex-wrap: wrap;
+}
+.fp-donut-wrap {
+	flex: none;
+}
+.fp-donut-arc {
+	transition: stroke-width 0.12s ease;
+}
+.fp-donut-arc:hover {
+	stroke-width: 34;
+}
+.fp-donut-pct {
+	font-size: 10px;
+	font-weight: 700;
+	fill: #fff;
+	pointer-events: none;
+}
+.fp-donut-center-label {
+	font-size: 11px;
+	fill: var(--text-muted);
+}
+.fp-donut-center {
+	font-size: 16px;
+	font-weight: 800;
+	fill: var(--text-normal);
+}
+.fp-donut-legend {
+	flex: 1;
+	min-width: 160px;
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+}
+.fp-donut-legend-row {
+	display: grid;
+	grid-template-columns: 10px minmax(0, 1fr) 40%;
+	align-items: center;
+	gap: 8px;
+	font-size: var(--font-ui-small);
+}
+.fp-donut-legend-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.fp-donut-legend-bar {
+	height: 6px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+}
+
+.fp-cardbal-card .fp-card-head-row {
+	flex-wrap: wrap;
+}
+.fp-cardbal-summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+.fp-cardbal-value {
+	font-weight: 700;
+	color: var(--text-normal);
+}
+.fp-cardbal-value.is-good {
+	color: var(--fp-good);
 }

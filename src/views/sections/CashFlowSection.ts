@@ -1,8 +1,13 @@
+import { accountMonth } from "../../accountMonth";
+import { tracksBalance } from "../../accounts";
 import { buildCashFlow, layoutSankey, type CashFlow, type FlowItem, type SankeyDetail } from "../../cashFlow";
 import type FinancePlugin from "../../main";
 import { CategoryDrilldownModal } from "../../modals/CategoryDrilldownModal";
 import { formatMoney } from "../../money";
-import { emptyPeriodSelection, resolvePeriodRange, type DateRange, type PeriodSelection } from "../../period";
+import { emptyPeriodSelection, monthRange, resolvePeriodRange, shiftMonthKey, type DateRange, type PeriodSelection } from "../../period";
+import { todayIso } from "../../recurring";
+import { billsForMonth, type BillPin } from "../../recurringBills";
+import { areaChart } from "../../ui/areaChart";
 import { icon } from "../../ui/dom";
 import { renderPeriodFilter } from "../../ui/periodFilter";
 
@@ -28,6 +33,11 @@ const state = {
 	expenses: "group" as ExpenseBreakdown,
 	/** Groups unfolded in the profit & loss table; the income block starts open. */
 	expanded: new Set<string>(["income"]),
+	/** The month the bills timeline, the donut and the card chart show — its own control, because a
+	 *  bill calendar only makes sense one month at a time whatever the period above is set to. */
+	month: todayIso().slice(0, 7),
+	/** The account the balance chart follows; unset picks the first credit card. */
+	cardAccountId: undefined as string | undefined,
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -57,6 +67,8 @@ export function renderCashFlowSection(container: HTMLElement, plugin: FinancePlu
 	const store = plugin.store;
 	const currency = store.fx.baseCurrency;
 	const money = (amount: number) => formatMoney(amount, { currency });
+	// Hover tooltips are plain text the blur can't reach, so in privacy mode they name the flow and stop there.
+	const tipMoney = (amount: number) => (plugin.settings.privacyMode ? "" : `: ${money(amount)}`);
 
 	function render(): void {
 		container.empty();
@@ -85,13 +97,13 @@ export function renderCashFlowSection(container: HTMLElement, plugin: FinancePlu
 		if (flow.income.total === 0 && flow.expenses.total === 0) {
 			const card = container.createDiv({ cls: "fp-card" });
 			card.createEl("p", { cls: "fp-step-desc", text: `No income or spending in ${periodLabel.toLowerCase()}.` });
-			return;
+		} else {
+			renderFlowCard(flow);
+			const grid = container.createDiv({ cls: "fp-cashflow-grid" });
+			renderIncomeCard(grid, flow);
+			renderExpenseCard(grid, flow, range, periodLabel);
 		}
-
-		renderFlowCard(flow);
-		const grid = container.createDiv({ cls: "fp-cashflow-grid" });
-		renderIncomeCard(grid, flow);
-		renderExpenseCard(grid, flow, range, periodLabel);
+		renderMonth();
 	}
 
 	// ─── Where the money went ──────────────────────────────────────────────────────────────────
@@ -176,7 +188,7 @@ export function renderCashFlowSection(container: HTMLElement, plugin: FinancePlu
 			path.style.fill = link.color;
 			const source = layout.nodes.find((n) => n.id === link.source)!;
 			const target = layout.nodes.find((n) => n.id === link.target)!;
-			svgEl(path, "title", {}).textContent = `${source.label} → ${target.label}: ${money(link.value)}`;
+			svgEl(path, "title", {}).textContent = `${source.label} → ${target.label}${tipMoney(link.value)}`;
 			linkEls.push({ el: path, source: link.source, target: link.target });
 		}
 
@@ -185,7 +197,7 @@ export function renderCashFlowSection(container: HTMLElement, plugin: FinancePlu
 			const g = svgEl(nodeLayer, "g", { class: "fp-sankey-node" });
 			const rect = svgEl(g, "rect", { x: node.x, y: node.y, width: 10, height: node.height, rx: 2 });
 			rect.style.fill = node.color;
-			svgEl(rect, "title", {}).textContent = `${node.label}: ${money(node.value)}`;
+			svgEl(rect, "title", {}).textContent = `${node.label}${tipMoney(node.value)}`;
 
 			// Hovering a bar lights up every ribbon touching it and dims the rest.
 			g.addEventListener("mouseenter", () => {
@@ -349,6 +361,237 @@ export function renderCashFlowSection(container: HTMLElement, plugin: FinancePlu
 						}).open()
 				: undefined;
 		breakdownList(card, items, flow.income.total > 0 ? flow.income.total : flow.expenses.total, open);
+	}
+
+	// ─── The month ─────────────────────────────────────────────────────────────────────────────
+
+	function renderMonth(): void {
+		const head = container.createDiv({ cls: "fp-cashflow-month-head" });
+		const nav = head.createDiv({ cls: "fp-cashflow-month-nav" });
+		const step = (delta: number) => {
+			state.month = shiftMonthKey(state.month, delta);
+			render();
+		};
+		const prev = nav.createEl("button", { cls: "fp-btn fp-btn-ghost fp-cashflow-month-btn", attr: { "aria-label": "Previous month" } });
+		icon(prev, "chevron-left");
+		prev.addEventListener("click", () => step(-1));
+		const [y, m] = state.month.split("-").map(Number);
+		nav.createEl("h3", { text: new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" }) });
+		const next = nav.createEl("button", { cls: "fp-btn fp-btn-ghost fp-cashflow-month-btn", attr: { "aria-label": "Next month" } });
+		icon(next, "chevron-right");
+		next.addEventListener("click", () => step(1));
+		const thisMonth = todayIso().slice(0, 7);
+		if (state.month !== thisMonth) {
+			const back = head.createEl("button", { cls: "fp-btn fp-btn-ghost", text: "This month" });
+			back.addEventListener("click", () => {
+				state.month = thisMonth;
+				render();
+			});
+		}
+
+		renderBills();
+		const grid = container.createDiv({ cls: "fp-cashflow-grid" });
+		renderDonut(grid);
+		renderCardBalance(grid);
+	}
+
+	function renderBills(): void {
+		const today = todayIso();
+		const data = billsForMonth(store, state.month, today);
+		const card = container.createDiv({ cls: "fp-card fp-bills-card" });
+		card.createDiv({ cls: "fp-card-head-row" }).createEl("h3", { text: "Recurring bills" });
+		if (data.bills.length === 0 && data.income.length === 0 && data.weekly.length === 0) {
+			card.createEl("p", {
+				cls: "fp-step-desc",
+				text: "Nothing recurring found for this month. A charge counts once it has landed on a steady cycle at least three times.",
+			});
+			return;
+		}
+
+		const wrap = card.createDiv({ cls: "fp-chart fp-chart-money fp-bills-wrap" });
+		const width = Math.max(card.clientWidth - 40, 560);
+		const height = 360;
+		const padX = 34;
+		const base = height - 34;
+		const incomeY = 22;
+		const pinTop = 96;
+		const x = (day: number) => padX + ((day - 1) / Math.max(data.daysInMonth - 1, 1)) * (width - padX * 2);
+		const svg = svgEl(wrap, "svg", { viewBox: `0 0 ${width} ${height}`, class: "fp-bills-svg" });
+		svg.style.width = `${width}px`;
+
+		for (const day of [1, 8, 15, 22, 29].filter((d) => d <= data.daysInMonth)) {
+			svgEl(svg, "line", { x1: x(day), x2: x(day), y1: pinTop - 20, y2: base, class: "fp-bills-grid" });
+			svgEl(svg, "text", { x: x(day), y: base + 22, "text-anchor": "middle", class: "fp-chart-axis-label" }).textContent = String(day);
+		}
+		svgEl(svg, "line", { x1: padX - 10, x2: width - padX + 10, y1: base, y2: base, class: "fp-bills-axis" });
+
+		if (today.startsWith(state.month)) {
+			const tx = x(Number(today.slice(8, 10)));
+			svgEl(svg, "line", { x1: tx, x2: tx, y1: 14, y2: base, class: "fp-bills-today" });
+			svgEl(svg, "text", { x: tx, y: 10, "text-anchor": "middle", class: "fp-bills-today-label" }).textContent = "today";
+		}
+
+		const suffix = (pin: BillPin) => (pin.cycle === "quarterly" ? "/qtr" : pin.cycle === "yearly" ? "/yr" : "");
+		const label = (pin: BillPin) => `${pin.approx ? "~" : ""}${formatMoney(pin.amount, { currency, maximumFractionDigits: pin.amount >= 100 ? 0 : 2, minimumFractionDigits: pin.amount >= 100 ? 0 : 2 })}${suffix(pin)}`;
+		const tip = (pin: BillPin) =>
+			`${pin.name} — ${pin.paid ? "paid" : "expected"} ${pin.date}${plugin.settings.privacyMode ? "" : `, ${label(pin)}`}`;
+
+		for (const pin of data.income) {
+			const g = svgEl(svg, "g", { class: "fp-bills-income" + (pin.paid ? " is-paid" : "") });
+			svgEl(g, "circle", { cx: x(pin.day), cy: incomeY, r: 9 });
+			svgEl(g, "text", { x: x(pin.day), y: incomeY + 25, "text-anchor": "middle", class: "fp-bills-income-label" }).textContent = label(pin);
+			svgEl(g, "title", {}).textContent = tip(pin);
+		}
+
+		// Height by amount on a log scale, so a €2 charge and the rent can share the chart without the
+		// small ones flattening into the axis.
+		const amounts = data.bills.map((b) => b.amount);
+		const lo = Math.log(Math.max(Math.min(...amounts), 1));
+		const hi = Math.log(Math.max(...amounts, 1));
+		const minStem = 50;
+		const yOf = (amount: number) => base - minStem - (hi > lo ? (Math.log(Math.max(amount, 1)) - lo) / (hi - lo) : 1) * (base - minStem - pinTop);
+		for (const pin of data.bills) {
+			const cx = x(pin.day);
+			const cy = yOf(pin.amount);
+			const g = svgEl(svg, "g", { class: "fp-bills-pin" + (pin.paid ? " is-paid" : " is-expected") });
+			g.style.setProperty("--fp-pin-color", pin.color);
+			svgEl(g, "line", { x1: cx, x2: cx, y1: cy + 17, y2: base, class: "fp-bills-stem" });
+			svgEl(g, "circle", { cx, cy, r: 17, class: "fp-bills-bubble" });
+			svgEl(g, "text", { x: cx, y: cy + 1, "text-anchor": "middle", "dominant-baseline": "middle", class: "fp-bills-initial" }).textContent =
+				pin.name.trim().charAt(0).toUpperCase();
+			svgEl(g, "text", { x: cx, y: cy - 26, "text-anchor": "middle", class: "fp-bills-amount" }).textContent = label(pin);
+			svgEl(g, "title", {}).textContent = tip(pin);
+		}
+
+		if (data.weekly.length > 0) {
+			const chips = card.createDiv({ cls: "fp-bills-chips" });
+			for (const w of data.weekly) {
+				const chip = chips.createDiv({ cls: "fp-bills-chip" });
+				chip.createSpan({ cls: "fp-bills-chip-name", text: w.name });
+				chip.createSpan({ cls: "fp-bills-chip-amount fp-money", text: `${w.approx ? "~" : ""}${money(w.amount)}/wk` });
+			}
+		}
+	}
+
+	function renderDonut(grid: HTMLElement): void {
+		const range = monthRange(state.month);
+		const groups = buildCashFlow(store, range).expenses.groups.filter((g) => g.amount > 0);
+		const card = grid.createDiv({ cls: "fp-card fp-donut-card" });
+		card.createDiv({ cls: "fp-card-head-row" }).createEl("h3", { text: "Where it went" });
+		const total = groups.reduce((s, g) => s + g.amount, 0);
+		if (total <= 0) {
+			card.createEl("p", { cls: "fp-step-desc", text: "No spending this month." });
+			return;
+		}
+		// The biggest seven by name, everything else as one slice — past that a ring is just confetti.
+		const top = groups.slice(0, 7).map((g) => ({ name: g.name, color: g.color, amount: g.amount }));
+		const rest = groups.slice(7).reduce((s, g) => s + g.amount, 0);
+		if (rest > 0) top.push({ name: "Other", color: "var(--text-faint)", amount: rest });
+
+		const body = card.createDiv({ cls: "fp-donut-body" });
+		const size = 190;
+		const r = 70;
+		const stroke = 30;
+		const circ = 2 * Math.PI * r;
+		const wrap = body.createDiv({ cls: "fp-chart fp-chart-money fp-donut-wrap" });
+		const svg = svgEl(wrap, "svg", { viewBox: `0 0 ${size} ${size}`, width: size, height: size, class: "fp-donut" });
+		let offset = 0;
+		for (const slice of top) {
+			const len = (slice.amount / total) * circ;
+			const arc = svgEl(svg, "circle", {
+				cx: size / 2,
+				cy: size / 2,
+				r,
+				fill: "none",
+				"stroke-width": stroke,
+				"stroke-dasharray": `${Math.max(len - 2, 0.5)} ${circ}`,
+				"stroke-dashoffset": -offset,
+				transform: `rotate(-90 ${size / 2} ${size / 2})`,
+				class: "fp-donut-arc",
+			});
+			arc.style.stroke = slice.color;
+			svgEl(arc, "title", {}).textContent = `${slice.name}: ${pct(slice.amount / total)}`;
+			const share = slice.amount / total;
+			if (share >= 0.06) {
+				const mid = ((offset + len / 2) / circ) * 2 * Math.PI - Math.PI / 2;
+				svgEl(svg, "text", {
+					x: size / 2 + Math.cos(mid) * r,
+					y: size / 2 + Math.sin(mid) * r,
+					"text-anchor": "middle",
+					"dominant-baseline": "middle",
+					class: "fp-donut-pct",
+				}).textContent = `${Math.round(share * 100)}%`;
+			}
+			offset += len;
+		}
+		svgEl(svg, "text", { x: size / 2, y: size / 2 - 6, "text-anchor": "middle", class: "fp-donut-center-label" }).textContent = "spent";
+		svgEl(svg, "text", { x: size / 2, y: size / 2 + 14, "text-anchor": "middle", class: "fp-donut-center" }).textContent = formatMoney(total, {
+			currency,
+			maximumFractionDigits: 0,
+			minimumFractionDigits: 0,
+		});
+
+		const legend = body.createDiv({ cls: "fp-donut-legend" });
+		const peak = top[0].amount;
+		for (const slice of top) {
+			const row = legend.createDiv({ cls: "fp-donut-legend-row" });
+			row.createSpan({ cls: "fp-pnl-dot" }).style.background = slice.color;
+			row.createSpan({ cls: "fp-donut-legend-name", text: slice.name });
+			const track = row.createDiv({ cls: "fp-donut-legend-bar" });
+			const fill = track.createDiv({ cls: "fp-cashflow-bar-fill" });
+			fill.style.width = `${(slice.amount / peak) * 100}%`;
+			fill.style.background = slice.color;
+		}
+	}
+
+	function renderCardBalance(grid: HTMLElement): void {
+		const accounts = store.accounts
+			.filter((a) => tracksBalance(a) && !a.archived)
+			.sort((a, b) => Number(b.type === "credit") - Number(a.type === "credit"));
+		const card = grid.createDiv({ cls: "fp-card fp-cardbal-card" });
+		const head = card.createDiv({ cls: "fp-card-head-row" });
+		if (accounts.length === 0) {
+			head.createEl("h3", { text: "Balance" });
+			card.createEl("p", { cls: "fp-step-desc", text: "No open account with a balance to follow." });
+			return;
+		}
+		const account = accounts.find((a) => a.id === state.cardAccountId) ?? accounts[0];
+		const select = head.createEl("select", { cls: "dropdown fp-cardbal-select" });
+		for (const a of accounts) {
+			const opt = select.createEl("option", { text: a.name, value: a.id });
+			if (a.id === account.id) opt.selected = true;
+		}
+		select.addEventListener("change", () => {
+			state.cardAccountId = select.value;
+			render();
+		});
+
+		const data = accountMonth(store, account.id, state.month, todayIso());
+		const isCard = account.type === "credit";
+		const summary = head.createDiv({ cls: "fp-cardbal-summary" });
+		const part = (label: string, value: number, cls = "") => {
+			const span = summary.createSpan({ cls: "fp-cardbal-part" });
+			span.createSpan({ text: `${label} ` });
+			span.createSpan({ cls: `fp-money fp-cardbal-value ${cls}`.trim(), text: money(value) });
+		};
+		part("spent", data.spent);
+		part("paid", data.paid, "is-good");
+		if (isCard) part("owing", Math.max(-data.balance, 0));
+		else part("balance", data.balance);
+
+		const markers = data.biggestPayment
+			? [{ index: data.biggestPayment.index, value: data.balances[data.biggestPayment.index], label: `+${money(data.biggestPayment.amount)}`, tone: "good" as const }]
+			: [];
+		areaChart(card, [{ label: account.name, color: "var(--fp-cat-1)", values: data.balances }], {
+			labels: data.days.map((d) => String(Number(d.slice(8, 10)))),
+			height: 220,
+			step: true,
+			todayIndex: data.todayIndex,
+			markers,
+			xTicks: data.days.length / 7,
+			formatValue: (v) => formatMoney(v, { currency, maximumFractionDigits: 0, minimumFractionDigits: 0 }),
+			formatTooltip: money,
+		});
 	}
 
 	render();

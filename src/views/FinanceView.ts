@@ -18,6 +18,8 @@ import { renderAccountPage } from "./sections/AccountPage";
 import { renderBudgetsSection } from "./sections/BudgetsSection";
 import { renderCardsSection } from "./sections/CardsSection";
 import { renderCashFlowSection } from "./sections/CashFlowSection";
+import { renderNetWorthSection } from "./sections/NetWorthSection";
+import { mergeNavOrder } from "../navOrder";
 import { renderDebtsSection } from "./sections/DebtsSection";
 import { renderCategoriesSection } from "./sections/CategoriesSection";
 import { renderCompareSection } from "./sections/CompareSection";
@@ -42,7 +44,7 @@ interface NavTabDef {
 	badgeCount?: number;
 }
 
-const DEFAULT_NAV_ORDER = ["all-accounts", "cashflow", "strategy", "budgets", "categories", "subscriptions", "debts", "cards", "review", "reports", "compare"];
+const DEFAULT_NAV_ORDER = ["all-accounts", "cashflow", "networth", "strategy", "budgets", "categories", "subscriptions", "debts", "cards", "review", "reports", "compare"];
 
 function possessive(name: string): string {
 	const trimmed = name.trim();
@@ -258,10 +260,9 @@ export class FinanceView extends ItemView {
 		document.body.toggleClass("fp-privacy", !!this.plugin.settings.privacyMode);
 	}
 
-	/** Saved order, filtered to known tabs, then any tab missing from it (e.g. newly added) appended in default order. */
+	/** Saved order, filtered to known tabs, with any tab missing from it (e.g. newly added) slotted in at its default place. */
 	private navTabOrder(): string[] {
-		const saved = (this.plugin.settings.navOrder ?? []).filter((id) => DEFAULT_NAV_ORDER.includes(id));
-		return [...saved, ...DEFAULT_NAV_ORDER.filter((id) => !saved.includes(id))];
+		return mergeNavOrder(this.plugin.settings.navOrder ?? [], DEFAULT_NAV_ORDER);
 	}
 
 	private async reorderNavTabs(draggedId: string, targetId: string): Promise<void> {
@@ -349,6 +350,13 @@ export class FinanceView extends ItemView {
 				icon: "arrow-down-up",
 				isActive: activeView === "cashflow",
 				onClick: () => void this.selectView("cashflow"),
+			},
+			networth: {
+				id: "networth",
+				label: "Net worth",
+				icon: "line-chart",
+				isActive: activeView === "networth",
+				onClick: () => void this.selectView("networth"),
 			},
 			strategy: {
 				id: "strategy",
@@ -723,6 +731,9 @@ export class FinanceView extends ItemView {
 		switch (this.plugin.settings.activeView) {
 			case "cashflow":
 				renderCashFlowSection(this.bodyEl, this.plugin);
+				break;
+			case "networth":
+				renderNetWorthSection(this.bodyEl, this.plugin);
 				break;
 			case "strategy":
 				renderStrategySection(this.bodyEl, this.plugin);
